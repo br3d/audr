@@ -8,10 +8,10 @@ Claim semantics:
 
 from __future__ import annotations
 
-import enum
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 import sqlalchemy as sa
@@ -20,14 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _LEASE_TIMEOUT_INTERVAL = "5 minutes"
 
 
-class JobKind(str, enum.Enum):
+class JobKind(StrEnum):
     BALANCE_SCAN = "balance_scan"
     QUOTE_REFRESH = "quote_refresh"
     DISCOVERY = "discovery"
     VALUATION = "valuation"
 
 
-class JobRunStatus(str, enum.Enum):
+class JobRunStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"

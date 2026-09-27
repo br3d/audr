@@ -13,14 +13,17 @@ Covers:
 """
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from audr.jobs.store import JobKind, claim_job
 from audr.portfolio.discovery import (
     DiscoveryResult,
     discover_tokens,
     get_discovery_checkpoint,
     save_discovery_checkpoint,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from audr.jobs.store import (
+    JobKind,  # noqa: F401
+    claim_job,  # noqa: F401
 )
 
 

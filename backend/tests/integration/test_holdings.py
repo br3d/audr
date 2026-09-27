@@ -10,17 +10,12 @@ Covers:
   - Metadata conflict: catalog vs on-chain metadata — catalog wins for display.
   - Per-item failure: one wallet failing balance scan does not block others.
 """
-
-from decimal import Decimal
-
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from audr.portfolio.balances import (
-    BalanceObservation,
     get_holdings,
     record_balance,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.integration
@@ -52,8 +47,12 @@ async def test_address_case_deduplication(db_session: AsyncSession) -> None:
     lower = "0x" + "a" * 40
     token = "0x" + "b" * 40
 
-    await record_balance(db_session, wallet_address=upper, token_address=token, raw_amount=1, block_number=1)
-    await record_balance(db_session, wallet_address=lower, token_address=token, raw_amount=2, block_number=2)
+    await record_balance(
+        db_session, wallet_address=upper, token_address=token, raw_amount=1, block_number=1
+    )
+    await record_balance(
+        db_session, wallet_address=lower, token_address=token, raw_amount=2, block_number=2
+    )
 
     holdings = await get_holdings(db_session, wallet_address=lower)
     # Latest observation should win — only one entry.
@@ -80,7 +79,9 @@ async def test_zero_balance_is_stored_accurately(db_session: AsyncSession) -> No
     wallet = "0x" + "a" * 40
     token = "0x" + "d" * 40
 
-    await record_balance(db_session, wallet_address=wallet, token_address=token, raw_amount=0, block_number=5)
+    await record_balance(
+        db_session, wallet_address=wallet, token_address=token, raw_amount=0, block_number=5
+    )
 
     holdings = await get_holdings(db_session, wallet_address=wallet)
     matching = [h for h in holdings if h.token_address.lower() == token.lower()]
@@ -91,12 +92,13 @@ async def test_zero_balance_is_stored_accurately(db_session: AsyncSession) -> No
 @pytest.mark.integration
 async def test_per_item_failure_does_not_block_others(db_session: AsyncSession) -> None:
     """If recording one wallet's balance raises, other wallets still succeed."""
-    wallet_a = "0x" + "a" * 40
     wallet_b = "0x" + "b" * 40
     token = "0x" + "c" * 40
 
     # Record wallet_b successfully.
-    await record_balance(db_session, wallet_address=wallet_b, token_address=token, raw_amount=999, block_number=1)
+    await record_balance(
+        db_session, wallet_address=wallet_b, token_address=token, raw_amount=999, block_number=1
+    )
 
     # wallet_a has never been scanned — should not interfere.
     holdings_b = await get_holdings(db_session, wallet_address=wallet_b)

@@ -33,7 +33,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):  # type: ignore[no-untyped-def]
+def do_run_migrations(connection: object) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
