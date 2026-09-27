@@ -22,7 +22,7 @@ services:
       - internal
 
   init:
-    image: audr:latest
+    image: 192.168.1.90:8085/audr-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -43,7 +43,7 @@ services:
     restart: on-failure
 
   migrate:
-    image: audr:latest
+    image: 192.168.1.90:8085/audr-backend:latest
     command: ["python", "-m", "alembic", "upgrade", "head"]
     working_dir: /app
     environment:
@@ -56,7 +56,7 @@ services:
     restart: on-failure
 
   api:
-    image: audr:latest
+    image: 192.168.1.90:8085/audr-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -82,7 +82,7 @@ services:
       - internal
 
   web:
-    image: audr-web:latest
+    image: 192.168.1.90:8085/audr-frontend:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -97,7 +97,7 @@ services:
       - internal
 
   worker:
-    image: audr:latest
+    image: 192.168.1.90:8085/audr-backend:latest
     restart: unless-stopped
     command: ["python", "-m", "audr.jobs.worker"]
     environment:
