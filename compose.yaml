@@ -30,11 +30,7 @@ services:
     command: ["python", "-m", "audr.operations.init_key"]
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
-      SECRET_KEY: /run/secrets/master_key
-    secrets:
-      - master_key
-    volumes:
-      - key_data:/app/keys
+      SECRET_KEY: ${SECRET_KEY}
     depends_on:
       db:
         condition: service_healthy
@@ -64,11 +60,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
-      SECRET_KEY_PATH: /run/secrets/master_key
-    secrets:
-      - master_key
-    volumes:
-      - key_data:/app/keys:ro
+      SECRET_KEY: ${SECRET_KEY}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -102,11 +94,7 @@ services:
     command: ["python", "-m", "audr.jobs.worker"]
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
-      SECRET_KEY_PATH: /run/secrets/master_key
-    secrets:
-      - master_key
-    volumes:
-      - key_data:/app/keys:ro
+      SECRET_KEY: ${SECRET_KEY}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -115,13 +103,10 @@ services:
 
 volumes:
   db_data:
-  key_data:
 
 secrets:
   db_password:
     file: ./secrets/db_password.txt
-  master_key:
-    file: ./secrets/master_key.bin
 
 networks:
   internal:

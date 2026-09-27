@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from audr.config import get_settings
 from audr.models import metadata
 
 alembic_config = context.config
@@ -21,7 +21,7 @@ logger = logging.getLogger("alembic.env")
 
 
 def run_migrations_offline() -> None:
-    url = get_settings().database_url
+    url = os.environ["DATABASE_URL"]
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -44,9 +44,8 @@ def do_run_migrations(connection: object) -> None:
 
 
 async def run_async_migrations() -> None:
-    settings = get_settings()
     ini_section = alembic_config.get_section(alembic_config.config_ini_section, {})
-    ini_section["sqlalchemy.url"] = settings.database_url
+    ini_section["sqlalchemy.url"] = os.environ["DATABASE_URL"]
     connectable = async_engine_from_config(
         ini_section,
         prefix="sqlalchemy.",
