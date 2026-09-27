@@ -81,4 +81,6 @@ select = ["E", "F", "I", "UP", "B", "S", "ANN"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ANN"]
+"tests/**/*.py" = ["S101", "S105", "S106", "ANN"]
+"src/audr/api/**/*.py" = ["B008"]
+"src/audr/auth/dependencies.py" = ["B008"]

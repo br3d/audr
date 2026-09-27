@@ -9,6 +9,7 @@ from collections.abc import Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from audr.api.auth import router as auth_router
 from audr.api.errors import unhandled_exception_handler
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ def create_app() -> FastAPI:
         return response
 
     app.add_exception_handler(Exception, unhandled_exception_handler)
+
+    app.include_router(auth_router)
 
     return app
 
