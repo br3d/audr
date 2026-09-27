@@ -26,6 +26,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     command: ["python", "-m", "audr.operations.init_key"]
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
@@ -56,6 +57,10 @@ services:
 
   api:
     image: audr:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
@@ -64,9 +69,6 @@ services:
       - master_key
     volumes:
       - key_data:/app/keys:ro
-    # Bind to loopback only — exposed via reverse proxy on the host
-    ports:
-      - "127.0.0.1:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -76,6 +78,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - internal
+
+  web:
+    image: audr-web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-server
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - internal
 
