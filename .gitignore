@@ -3,6 +3,14 @@ dist/
 *.log
 npm-debug.log*
 
+# Local SQLite database (users, sessions, reset tokens) — do not commit.
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
 # Secrets — never commit real environment files.
 .env
 .env.*

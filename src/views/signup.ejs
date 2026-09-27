@@ -1,0 +1,19 @@
+<%- include('partials/header', { title: 'Sign up', currentUser: null }) %>
+<div class="card">
+  <h1>Create your account</h1>
+  <p class="sub">Start using Onboarding SaaS in seconds.</p>
+  <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+  <form action="/signup" method="post" novalidate>
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="email" required value="<%= values.email || '' %>" />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8" />
+    <button type="submit">Create account</button>
+  </form>
+  <div class="links-row">
+    <span>Already have an account?</span>
+    <a href="/login">Sign in</a>
+  </div>
+</div>
+<%- include('partials/footer') %>

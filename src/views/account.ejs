@@ -1,0 +1,41 @@
+<%- include('partials/header', { title: 'Account settings', currentUser: user }) %>
+<div class="card">
+  <h1>Account settings</h1>
+  <p class="sub">Signed in as <strong><%= user.email %></strong></p>
+
+  <% if (notice === 'email-updated') { %><div class="alert ok">Your email has been updated.</div><% } %>
+  <% if (notice === 'password-updated') { %><div class="alert ok">Your password has been updated.</div><% } %>
+  <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+
+  <form action="/account/email" method="post" novalidate>
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+    <fieldset>
+      <legend>Change email</legend>
+      <label for="email">New email</label>
+      <input id="email" name="email" type="email" autocomplete="email" required value="<%= user.email %>" />
+      <button type="submit">Update email</button>
+    </fieldset>
+  </form>
+
+  <form action="/account/password" method="post" novalidate>
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+    <fieldset>
+      <legend>Change password</legend>
+      <label for="currentPassword">Current password</label>
+      <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required />
+      <label for="newPassword">New password</label>
+      <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" required minlength="8" />
+      <button type="submit">Update password</button>
+    </fieldset>
+  </form>
+
+  <form action="/account/delete" method="post" novalidate onsubmit="return confirm('Delete your account permanently? This cannot be undone.');">
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+    <fieldset>
+      <legend>Danger zone</legend>
+      <p class="sub">Permanently delete your account and all associated data.</p>
+      <button type="submit" class="danger">Delete account</button>
+    </fieldset>
+  </form>
+</div>
+<%- include('partials/footer') %>

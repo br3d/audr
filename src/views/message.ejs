@@ -1,0 +1,9 @@
+<%- include('partials/header', { title: typeof title !== 'undefined' ? title : 'Notice', currentUser: typeof currentUser !== 'undefined' ? currentUser : null }) %>
+<div class="card">
+  <h1><%= heading %></h1>
+  <p class="sub"><%= body %></p>
+  <% if (typeof link !== 'undefined' && link) { %>
+    <a href="<%= link.href %>"><%= link.label %></a>
+  <% } %>
+</div>
+<%- include('partials/footer') %>

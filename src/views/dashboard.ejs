@@ -1,0 +1,8 @@
+<%- include('partials/header', { title: 'Dashboard', currentUser: user }) %>
+<div class="card">
+  <h1>Dashboard</h1>
+  <p class="sub">This is a protected page — only visible when signed in.</p>
+  <p>Hello, <strong><%= user.email %></strong>. Your session is active and persists across reloads.</p>
+  <a href="/account">Manage your account</a>
+</div>
+<%- include('partials/footer') %>
