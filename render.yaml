@@ -1,0 +1,57 @@
+# Render Blueprint — provisions staging + production from one file.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Cost posture (well under $50/mo):
+#   - staging : Starter instance (~$7/mo) — or Free while pre-launch.
+#   - prod    : Starter instance (~$7/mo), scalable later.
+#   Total ≈ $14/mo. No Kubernetes, no orchestration.
+#
+# Secrets are NOT stored here. `sync: false` means the value must be set in the
+# Render dashboard (or via `envVarGroups`) and is never committed to git.
+
+services:
+  # ---------- Staging ----------
+  - type: web
+    name: saas-app-staging
+    runtime: node
+    plan: starter
+    branch: main # auto-deploys on every merge to main
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: SERVICE_NAME
+        value: saas-app
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # set in dashboard; never committed
+      - key: SESSION_SECRET
+        sync: false
+
+  # ---------- Production ----------
+  - type: web
+    name: saas-app-prod
+    runtime: node
+    plan: starter
+    # No branch binding + autoDeploy off: production only moves when the
+    # "Promote to Production" workflow fires its deploy hook. This is the
+    # one-action promotion gate.
+    autoDeploy: false
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SERVICE_NAME
+        value: saas-app
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

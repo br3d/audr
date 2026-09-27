@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# Secrets — never commit real environment files.
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

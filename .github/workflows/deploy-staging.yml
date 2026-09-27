@@ -1,0 +1,71 @@
+name: Deploy Staging
+
+# CD: every merge to main deploys to the staging environment automatically.
+# Render auto-deploys from the connected branch, but we trigger explicitly via
+# its Deploy Hook so the deploy is gated on CI passing and is auditable here.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          GIT_SHA: ${{ github.sha }}
+
+  deploy:
+    name: deploy → staging
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Trigger Render staging deploy
+        # RENDER_STAGING_DEPLOY_HOOK is a repo secret (a signed URL). Never
+        # echoed; curl reads it directly from the env.
+        run: |
+          if [ -z "${RENDER_STAGING_DEPLOY_HOOK}" ]; then
+            echo "::error::RENDER_STAGING_DEPLOY_HOOK secret is not set"
+            exit 1
+          fi
+          curl -fsS -X POST "${RENDER_STAGING_DEPLOY_HOOK}" > /dev/null
+          echo "Staging deploy triggered for ${GITHUB_SHA}"
+        env:
+          RENDER_STAGING_DEPLOY_HOOK: ${{ secrets.RENDER_STAGING_DEPLOY_HOOK }}
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Wait for staging /health to return 200
+        # Poll the staging health endpoint so a failed deploy fails the job.
+        run: |
+          url="${STAGING_HEALTH_URL}"
+          if [ -z "$url" ]; then
+            echo "STAGING_HEALTH_URL not set; skipping health verification"
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+            if [ "$code" = "200" ]; then
+              echo "staging healthy ($url)"
+              exit 0
+            fi
+            echo "attempt $i: $code — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::staging did not become healthy in time"
+          exit 1
+        env:
+          STAGING_HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}

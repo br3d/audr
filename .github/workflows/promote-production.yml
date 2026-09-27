@@ -1,0 +1,59 @@
+name: Promote to Production
+
+# One-action promotion of the current staging build to production.
+# Run it from the GitHub Actions tab → "Promote to Production" → Run workflow.
+# The `production` environment can require a manual approver (recommended,
+# configured in repo Settings → Environments → production → required reviewers).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "promote" to confirm production deploy'
+        required: true
+        default: ''
+
+jobs:
+  promote:
+    name: promote → production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "promote" ]; then
+            echo "::error::Confirmation text did not match. Aborting."
+            exit 1
+          fi
+
+      - name: Trigger Render production deploy
+        run: |
+          if [ -z "${RENDER_PROD_DEPLOY_HOOK}" ]; then
+            echo "::error::RENDER_PROD_DEPLOY_HOOK secret is not set"
+            exit 1
+          fi
+          curl -fsS -X POST "${RENDER_PROD_DEPLOY_HOOK}" > /dev/null
+          echo "Production deploy triggered by ${GITHUB_ACTOR}"
+        env:
+          RENDER_PROD_DEPLOY_HOOK: ${{ secrets.RENDER_PROD_DEPLOY_HOOK }}
+          GITHUB_ACTOR: ${{ github.actor }}
+
+      - name: Wait for production /health to return 200
+        run: |
+          url="${PROD_HEALTH_URL}"
+          if [ -z "$url" ]; then
+            echo "PROD_HEALTH_URL not set; skipping health verification"
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+            if [ "$code" = "200" ]; then
+              echo "production healthy ($url)"
+              exit 0
+            fi
+            echo "attempt $i: $code — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::production did not become healthy in time"
+          exit 1
+        env:
+          PROD_HEALTH_URL: ${{ vars.PROD_HEALTH_URL }}
