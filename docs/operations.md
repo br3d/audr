@@ -1,0 +1,235 @@
+# Operations guide
+
+## Quick start
+
+### Prerequisites
+
+- Docker Engine 26+ and Docker Compose v2
+- `openssl` (for secret generation)
+- The deployment SSH key at `./id_ed25519` (mode `600`) for remote deploys
+
+### First-time setup
+
+```bash
+# 1. Generate secrets (idempotent — safe to re-run)
+bash scripts/setup-secrets.sh
+
+# 2. Start all services
+docker compose up -d
+
+# 3. Verify health
+curl -s http://localhost/health/live
+# {"status":"ok"}
+```
+
+`setup-secrets.sh` writes three files if they do not already exist:
+
+| File | Purpose |
+|---|---|
+| `secrets/db_password.txt` | PostgreSQL password (mounted as Docker secret) |
+| `secrets/master_key.hex` | 64-char hex master key-encryption-key |
+| `.env` | `DB_PASSWORD` and `SECRET_KEY` for Compose |
+
+**Never commit `.env` or `secrets/`.** Both are in `.gitignore`.
+
+### Subsequent starts
+
+```bash
+docker compose up -d          # start (or restart stopped containers)
+docker compose logs -f api    # tail API logs
+docker compose ps             # check running services
+```
+
+---
+
+## Service topology
+
+```
+[Browser] ─── HTTP ──► [nginx :80 / web]
+                              │
+                 ┌────────────┴────────────┐
+          /api/* │                         │ /health/*
+                 ▼                         ▼
+          [FastAPI :8000 / api]    [FastAPI :8000 / api]
+                 │
+                 ▼
+         [PostgreSQL :5432 / db]
+                 ▲
+          [worker] ──── periodic jobs ────┘
+```
+
+Nginx (`web`) serves the compiled React SPA and reverse-proxies all `/api/*` and `/health/*` paths to the backend (`api`). The worker polls the job queue; it never binds a port.
+
+---
+
+## Loopback setup
+
+All services communicate over the `internal` Docker bridge network. No service port is exposed except `web:80`. This means:
+
+- The backend API is never reachable directly from the host — only via nginx.
+- The worker connects to the database using the Docker DNS name `db`.
+- For local development, the API is at `http://localhost/api/` (via nginx).
+
+To access the backend directly for debugging without nginx:
+
+```bash
+docker compose exec api curl -s http://localhost:8000/health/live
+```
+
+---
+
+## TLS / HTTPS proxy
+
+The current configuration serves HTTP only. For production, place a reverse proxy (Caddy, Traefik, or nginx on the host) in front of the `web` container on port 80 and terminate TLS there.
+
+**Caddy example** (`/etc/caddy/Caddyfile` on the host):
+
+```
+yourdomain.com {
+    reverse_proxy localhost:80
+}
+```
+
+Caddy handles certificate issuance and renewal automatically via Let's Encrypt.
+
+When running behind a TLS-terminating proxy, the backend correctly reads the forwarded protocol from `X-Forwarded-Proto` (set by nginx in `nginx.conf`).
+
+---
+
+## Key-loss behavior
+
+The application uses a two-layer encryption scheme:
+
+1. **SECRET_KEY** (env var, set from `secrets/master_key.hex`): the key-encryption-key (KEK). Stored only outside the database.
+2. **Master key**: a 32-byte AES-256 key generated on first boot, stored in the `key_state` table as a blob encrypted by the KEK.
+
+The master key is used to encrypt provider credentials (RPC URLs, API keys) stored in the `settings` table.
+
+**If SECRET_KEY is lost:**
+
+- The application will refuse to start (startup validation fails).
+- The master key cannot be unwrapped; all encrypted settings are unreadable.
+- Wallet addresses and balance history (unencrypted) are unaffected.
+
+**Recovery when SECRET_KEY is lost:**
+
+```bash
+# 1. Stop services
+docker compose down
+
+# 2. Re-generate a new master key
+bash scripts/setup-secrets.sh   # generates new master_key.hex only if missing;
+                                  # if master_key.hex was lost, delete it first:
+rm secrets/master_key.hex && bash scripts/setup-secrets.sh
+
+# 3. Clear the corrupted key_state row so init re-initialises
+docker compose run --rm -e DATABASE_URL=postgresql+psycopg://audr:$(cat secrets/db_password.txt)@db:5432/audr api \
+    python -c "
+import asyncio, os
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import text
+async def main():
+    engine = create_async_engine(os.environ['DATABASE_URL'])
+    async with async_sessionmaker(engine)() as s:
+        await s.execute(text(\"DELETE FROM key_state WHERE name = 'master_key'\"))
+        await s.commit()
+    await engine.dispose()
+asyncio.run(main())
+"
+
+# 4. Re-enter provider credentials through the UI
+docker compose up -d
+```
+
+**To avoid key loss:** back up `secrets/master_key.hex` to a secure offline location (password manager, encrypted USB). Rotate it periodically by generating a new value, re-wrapping the master key, and updating the environment.
+
+---
+
+## Restart persistence
+
+All persistent data lives in the `db_data` Docker named volume. The volume survives `docker compose down` and `docker compose restart`. Data is lost only if the volume is explicitly removed:
+
+```bash
+docker compose down -v    # WARNING: destroys all data
+docker volume rm audr_db_data
+```
+
+On restart, the `migrate` service re-runs Alembic migrations (idempotent) before `api` and `worker` start. The `init` service validates that the SECRET_KEY can unwrap the stored master key.
+
+---
+
+## Exports
+
+Portfolio data export (JSON and CSV) is planned for User Story 4. Once implemented, exports will be available from the account settings page and via the `GET /api/export` endpoint (requires authentication).
+
+---
+
+## Provider data purge
+
+To remove all RPC and quote provider credentials:
+
+```bash
+docker compose exec api python -c "
+import asyncio, os
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import text
+async def main():
+    url = os.environ['DATABASE_URL']
+    engine = create_async_engine(url)
+    async with async_sessionmaker(engine)() as s:
+        await s.execute(text('DELETE FROM integration'))
+        await s.commit()
+    await engine.dispose()
+asyncio.run(main())
+"
+```
+
+This does not affect wallet addresses or balance history.
+
+---
+
+## Reset command
+
+To completely wipe all application data and start fresh:
+
+```bash
+# Stop and remove containers, networks, and volumes
+docker compose down -v
+
+# Remove secrets (optional — re-run setup-secrets.sh to generate new ones)
+rm -f .env secrets/db_password.txt secrets/master_key.hex
+
+# Re-initialise
+bash scripts/setup-secrets.sh
+docker compose up -d
+```
+
+---
+
+## Deployment to remote host
+
+```bash
+# Deploy the latest images to the production host
+./scripts/deploy.sh
+```
+
+The script:
+1. Copies `compose.yaml` to the remote host over SCP
+2. Pulls the latest images from the Harbor registry
+3. Runs `alembic upgrade head` via the `migrate` service
+4. Restarts all services with `docker compose up -d --remove-orphans`
+5. Polls `/health` until healthy (60 s timeout)
+
+**Remote host requirements:** Docker Engine 26+, SSH key in `./id_ed25519`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `init` exits with `SECRET_KEY is not set` | `.env` missing or not mounted | Run `bash scripts/setup-secrets.sh`, restart |
+| `init` exits with `SECRET_KEY must be 32 bytes` | Corrupt `master_key.hex` | Regenerate per key-loss recovery above |
+| `migrate` exits non-zero | DB not healthy or migration conflict | `docker compose logs migrate`, check DB logs |
+| `api` health returns 503 | Migration not complete | Wait for `migrate` to finish; check `docker compose ps` |
+| `worker` logs `no RPC integration configured` | RPC provider not set | Sign in and configure RPC URL in settings |
