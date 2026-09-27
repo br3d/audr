@@ -102,7 +102,15 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   return request<T>('POST', path, body)
 }
 
-// --- API response types ---
+function put<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>('PUT', path, body)
+}
+
+function patch<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>('PATCH', path, body)
+}
+
+// --- Auth response types ---
 
 export interface SetupStatusResponse {
   setup_required: boolean
@@ -122,7 +130,164 @@ export interface SessionResponse {
   csrf_token: string
 }
 
-// --- API functions ---
+// --- Integrations types ---
+
+export interface IntegrationHealth {
+  status: 'ok' | 'error' | 'unvalidated' | 'validating'
+  last_checked_at: string | null
+  error_message: string | null
+}
+
+export interface IntegrationEntry {
+  kind: string
+  configured: boolean
+  enabled: boolean
+  provider: string | null
+  host_label: string | null
+  revision: string
+  health: IntegrationHealth
+}
+
+export interface IntegrationsResponse {
+  items: IntegrationEntry[]
+  request_id: string
+  generated_at: string
+}
+
+export interface JobRef {
+  run_id: string
+  coalesced: boolean
+}
+
+// --- Wallet types ---
+
+export interface WalletCoverage {
+  catalog_attempted: number | null
+  catalog_total: number | null
+  completed_at: string | null
+  status: string
+}
+
+export interface WalletItem {
+  id: string
+  address: string
+  label: string | null
+  chain_id: number
+  tracking_active: boolean
+  coverage: WalletCoverage | null
+  created_at: string
+}
+
+export interface WalletsResponse {
+  items: WalletItem[]
+  next_cursor: string | null
+  request_id: string
+  generated_at: string
+}
+
+// --- Asset types ---
+
+export type AssetKind = 'native' | 'catalog' | 'manual' | 'discovered'
+export type MetadataSource = 'catalog' | 'chain' | 'owner'
+
+export interface AssetItem {
+  id: string
+  chain_id: number
+  kind: AssetKind
+  contract_address: string | null
+  symbol: string
+  name: string | null
+  decimals: number | null
+  excluded: boolean
+  metadata_source: MetadataSource
+  has_metadata_conflict: boolean
+  created_at: string
+}
+
+export interface AssetsResponse {
+  items: AssetItem[]
+  next_cursor: string | null
+  request_id: string
+  generated_at: string
+}
+
+// --- Holdings types ---
+
+export type ReadStatus = 'ok' | 'error' | 'pending' | 'stale'
+
+export interface Holding {
+  wallet_id: string
+  asset_id: string
+  contract_address: string | null
+  is_native: boolean
+  raw_balance: string | null
+  decimals: number | null
+  quantity: string | null
+  price_usd: string | null
+  value_usd: string | null
+  included: boolean
+  metadata_source: MetadataSource
+  read_status: ReadStatus
+  block_time: string | null
+  observed_at: string | null
+  last_success_at: string | null
+}
+
+export interface AllocationItem {
+  asset_id: string
+  symbol: string
+  value_usd: string
+  percentage: string
+}
+
+export interface PortfolioQuality {
+  incomplete: boolean
+  stale_balances: boolean
+  stale_prices: boolean
+  mixed_observation_times: boolean
+  discovery_overdue: boolean
+  verification_pending: boolean
+  invalidated: boolean
+}
+
+export interface PortfolioResponse {
+  snapshot_id: string | null
+  membership_revision: string | null
+  valuation_time: string | null
+  currency: 'USD'
+  priced_subtotal_usd: string | null
+  total_usd: string | null
+  quality: PortfolioQuality
+  balance_block: number | null
+  balance_block_time: string | null
+  balance_observed_at: string | null
+  discovery_completed_at: string | null
+  holdings: Holding[]
+  allocations: AllocationItem[]
+  stale_contribution_usd: string | null
+  request_id: string
+  generated_at: string
+}
+
+// --- Job types ---
+
+export type JobKind = 'balances' | 'discovery' | 'quotes'
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface JobRun {
+  id: string
+  kind: JobKind
+  status: JobStatus
+  started_at: string | null
+  finished_at: string | null
+  attempted: number
+  succeeded: number
+  failed: number
+  error_message: string | null
+  created_at: string
+}
+
+// --- Auth API ---
 
 export function fetchSetupStatus(): Promise<SetupStatusResponse> {
   return get<SetupStatusResponse>('/setup/status')
@@ -149,4 +314,98 @@ export async function fetchSession(): Promise<SessionResponse> {
 export async function logout(): Promise<void> {
   await post<void>('/auth/logout')
   clearCSRFToken()
+}
+
+// --- Integrations API ---
+
+export function fetchIntegrations(): Promise<IntegrationsResponse> {
+  return get<IntegrationsResponse>('/integrations')
+}
+
+export interface UpdateRpcInput {
+  revision: string
+  url: string
+  headers?: Record<string, string>
+  allow_private_host?: boolean
+}
+
+export function updateRpc(input: UpdateRpcInput): Promise<IntegrationEntry> {
+  return put<IntegrationEntry>('/integrations/rpc', input)
+}
+
+export function validateIntegration(kind: 'rpc' | 'quotes'): Promise<JobRef> {
+  return post<JobRef>(`/integrations/${kind}/validate`)
+}
+
+// --- Wallets API ---
+
+export function fetchWallets(cursor?: string): Promise<WalletsResponse> {
+  const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return get<WalletsResponse>(`/wallets${params}`)
+}
+
+export interface AddWalletInput {
+  address: string
+  label?: string
+  chain_id: 1
+}
+
+export function addWallet(input: AddWalletInput): Promise<WalletItem> {
+  return post<WalletItem>('/wallets', input)
+}
+
+export interface PatchWalletInput {
+  label?: string
+  tracking_active?: boolean
+}
+
+export function patchWallet(id: string, input: PatchWalletInput): Promise<WalletItem> {
+  return patch<WalletItem>(`/wallets/${id}`, input)
+}
+
+// --- Assets API ---
+
+export function fetchAssets(excluded?: boolean, cursor?: string): Promise<AssetsResponse> {
+  const params = new URLSearchParams()
+  if (excluded !== undefined) params.set('excluded', String(excluded))
+  if (cursor) params.set('cursor', cursor)
+  const qs = params.toString()
+  return get<AssetsResponse>(`/assets${qs ? '?' + qs : ''}`)
+}
+
+export interface AddManualAssetInput {
+  contract_address: string
+  decimals_override?: number
+  symbol_override?: string
+}
+
+export function addManualAsset(input: AddManualAssetInput): Promise<AssetItem> {
+  return post<AssetItem>('/assets/manual', input)
+}
+
+export interface PatchAssetInput {
+  excluded?: boolean
+  decimals_override?: number
+  confirm_metadata_override?: boolean
+}
+
+export function patchAsset(id: string, input: PatchAssetInput): Promise<AssetItem> {
+  return patch<AssetItem>(`/assets/${id}`, input)
+}
+
+// --- Portfolio API ---
+
+export function fetchPortfolio(walletId?: string): Promise<PortfolioResponse> {
+  const params = walletId ? `?wallet_id=${encodeURIComponent(walletId)}` : ''
+  return get<PortfolioResponse>(`/portfolio${params}`)
+}
+
+// --- Jobs API ---
+
+export function triggerJob(kind: JobKind): Promise<JobRef> {
+  return post<JobRef>('/jobs', { kind })
+}
+
+export function fetchJob(id: string): Promise<JobRun> {
+  return get<JobRun>(`/jobs/${id}`)
 }
