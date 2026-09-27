@@ -64,6 +64,16 @@ class RpcReader:
         result = await self._call("eth_getBalance", [checksum, "latest"])
         return _parse_hex_int(result)
 
+    async def eth_call(
+        self,
+        *,
+        to: str,
+        data: str,
+        block: str = "latest",
+    ) -> str:
+        """Generic read-only eth_call; returns the raw hex result string."""
+        return await self._call("eth_call", [{"to": to, "data": data}, block])
+
     async def get_erc20_balance(
         self,
         *,
