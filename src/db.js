@@ -52,6 +52,47 @@ function migrate(database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id);
+
+    CREATE TABLE IF NOT EXISTS recordings (
+      id                TEXT    PRIMARY KEY,
+      user_id           TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title             TEXT    NOT NULL,
+      original_filename TEXT    NOT NULL,
+      mime_type         TEXT    NOT NULL,
+      duration_seconds  REAL,
+      status            TEXT    NOT NULL DEFAULT 'uploaded',
+      storage_key       TEXT    NOT NULL,
+      error_reason      TEXT,
+      created_at        INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_recordings_user ON recordings(user_id);
+
+    CREATE TABLE IF NOT EXISTS transcripts (
+      id           TEXT    PRIMARY KEY,
+      recording_id TEXT    NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+      provider     TEXT    NOT NULL,
+      language     TEXT,
+      full_text    TEXT,
+      segments     TEXT,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_transcripts_recording ON transcripts(recording_id);
+
+    CREATE TABLE IF NOT EXISTS summaries (
+      id            TEXT    PRIMARY KEY,
+      recording_id  TEXT    NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+      summary_text  TEXT,
+      decisions     TEXT,
+      action_items  TEXT,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_summaries_recording ON summaries(recording_id);
   `);
 }
 
