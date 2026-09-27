@@ -1,0 +1,80 @@
+[project]
+name = "audr"
+version = "0.1.0"
+description = "Ethereum portfolio tracker — backend API and worker"
+requires-python = ">=3.14"
+dependencies = [
+    # Web framework and ASGI server
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.54.0",
+    # Configuration
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    # ORM and migrations — 2.0.x series per project spec
+    "sqlalchemy>=2.0.54,<2.1",
+    "alembic==1.20.0",
+    # PostgreSQL driver (psycopg3, binary build)
+    "psycopg[binary]==3.3.6",
+    # HTTP client (explicit, no implicit redirects)
+    "httpx==0.28.1",
+    # Ethereum address/ABI utilities
+    "eth-utils==6.0.0",
+    "eth-abi==6.0.0",
+    # Authenticated encryption (AES-256-GCM)
+    "cryptography==50.0.1",
+    # Password hashing (Argon2id)
+    "argon2-cffi==25.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    # HTTP mock for httpx
+    "respx==0.23.1",
+    # Async test utilities
+    "anyio[trio]==4.15.1",
+    # Type checking
+    "mypy==1.17.1",
+    "types-psycopg2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast, dependency-free unit tests",
+    "integration: tests that require a live PostgreSQL database",
+    "contract: tests that verify provider-interface contracts against fixtures",
+]
+addopts = "-ra -q"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+
+[tool.coverage.run]
+source = ["src/audr"]
+omit = ["*/tests/*", "*/migrations/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ANN"]
+ignore = ["ANN101", "ANN102"]
