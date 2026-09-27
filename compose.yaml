@@ -1,0 +1,111 @@
+name: audr
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: audr
+      POSTGRES_USER: audr
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audr -d audr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - internal
+
+  init:
+    image: audr:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "audr.operations.init_key"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: /run/secrets/master_key
+    secrets:
+      - master_key
+    volumes:
+      - key_data:/app/keys
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: on-failure
+
+  migrate:
+    image: audr:latest
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    restart: on-failure
+
+  api:
+    image: audr:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY_PATH: /run/secrets/master_key
+    secrets:
+      - master_key
+    volumes:
+      - key_data:/app/keys:ro
+    # Bind to loopback only — exposed via reverse proxy on the host
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - internal
+
+  worker:
+    image: audr:latest
+    restart: unless-stopped
+    command: ["python", "-m", "audr.jobs.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY_PATH: /run/secrets/master_key
+    secrets:
+      - master_key
+    volumes:
+      - key_data:/app/keys:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+volumes:
+  db_data:
+  key_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  master_key:
+    file: ./secrets/master_key.bin
+
+networks:
+  internal:
+    driver: bridge

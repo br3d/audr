@@ -1,0 +1,152 @@
+name: audr-test
+
+# Isolated test environment with ephemeral volumes and controlled providers.
+# Usage:
+#   docker compose -f compose.test.yaml run --rm backend-tests
+#   docker compose -f compose.test.yaml run --rm frontend-tests
+#   docker compose -f compose.test.yaml run --rm e2e
+#   docker compose -f compose.test.yaml run --rm benchmark
+
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: audr_test
+      POSTGRES_USER: audr_test
+      POSTGRES_PASSWORD: test_password_only_for_ci
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audr_test -d audr_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    networks:
+      - test-net
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  # Controlled HTTP provider: mocks Ethereum RPC and CoinGecko endpoints
+  provider-mock:
+    image: wiremock/wiremock:3.13.0
+    command: ["--port", "8080", "--verbose"]
+    volumes:
+      - ./tests/fixtures/wiremock:/home/wiremock
+    networks:
+      - test-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/__admin/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrate-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+    depends_on:
+      db-test:
+        condition: service_healthy
+    networks:
+      - test-net
+
+  backend-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    command: >
+      pytest
+      --tb=short
+      -q
+      -m "unit or (integration and not slow)"
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+      RPC_MOCK_URL: http://provider-mock:8080/rpc
+      QUOTE_MOCK_URL: http://provider-mock:8080/quote
+      MASTER_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+      provider-mock:
+        condition: service_healthy
+    networks:
+      - test-net
+    volumes:
+      - ./backend:/workspace/backend:ro
+    profiles:
+      - backend
+
+  frontend-tests:
+    image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
+    working_dir: /workspace
+    command: ["npm", "run", "test"]
+    volumes:
+      - ./frontend:/workspace:ro
+      - frontend_node_modules:/workspace/node_modules
+    networks:
+      - test-net
+    profiles:
+      - frontend
+
+  e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    command: ["npx", "playwright", "test", "--reporter=list"]
+    environment:
+      APP_URL: http://api-test:8000
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+    networks:
+      - test-net
+    profiles:
+      - e2e
+
+  api-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+      SECRET_KEY_PATH: /dev/null
+      MASTER_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+    networks:
+      - test-net
+    profiles:
+      - e2e
+
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    command: >
+      pytest
+      --tb=short
+      -q
+      -m "benchmark"
+      --benchmark-only
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+      RPC_MOCK_URL: http://provider-mock:8080/rpc
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+      provider-mock:
+        condition: service_healthy
+    networks:
+      - test-net
+    profiles:
+      - benchmark
+
+volumes:
+  frontend_node_modules:
+
+networks:
+  test-net:
+    driver: bridge
