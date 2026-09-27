@@ -58,6 +58,11 @@ class RpcReader:
                 f"node chain ID {chain_id} != expected {self._expected_chain_id}"
             )
 
+    async def get_block_number(self) -> int:
+        """Return the current block number."""
+        result = await self._call("eth_blockNumber", [])
+        return _parse_hex_int(result)
+
     async def get_eth_balance(self, address: str) -> int:
         """Return the ETH balance of *address* in Wei as an integer."""
         checksum = _normalise_address(address)
