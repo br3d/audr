@@ -1,3 +1,7 @@
+# Git
+.git
+.gitignore
+
 # SSH keys and credentials
 id_ed25519*
 *.pem
@@ -6,14 +10,12 @@ id_ed25519*
 .env.*
 !.env.example
 
-# Python
+# Python dev artifacts
 __pycache__/
 *.py[cod]
 *.so
 *.egg
 *.egg-info/
-dist/
-build/
 .venv/
 venv/
 .ruff_cache/
@@ -22,20 +24,9 @@ venv/
 htmlcov/
 .coverage
 coverage.xml
-*.cover
 
-# Node / frontend
+# Node dev artifacts
 node_modules/
-dist/
-.cache/
-coverage/
-*.lcov
-
-# Docker local volumes
-docker/volumes/
-volumes/
-postgres_data/
-.docker/
 
 # IDE
 .vscode/
@@ -43,16 +34,24 @@ postgres_data/
 *.swp
 *.swo
 .DS_Store
-Thumbs.db
+
+# Docs and specs
+docs/
+specs/
+*.md
+README*
+
+# Tests (not needed in production image)
+tests/
+backend/tests/
+frontend/src/**/*.test.*
+frontend/src/**/*.spec.*
+
+# Local volumes
+docker/volumes/
+volumes/
+postgres_data/
 
 # Logs
 *.log
 logs/
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
