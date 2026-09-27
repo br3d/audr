@@ -15,6 +15,7 @@ The ``key_state`` table is created by the 001_foundation migration (T017).
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from sqlalchemy import text
@@ -92,3 +93,20 @@ def _load_kek() -> bytes:
             f"SECRET_KEY must be 32 bytes (64 hex chars), got {len(kek)}"
         )
     return kek
+
+
+async def _main() -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    database_url = os.environ["DATABASE_URL"]
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        await init_key(session)
+        await session.commit()
+    await engine.dispose()
+    print("Master key initialised.")
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())

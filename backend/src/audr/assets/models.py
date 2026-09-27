@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, SmallInteger, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from audr.models import Base
@@ -98,7 +99,7 @@ class DiscoveryCoverage(Base):
     scanned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    checkpoint: Mapped[dict | None] = mapped_column(nullable=True)
+    checkpoint: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class BalanceObservation(Base):

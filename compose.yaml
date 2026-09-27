@@ -40,6 +40,10 @@ services:
 
   migrate:
     image: 192.168.1.90:8085/audr-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
     command: ["python", "-m", "alembic", "upgrade", "head"]
     working_dir: /app
     environment:
