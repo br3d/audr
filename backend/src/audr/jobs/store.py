@@ -25,6 +25,8 @@ class JobKind(StrEnum):
     QUOTE_REFRESH = "quote_refresh"
     DISCOVERY = "discovery"
     VALUATION = "valuation"
+    VALIDATE_RPC = "validate_rpc"
+    VALIDATE_QUOTES = "validate_quotes"
 
 
 class JobRunStatus(StrEnum):
@@ -59,8 +61,8 @@ async def claim_job(
 ) -> uuid.UUID | None:
     """Attempt to claim a job of *kind*.
 
-    Returns the new run UUID on success, or None if an active lease already exists
-    or the retry budget is exhausted.
+    Returns the new run UUID on success, or None if an active lease already exists,
+    the retry budget is exhausted, or the schedule says the job is not yet due.
     """
     # Expire any stale leases before trying to claim.
     await _expire_stale_leases(session, kind=kind)
@@ -75,16 +77,48 @@ async def claim_job(
     if active.first() is not None:
         return None
 
-    # Check retry budget: if the total number of failed runs for this kind is
-    # >= max_retries, no further claims are allowed.
+    # Check retry budget: count consecutive failures since the last success.
+    # This prevents transient failures from permanently blocking a job kind.
     exhausted = await session.execute(
         sa.text(
-            "SELECT COUNT(*) FROM job_run WHERE kind = :kind AND status = 'failed'"
+            """
+            SELECT COUNT(*) FROM job_run
+            WHERE kind = :kind AND status = 'failed'
+              AND created_at > COALESCE(
+                (SELECT MAX(created_at) FROM job_run
+                  WHERE kind = :kind AND status = 'completed'),
+                '-infinity'::timestamptz
+              )
+            """
         ),
         {"kind": kind.value},
     )
     if (exhausted.scalar() or 0) >= max_retries:
         return None
+
+    # Schedule gate: if a schedule row exists, honour its enabled/paused/freshness
+    # and next_run_at fields.  A missing schedule row means "always allowed".
+    sched = await session.execute(
+        sa.text(
+            """
+            SELECT enabled, paused_at, freshness_s, last_run_at, next_run_at
+            FROM schedule WHERE kind = :kind
+            """
+        ),
+        {"kind": kind.value},
+    )
+    sched_row = sched.first()
+    if sched_row is not None:
+        enabled, paused_at, freshness_s, last_run_at, next_run_at = sched_row
+        if not enabled or paused_at is not None:
+            return None
+        now_ts = datetime.now(tz=UTC)
+        if next_run_at is not None and next_run_at > now_ts:
+            return None
+        if freshness_s is not None and last_run_at is not None:
+            elapsed = int((now_ts - last_run_at).total_seconds())
+            if elapsed < freshness_s:
+                return None
 
     # Job fencing: QUOTE_REFRESH requires a live coingecko integration.
     if kind == JobKind.QUOTE_REFRESH:
@@ -130,13 +164,19 @@ async def heartbeat(session: AsyncSession, *, run_id: uuid.UUID) -> None:
 
 
 async def complete_job(session: AsyncSession, *, run_id: uuid.UUID) -> None:
-    """Mark *run_id* as completed."""
+    """Mark *run_id* as completed and advance the schedule's last_run_at."""
     await session.execute(
         sa.text(
             """
-            UPDATE job_run
-            SET status = 'completed', completed_at = now()
-            WHERE id = :id AND status = 'in_progress'
+            WITH run AS (
+                UPDATE job_run
+                SET status = 'completed', completed_at = now()
+                WHERE id = :id AND status = 'in_progress'
+                RETURNING kind
+            )
+            UPDATE schedule
+            SET last_run_at = now(), next_run_at = NULL
+            WHERE kind = (SELECT kind FROM run)
             """
         ),
         {"id": run_id},
@@ -161,7 +201,7 @@ async def fail_job(
                 checkpoint = :checkpoint,
                 retry_count = retry_count + 1,
                 completed_at = now()
-            WHERE id = :id
+            WHERE id = :id AND status = 'in_progress'
             """
         ),
         {"id": run_id, "error": error, "checkpoint": checkpoint},

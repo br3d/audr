@@ -63,13 +63,13 @@ class Scheduler:
                 return False
             await session.commit()
 
-        self._manual_triggers[kind].append(datetime.now(_UTC))
+        self._manual_triggers[kind].append(datetime.now(UTC))
         logger.info("trigger claimed kind=%s run_id=%s", kind.value, run_id)
         return True
 
     def _within_manual_budget(self, kind: JobKind) -> bool:
         """Return True if fewer than ``_manual_budget`` triggers fired in the past hour."""
-        cutoff = datetime.now(_UTC) - timedelta(hours=1)
+        cutoff = datetime.now(UTC) - timedelta(hours=1)
         recent = [ts for ts in self._manual_triggers[kind] if ts >= cutoff]
         # Prune stale entries in-place.
         self._manual_triggers[kind] = recent
@@ -81,7 +81,7 @@ class Scheduler:
 
     async def due_schedules(self, session: AsyncSession) -> list[JobKind]:
         """Return job kinds whose next_run_at is in the past and schedule is enabled."""
-        now = datetime.now(tz=_UTC)
+        now = datetime.now(tz=UTC)
         result = await session.execute(
             sa.text(
                 """
@@ -174,7 +174,7 @@ class Scheduler:
         should be dispatched this tick.
         """
         if now is None:
-            now = datetime.now(_UTC)
+            now = datetime.now(UTC)
 
         due: list[JobKind] = []
 

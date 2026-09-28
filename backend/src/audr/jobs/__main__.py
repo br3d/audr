@@ -38,7 +38,7 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
     for wallet in wallets:
         if wallet.status != "active":
             continue
-        checkpoint = await get_discovery_checkpoint(session, wallet_address=wallet.address)
+        checkpoint = await get_discovery_checkpoint(session, run_id=run_id)
         result = await discover_tokens(
             session,
             wallet_address=wallet.address,
@@ -49,7 +49,7 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
         if result.checkpoint is not None:
             await save_discovery_checkpoint(
                 session,
-                wallet_address=wallet.address,
+                run_id=run_id,
                 checkpoint=result.checkpoint,
             )
         logger.info(
