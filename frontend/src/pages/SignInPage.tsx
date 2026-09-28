@@ -30,26 +30,38 @@ export default function SignInPage({ onSignIn }: Props) {
   }
 
   return (
-    <main>
-      <h1>Sign in to audr</h1>
-      <form onSubmit={handleSubmit} noValidate>
-        <div>
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-            disabled={submitting}
-          />
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <div className="auth-logo-mark">A</div>
+          <span className="auth-logo-name">audr</span>
         </div>
-        {error !== null && <p role="alert">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
-    </main>
+        <h1 className="auth-title">Sign in</h1>
+        <p className="auth-subtitle">Enter your portfolio password to continue.</p>
+        <form onSubmit={handleSubmit} noValidate className="form-grid">
+          <div className="form-group">
+            <label htmlFor="password" className="form-label">Password</label>
+            <input
+              id="password"
+              type="password"
+              className="input-folio"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+              disabled={submitting}
+            />
+          </div>
+          {error !== null && (
+            <p role="alert" className="alert alert-danger">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </div>
+    </div>
   )
 }

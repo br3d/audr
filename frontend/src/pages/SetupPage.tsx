@@ -48,46 +48,57 @@ export default function SetupPage({ onSetupComplete }: Props) {
   }
 
   return (
-    <main>
-      <h1>Set up audr</h1>
-      <p>
-        Choose a password to protect your portfolio. You will use it to sign
-        in.
-      </p>
-      <form onSubmit={handleSubmit} noValidate>
-        <div>
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={MIN_PASSWORD_LENGTH}
-            maxLength={MAX_PASSWORD_LENGTH}
-            required
-            autoComplete="new-password"
-            disabled={submitting}
-          />
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <div className="auth-logo-mark">A</div>
+          <span className="auth-logo-name">audr</span>
         </div>
-        <div>
-          <label htmlFor="confirm">Confirm password</label>
-          <input
-            id="confirm"
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            minLength={MIN_PASSWORD_LENGTH}
-            maxLength={MAX_PASSWORD_LENGTH}
-            required
-            autoComplete="new-password"
-            disabled={submitting}
-          />
-        </div>
-        {error !== null && <p role="alert">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Setting up…' : 'Set up'}
-        </button>
-      </form>
-    </main>
+        <h1 className="auth-title">Set up audr</h1>
+        <p className="auth-subtitle">
+          Choose a password to protect your portfolio. You will use it to sign in.
+        </p>
+        <form onSubmit={handleSubmit} noValidate className="form-grid">
+          <div className="form-group">
+            <label htmlFor="password" className="form-label">Password</label>
+            <input
+              id="password"
+              type="password"
+              className="input-folio"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={MIN_PASSWORD_LENGTH}
+              maxLength={MAX_PASSWORD_LENGTH}
+              required
+              autoComplete="new-password"
+              disabled={submitting}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="confirm" className="form-label">Confirm password</label>
+            <input
+              id="confirm"
+              type="password"
+              className="input-folio"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              minLength={MIN_PASSWORD_LENGTH}
+              maxLength={MAX_PASSWORD_LENGTH}
+              required
+              autoComplete="new-password"
+              disabled={submitting}
+            />
+          </div>
+          {error !== null && (
+            <p role="alert" className="alert alert-danger">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Setting up…' : 'Set up'}
+          </button>
+        </form>
+      </div>
+    </div>
   )
 }

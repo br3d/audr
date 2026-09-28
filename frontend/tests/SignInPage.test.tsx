@@ -45,13 +45,13 @@ describe('SignInPage', () => {
     expect(btn?.textContent).toBe('Sign in')
   })
 
-  it('renders heading "Sign in to audr"', () => {
+  it('renders heading "Sign in"', () => {
     const root = createRoot(container)
     flushSync(() => {
       root.render(createElement(SignInPage, { onSignIn: () => {} }))
     })
     const h1 = container.querySelector('h1')
-    expect(h1?.textContent).toBe('Sign in to audr')
+    expect(h1?.textContent).toBe('Sign in')
   })
 
   it('calls the API on submit', async () => {
