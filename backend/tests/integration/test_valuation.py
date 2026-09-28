@@ -299,6 +299,57 @@ async def test_publish_snapshot_no_holdings_raises(db_session: AsyncSession) -> 
 
 
 @pytest.mark.integration
+async def test_empty_complete_set_does_not_shadow_prior_prices(
+    db_session: AsyncSession,
+) -> None:
+    """A newer complete quote_set with zero observations must not shadow older valid prices.
+
+    Regression (AUD-273): _get_latest_prices selects MAX(fetched_at) from complete sets.
+    If the newest complete set has no observations, it silently returns {}, turning a
+    priced portfolio stale even though valid prices exist in an earlier set.
+    """
+    wallet_id = await _insert_wallet(db_session, "0x" + "c" * 40)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "d" * 40, decimals=18)
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=10**18)
+    await db_session.flush()
+
+    # Older complete set with a real price.
+    good_id = uuid.uuid4()
+    await db_session.execute(
+        sa.text(
+            "INSERT INTO quote_set (id, provider, fetched_at, status)"
+            " VALUES (:id, 'coingecko', now() - interval '10 minutes', 'complete')"
+        ),
+        {"id": str(good_id)},
+    )
+    await db_session.execute(
+        sa.text(
+            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd)"
+            " VALUES (:id, :qset, :asset, :price)"
+        ),
+        {"id": str(uuid.uuid4()), "qset": str(good_id), "asset": str(asset_id), "price": "1500"},
+    )
+
+    # Newer complete set with zero observations — the bug scenario.
+    empty_id = uuid.uuid4()
+    await db_session.execute(
+        sa.text(
+            "INSERT INTO quote_set (id, provider, fetched_at, status)"
+            " VALUES (:id, 'coingecko', now(), 'complete')"
+        ),
+        {"id": str(empty_id)},
+    )
+    await db_session.flush()
+
+    result = await publish_valuation_snapshot(db_session)
+
+    assert result.quality != "stale", (
+        "empty complete set must not shadow valid prices from an earlier set"
+    )
+    assert result.priced_count == 1
+
+
+@pytest.mark.integration
 async def test_stale_balance_uses_latest_observation(db_session: AsyncSession) -> None:
     """The latest observation per wallet/asset is used, not the first."""
     wallet_id = await _insert_wallet(db_session, "0x" + "a" * 40)

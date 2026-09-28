@@ -82,6 +82,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
 
     asset_id_map = await _get_asset_id_map(session, token_addresses)
 
+    obs_count = 0
     for address, price_usd in prices.items():
         asset_id = asset_id_map.get(address.lower())
         if asset_id is None:
@@ -100,15 +101,20 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
                 "price": str(price_usd),
             },
         )
+        obs_count += 1
 
-    await _mark_quote_set(session, quote_set_id, "complete")
+    # Mark 'empty' (not 'complete') when no observations were inserted so that
+    # _get_latest_prices never shadows an earlier set that carried real prices.
+    final_status = "complete" if obs_count > 0 else "empty"
+    await _mark_quote_set(session, quote_set_id, final_status)
     await session.flush()
 
     logger.info(
-        "quote_refresh run_id=%s quote_set=%s priced=%d/%d",
+        "quote_refresh run_id=%s quote_set=%s status=%s priced=%d/%d",
         run_id,
         quote_set_id,
-        len(prices),
+        final_status,
+        obs_count,
         len(token_addresses),
     )
 
