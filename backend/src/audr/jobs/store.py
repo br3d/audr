@@ -27,6 +27,7 @@ class JobKind(StrEnum):
     VALUATION = "valuation"
     VALIDATE_RPC = "validate_rpc"
     VALIDATE_QUOTES = "validate_quotes"
+    EVENT_INDEXER = "event_indexer"
 
 
 class JobRunStatus(StrEnum):
