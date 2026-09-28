@@ -200,6 +200,55 @@ test.describe('History page — data quality notices', () => {
   })
 })
 
+test.describe('History API contract', () => {
+  test('frontend sends ?period= (not ?range=) and renders without crashing on entries response', async ({ page }) => {
+    let capturedUrl: string | null = null
+
+    // Intercept the history API call so we can assert the query param name
+    // and return a well-formed response without requiring a running backend.
+    await page.route('**/api/v1/history*', async (route) => {
+      capturedUrl = route.request().url()
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          period: '7d',
+          entries: [
+            {
+              snapshot_id: 'abc-1',
+              snapshotted_at: '2026-01-15T00:00:00Z',
+              total_value_usd: '5000.00',
+              quality: 'ok',
+              included_wallet_count: 1,
+              included_asset_count: 1,
+              has_gap: false,
+              is_canonical: true,
+              is_gap_marker: false,
+            },
+          ],
+          next_cursor: null,
+        }),
+      })
+    })
+
+    await navigateToHistory(page)
+
+    // Verify the request used `period=`, not `range=`
+    expect(capturedUrl).not.toBeNull()
+    const url = new URL(capturedUrl!)
+    expect(url.searchParams.has('period')).toBe(true)
+    expect(url.searchParams.has('range')).toBe(false)
+
+    // Verify the page rendered the data without throwing (chart or table visible)
+    const hasChart = await page
+      .getByRole('img', { name: /portfolio value history chart/i })
+      .isVisible()
+    const hasTable = await page.getByRole('table', { name: /portfolio value history/i })
+      .isVisible().catch(() => false)
+    expect(hasChart || hasTable).toBe(true)
+  })
+})
+
 test.describe('History page — mobile viewport', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 

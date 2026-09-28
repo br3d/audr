@@ -7,14 +7,64 @@ import type { HistoryPoint } from '../api/client'
 import HistoryChart from '../components/HistoryChart'
 
 const POINTS: HistoryPoint[] = [
-  { timestamp: '2026-01-15T00:00:00Z', total_usd: '5000.00', quality: 'ok', gap: false },
-  { timestamp: '2026-01-16T00:00:00Z', total_usd: '5200.00', quality: 'ok', gap: false },
-  { timestamp: '2026-01-17T00:00:00Z', total_usd: '4900.00', quality: 'stale', gap: true },
+  {
+    snapshot_id: 'abc-1',
+    snapshotted_at: '2026-01-15T00:00:00Z',
+    total_value_usd: '5000.00',
+    quality: 'ok',
+    included_wallet_count: 1,
+    included_asset_count: 1,
+    has_gap: false,
+    is_canonical: true,
+    is_gap_marker: false,
+  },
+  {
+    snapshot_id: 'abc-2',
+    snapshotted_at: '2026-01-16T00:00:00Z',
+    total_value_usd: '5200.00',
+    quality: 'ok',
+    included_wallet_count: 1,
+    included_asset_count: 1,
+    has_gap: false,
+    is_canonical: true,
+    is_gap_marker: false,
+  },
+  {
+    snapshot_id: null,
+    snapshotted_at: '2026-01-17T00:00:00Z',
+    total_value_usd: null,
+    quality: 'stale',
+    included_wallet_count: 0,
+    included_asset_count: 0,
+    has_gap: true,
+    is_canonical: false,
+    is_gap_marker: true,
+  },
 ]
 
 const POINTS_NO_GAPS: HistoryPoint[] = [
-  { timestamp: '2026-01-15T00:00:00Z', total_usd: '5000.00', quality: 'ok', gap: false },
-  { timestamp: '2026-01-16T00:00:00Z', total_usd: '5100.00', quality: 'ok', gap: false },
+  {
+    snapshot_id: 'abc-3',
+    snapshotted_at: '2026-01-15T00:00:00Z',
+    total_value_usd: '5000.00',
+    quality: 'ok',
+    included_wallet_count: 1,
+    included_asset_count: 1,
+    has_gap: false,
+    is_canonical: true,
+    is_gap_marker: false,
+  },
+  {
+    snapshot_id: 'abc-4',
+    snapshotted_at: '2026-01-16T00:00:00Z',
+    total_value_usd: '5100.00',
+    quality: 'ok',
+    included_wallet_count: 1,
+    included_asset_count: 1,
+    has_gap: false,
+    is_canonical: true,
+    is_gap_marker: false,
+  },
 ]
 
 function mount(element: React.ReactElement): { container: HTMLDivElement; root: Root } {

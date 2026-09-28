@@ -1,6 +1,7 @@
 const BASE = '/api/v1'
 
 let _csrfToken: string | null = null
+let _unauthorizedCallback: (() => void) | null = null
 
 // --- Error types ---
 
@@ -47,6 +48,14 @@ export function getCSRFToken(): string | null {
   return _csrfToken
 }
 
+export function setUnauthorizedCallback(fn: () => void): void {
+  _unauthorizedCallback = fn
+}
+
+export function clearUnauthorizedCallback(): void {
+  _unauthorizedCallback = null
+}
+
 // --- Internal fetch wrapper ---
 
 async function request<T>(
@@ -74,6 +83,7 @@ async function request<T>(
 
   if (response.status === 401) {
     clearCSRFToken()
+    _unauthorizedCallback?.()
     throw new AuthError()
   }
 
@@ -576,29 +586,32 @@ export function submitPurge(input: PurgeInput): Promise<JobRef> {
 
 // --- History types ---
 
-export type HistoryRange = '24h' | '7d' | '30d' | 'all'
+export type HistoryPeriod = '24h' | '7d' | '30d' | 'all'
 
 export type HistoryQuality = 'ok' | 'stale' | 'incomplete'
 
 export interface HistoryPoint {
-  timestamp: string
-  total_usd: string | null
+  snapshot_id: string | null
+  snapshotted_at: string
+  total_value_usd: string | null
   quality: HistoryQuality
-  gap: boolean
+  included_wallet_count: number
+  included_asset_count: number
+  has_gap: boolean
+  is_canonical: boolean
+  is_gap_marker: boolean
 }
 
 export interface HistoryResponse {
-  range: HistoryRange
-  items: HistoryPoint[]
+  period: HistoryPeriod
+  entries: HistoryPoint[]
   next_cursor: string | null
-  request_id: string
-  generated_at: string
 }
 
 // --- History API ---
 
-export function fetchHistory(range: HistoryRange, cursor?: string): Promise<HistoryResponse> {
-  const params = new URLSearchParams({ range })
+export function fetchHistory(period: HistoryPeriod, cursor?: string): Promise<HistoryResponse> {
+  const params = new URLSearchParams({ period })
   if (cursor) params.set('cursor', cursor)
   return get<HistoryResponse>(`/history?${params.toString()}`)
 }

@@ -27,13 +27,13 @@ export default function HistoryTable({ points }: Props) {
       </thead>
       <tbody>
         {points.map((point) => (
-          <tr key={point.timestamp} aria-label={point.gap ? 'Gap — data missing before this point' : undefined}>
-            <td>{point.timestamp}</td>
+          <tr key={point.snapshotted_at} aria-label={point.has_gap ? 'Gap — data missing before this point' : undefined}>
+            <td>{point.snapshotted_at}</td>
             <td>
-              <MoneyValue value={point.total_usd} />
+              <MoneyValue value={point.total_value_usd} />
             </td>
             <td>
-              {point.gap && (
+              {point.has_gap && (
                 <span aria-label="Gap marker" role="note" data-testid="gap-marker">
                   Gap ·{' '}
                 </span>
