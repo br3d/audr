@@ -36,13 +36,15 @@ async def preview_purge(session: AsyncSession, *, kind: str) -> dict:  # type: i
             )
         )
         quote_obs_count: int = int(result.scalar() or 0)
-    else:
-        # RPC is not a quote provider — no quote observations to purge.
-        quote_obs_count = 0
 
-    # Simplified: count all valuation_line rows.
-    result = await session.execute(sa.text("SELECT COUNT(*) FROM valuation_line"))
-    valuation_line_count: int = int(result.scalar() or 0)
+        # coingecko purge also deletes all valuation snapshots + lines (prices
+        # become meaningless without the quote source).
+        result = await session.execute(sa.text("SELECT COUNT(*) FROM valuation_line"))
+        valuation_line_count: int = int(result.scalar() or 0)
+    else:
+        # RPC purge removes no monetary data — only the integration credential.
+        quote_obs_count = 0
+        valuation_line_count = 0
 
     result = await session.execute(
         sa.text("SELECT COUNT(*) FROM integration WHERE kind = :kind"),
@@ -98,6 +100,11 @@ async def execute_purge(
                 " AND status IN ('pending', 'in_progress')"
             )
         )
+
+        # Delete valuation data (prices become meaningless without the source).
+        # valuation_line must be deleted before valuation_snapshot (FK constraint).
+        await session.execute(sa.text("DELETE FROM valuation_line"))
+        await session.execute(sa.text("DELETE FROM valuation_snapshot"))
 
         # Delete quote_observation rows linked to coingecko quote_sets.
         await session.execute(

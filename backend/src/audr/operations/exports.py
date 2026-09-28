@@ -12,6 +12,8 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.operations.csv_safe import sanitize as _sanitize
+
 
 async def export_current_portfolio(session: AsyncSession) -> dict:  # type: ignore[type-arg]
     """Export the current portfolio state as a structured dict.
@@ -228,8 +230,8 @@ async def render_portfolio_csv(session: AsyncSession) -> str:
         writer.writerow(
             [
                 holding["wallet_address"],
-                holding["asset_symbol"],
-                holding["asset_name"],
+                _sanitize(holding["asset_symbol"]),
+                _sanitize(holding["asset_name"]),
                 holding["token_address"],
                 raw_amount_cell,
                 holding["decimals"],
@@ -265,8 +267,8 @@ async def render_history_csv(session: AsyncSession) -> str:
                     snapshot["snapshotted_at"],
                     snapshot["quality"],
                     line["wallet_address"],
-                    line["asset_symbol"],
-                    line["asset_name"],
+                    _sanitize(line["asset_symbol"]),
+                    _sanitize(line["asset_name"]),
                     line["raw_amount"] if line["raw_amount"] is not None else "",
                     line["price_usd"] if line["price_usd"] is not None else "",
                     line["decimals"],

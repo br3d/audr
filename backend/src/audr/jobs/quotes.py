@@ -79,6 +79,30 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
             },
         )
 
+    # Resurrection fence: if the run was cancelled (e.g. by a concurrent purge)
+    # or the integration was deleted while we were fetching, discard results.
+    run_check = await session.execute(
+        sa.text("SELECT status FROM job_run WHERE id = :id"),
+        {"id": str(run_id)},
+    )
+    run_row = run_check.first()
+    if run_row is None or run_row[0] != "in_progress":
+        logger.warning(
+            "quote_refresh: run %s is no longer in_progress — discarding results",
+            run_id,
+        )
+        return
+
+    int_check = await session.execute(
+        sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
+    )
+    if int_check.first() is None:
+        logger.warning(
+            "quote_refresh: coingecko integration deleted during run — discarding results run_id=%s",
+            run_id,
+        )
+        return
+
     await _mark_quote_set(session, quote_set_id, "complete")
     await session.flush()
 

@@ -33,7 +33,7 @@ _ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 
 async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """Build ERC-20 discovery candidate lists for all active wallets."""
+    """Build ERC-20 discovery candidate lists and persist them as monitored pairs."""
     wallets = await list_wallets(session)
     for wallet in wallets:
         if wallet.status != "active":
@@ -52,6 +52,47 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
                 run_id=run_id,
                 checkpoint=result.checkpoint,
             )
+
+        # Persist each candidate as an asset + monitored_pair (idempotent upserts).
+        for candidate in result.candidates:
+            # Ensure the asset row exists; don't overwrite existing metadata.
+            await session.execute(
+                sa.text(
+                    """
+                    INSERT INTO asset (id, token_address, symbol, name, decimals, source)
+                    VALUES (:id, :addr, 'UNKNOWN', 'Unknown Token', 18, :source)
+                    ON CONFLICT (token_address) DO NOTHING
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "addr": candidate.token_address,
+                    "source": candidate.source,
+                },
+            )
+            # Get the asset id (either just inserted or pre-existing).
+            asset_row = await session.execute(
+                sa.text("SELECT id FROM asset WHERE token_address = :addr"),
+                {"addr": candidate.token_address},
+            )
+            asset_id = asset_row.scalar_one()
+
+            # Ensure a monitored_pair row exists for this (wallet, asset).
+            await session.execute(
+                sa.text(
+                    """
+                    INSERT INTO monitored_pair (id, wallet_id, asset_id)
+                    VALUES (:id, :wallet, :asset)
+                    ON CONFLICT ON CONSTRAINT uq_monitored_pair DO NOTHING
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "wallet": str(wallet.id),
+                    "asset": str(asset_id),
+                },
+            )
+
         logger.info(
             "discovery run_id=%s wallet=%s candidates=%d",
             run_id,
