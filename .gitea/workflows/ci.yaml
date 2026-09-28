@@ -19,9 +19,14 @@ jobs:
         run: docker compose -f compose.test.yaml down -v --remove-orphans
 
   frontend-tests:
-    runs-on: host
+    # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match
+    # the project's build toolchain (native rolldown/vite bindings need Node 22).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Frontend tests (vitest)
         working-directory: frontend
         run: |
