@@ -419,3 +419,32 @@ export function triggerJob(kind: JobKind): Promise<JobRef> {
 export function fetchJob(id: string): Promise<JobRun> {
   return get<JobRun>(`/jobs/${id}`)
 }
+
+// --- History types ---
+
+export type HistoryRange = '24h' | '7d' | '30d' | 'all'
+
+export type HistoryQuality = 'ok' | 'stale' | 'incomplete'
+
+export interface HistoryPoint {
+  timestamp: string
+  total_usd: string | null
+  quality: HistoryQuality
+  gap: boolean
+}
+
+export interface HistoryResponse {
+  range: HistoryRange
+  items: HistoryPoint[]
+  next_cursor: string | null
+  request_id: string
+  generated_at: string
+}
+
+// --- History API ---
+
+export function fetchHistory(range: HistoryRange, cursor?: string): Promise<HistoryResponse> {
+  const params = new URLSearchParams({ range })
+  if (cursor) params.set('cursor', cursor)
+  return get<HistoryResponse>(`/history?${params.toString()}`)
+}

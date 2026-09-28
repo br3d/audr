@@ -8,8 +8,9 @@ import HoldingsPage from './pages/HoldingsPage'
 import WalletsPage from './pages/WalletsPage'
 import AssetsPage from './pages/AssetsPage'
 import ConnectionsPage from './pages/ConnectionsPage'
+import HistoryPage from './pages/HistoryPage'
 
-type MainPage = 'dashboard' | 'holdings' | 'wallets' | 'assets' | 'connections'
+type MainPage = 'dashboard' | 'holdings' | 'wallets' | 'assets' | 'connections' | 'history'
 
 export default function App() {
   const queryClient = useQueryClient()
@@ -98,6 +99,12 @@ export default function App() {
         >
           Connections
         </button>
+        <button
+          onClick={() => setPage('history')}
+          aria-current={page === 'history' ? 'page' : undefined}
+        >
+          History
+        </button>
         <button onClick={handleSignOut}>Sign out</button>
       </nav>
       {page === 'dashboard' && <DashboardPage />}
@@ -105,6 +112,7 @@ export default function App() {
       {page === 'wallets' && <WalletsPage />}
       {page === 'assets' && <AssetsPage />}
       {page === 'connections' && <ConnectionsPage />}
+      {page === 'history' && <HistoryPage />}
     </div>
   )
 }
