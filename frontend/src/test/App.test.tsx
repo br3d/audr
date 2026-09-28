@@ -56,16 +56,19 @@ vi.mock('../api/client', () => {
     setCSRFToken: vi.fn(),
     clearCSRFToken: vi.fn(),
     getCSRFToken: vi.fn(),
+    setUnauthorizedCallback: vi.fn(),
+    clearUnauthorizedCallback: vi.fn(),
     AuthError,
   }
 })
 
 import App from '../App'
-import { fetchSetupStatus, fetchSession, logout, AuthError } from '../api/client'
+import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback } from '../api/client'
 
 const mockSetupStatus = vi.mocked(fetchSetupStatus)
 const mockSession = vi.mocked(fetchSession)
 const mockLogout = vi.mocked(logout)
+const mockSetUnauthorizedCallback = vi.mocked(setUnauthorizedCallback)
 
 const SESSION_OK = { authenticated: true as const, expires_at: '2099-01-01T00:00:00Z', csrf_token: 'tok' }
 
@@ -235,6 +238,35 @@ describe('App routing and auth guard', () => {
       signOutBtn.click()
     })
     expect(mockLogout).toHaveBeenCalledOnce()
+    await vi.waitFor(
+      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
+      { timeout: 1000 },
+    )
+  })
+
+  it('registers a global unauthorized callback on mount', async () => {
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    expect(mockSetUnauthorizedCallback).toHaveBeenCalledWith(expect.any(Function))
+  })
+
+  it('global 401 callback resets session and returns to sign-in', async () => {
+    mockSession.mockRejectedValue(new AuthError())
+    const qc = makeQueryClient()
+    qc.setQueryData(['setup-status'], { setup_required: false })
+    qc.setQueryData(['session'], SESSION_OK)
+    await act(async () => {
+      root.render(
+        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
+      )
+    })
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
+
+    // Invoke the registered callback as if a 401 fired from any API call
+    const callback = mockSetUnauthorizedCallback.mock.calls[0]?.[0]
+    expect(callback).toBeDefined()
+    await act(async () => {
+      callback?.()
+    })
     await vi.waitFor(
       () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
       { timeout: 1000 },
