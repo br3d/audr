@@ -95,7 +95,7 @@ services:
   worker:
     image: 192.168.1.90:8085/audr-backend:latest
     restart: unless-stopped
-    command: ["python", "-m", "audr.jobs.worker"]
+    command: ["python", "-m", "audr.jobs"]
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
       SECRET_KEY: ${SECRET_KEY}
