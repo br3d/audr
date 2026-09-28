@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchHistory, ApiError } from '../api/client'
-import type { HistoryRange } from '../api/client'
+import type { HistoryPeriod } from '../api/client'
 import HistoryChart from '../components/HistoryChart'
 
-const RANGES: { value: HistoryRange; label: string }[] = [
+const RANGES: { value: HistoryPeriod; label: string }[] = [
   { value: '24h', label: '24 hours' },
   { value: '7d', label: '7 days' },
   { value: '30d', label: '30 days' },
@@ -12,17 +12,17 @@ const RANGES: { value: HistoryRange; label: string }[] = [
 ]
 
 export default function HistoryPage() {
-  const [range, setRange] = useState<HistoryRange>('7d')
+  const [period, setPeriod] = useState<HistoryPeriod>('7d')
 
   const { data, error, isLoading } = useQuery({
-    queryKey: ['history', range],
-    queryFn: () => fetchHistory(range),
+    queryKey: ['history', period],
+    queryFn: () => fetchHistory(period),
     refetchInterval: 60_000,
   })
 
-  const hasGaps = data?.items.some((p) => p.gap) ?? false
-  const hasStale = data?.items.some((p) => p.quality === 'stale') ?? false
-  const hasIncomplete = data?.items.some((p) => p.quality === 'incomplete') ?? false
+  const hasGaps = data?.entries.some((p) => p.has_gap) ?? false
+  const hasStale = data?.entries.some((p) => p.quality === 'stale') ?? false
+  const hasIncomplete = data?.entries.some((p) => p.quality === 'incomplete') ?? false
 
   return (
     <main>
@@ -36,8 +36,8 @@ export default function HistoryPage() {
               type="radio"
               name="history-range"
               value={value}
-              checked={range === value}
-              onChange={() => setRange(value)}
+              checked={period === value}
+              onChange={() => setPeriod(value)}
             />
             {' '}{label}
           </label>
@@ -80,7 +80,7 @@ export default function HistoryPage() {
           )}
 
           <section aria-label="History chart">
-            <HistoryChart points={data.items} />
+            <HistoryChart points={data.entries} />
           </section>
         </>
       )}

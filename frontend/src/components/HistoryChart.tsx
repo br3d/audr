@@ -17,9 +17,9 @@ interface Props {
 }
 
 interface ChartDatum {
-  timestamp: string
+  snapshotted_at: string
   value: number | null
-  gap: boolean
+  has_gap: boolean
   quality: HistoryPoint['quality']
 }
 
@@ -48,14 +48,14 @@ export default function HistoryChart({ points }: Props) {
   }
 
   const data: ChartDatum[] = points.map((p) => ({
-    timestamp: p.timestamp,
+    snapshotted_at: p.snapshotted_at,
     // parseFloat is acceptable here: chart rendering does not require decimal precision
-    value: p.total_usd !== null ? parseFloat(p.total_usd) : null,
-    gap: p.gap,
+    value: p.total_value_usd !== null ? parseFloat(p.total_value_usd) : null,
+    has_gap: p.has_gap,
     quality: p.quality,
   }))
 
-  const gapTimestamps = data.filter((d) => d.gap).map((d) => d.timestamp)
+  const gapTimestamps = data.filter((d) => d.has_gap).map((d) => d.snapshotted_at)
 
   const tickFormatter = (ts: string) => formatTimestamp(ts)
 
@@ -70,7 +70,7 @@ export default function HistoryChart({ points }: Props) {
           <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 16 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
-              dataKey="timestamp"
+              dataKey="snapshotted_at"
               tickFormatter={tickFormatter}
               tick={{ fontSize: 11 }}
               minTickGap={60}

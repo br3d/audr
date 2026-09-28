@@ -7,24 +7,39 @@ import type { HistoryPoint } from '../api/client'
 import HistoryTable from '../components/HistoryTable'
 
 const POINT_OK: HistoryPoint = {
-  timestamp: '2026-01-15T12:00:00Z',
-  total_usd: '5000.00',
+  snapshot_id: 'abc-ok',
+  snapshotted_at: '2026-01-15T12:00:00Z',
+  total_value_usd: '5000.00',
   quality: 'ok',
-  gap: false,
+  included_wallet_count: 1,
+  included_asset_count: 1,
+  has_gap: false,
+  is_canonical: true,
+  is_gap_marker: false,
 }
 
 const POINT_GAP: HistoryPoint = {
-  timestamp: '2026-01-16T12:00:00Z',
-  total_usd: '4800.50',
+  snapshot_id: 'abc-gap',
+  snapshotted_at: '2026-01-16T12:00:00Z',
+  total_value_usd: '4800.50',
   quality: 'stale',
-  gap: true,
+  included_wallet_count: 1,
+  included_asset_count: 1,
+  has_gap: true,
+  is_canonical: true,
+  is_gap_marker: false,
 }
 
 const POINT_INCOMPLETE: HistoryPoint = {
-  timestamp: '2026-01-17T12:00:00Z',
-  total_usd: null,
+  snapshot_id: 'abc-incomplete',
+  snapshotted_at: '2026-01-17T12:00:00Z',
+  total_value_usd: null,
   quality: 'incomplete',
-  gap: false,
+  included_wallet_count: 1,
+  included_asset_count: 1,
+  has_gap: false,
+  is_canonical: true,
+  is_gap_marker: false,
 }
 
 function mount(element: React.ReactElement): { container: HTMLDivElement; root: Root } {
@@ -70,7 +85,7 @@ describe('HistoryTable', () => {
     await unmount(container, root)
   })
 
-  it('shows "unknown" for null total_usd', async () => {
+  it('shows "unknown" for null total_value_usd', async () => {
     const { container, root } = mount(
       React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }),
     )
