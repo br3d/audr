@@ -21,7 +21,7 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf
+from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.history_query import (
@@ -88,7 +88,7 @@ class SnapshotDetailResponse(BaseModel):
 
 @router.get("/history", response_model=HistoryResponse)
 async def get_history(
-    _session: Annotated[Session, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     period: Literal["24h", "7d", "30d", "all"] = Query(default="7d"),
     cursor: str | None = Query(default=None),
@@ -149,7 +149,7 @@ async def get_history(
 )
 async def get_history_snapshot(
     snapshot_id: uuid.UUID,
-    _session: Annotated[Session, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> SnapshotDetailResponse:
     """Return constituent holdings lines for a specific historical snapshot.
