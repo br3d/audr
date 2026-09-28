@@ -120,12 +120,19 @@ async def update_schedule(
         set_parts.append("budget_calls_per_day = :budget_calls_per_day")
         params["budget_calls_per_day"] = budget_calls_per_day
 
-    await session.execute(
+    # CAS: guard the UPDATE with the revision we read to close the check-then-act window.
+    where = "WHERE kind = :kind AND revision = :cas_revision"
+    params["cas_revision"] = current["revision"]
+    result = await session.execute(
         sa.text(
-            f"UPDATE schedule SET {', '.join(set_parts)} WHERE kind = :kind"  # noqa: S608
+            f"UPDATE schedule SET {', '.join(set_parts)} {where}"  # noqa: S608
         ),
         params,
     )
+    if result.rowcount == 0:
+        raise RevisionConflictError(
+            f"revision conflict for kind={kind!r}: concurrent update detected"
+        )
     await session.flush()
 
     updated = await get_schedule(session, kind=kind)

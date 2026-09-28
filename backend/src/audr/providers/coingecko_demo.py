@@ -12,6 +12,7 @@ Never logs or exposes the API key.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 from decimal import Decimal
 from typing import Any
@@ -117,7 +118,7 @@ class CoinGeckoProvider:
             if usd_val is None:
                 continue
             try:
-                result[addr.lower()] = Decimal(str(usd_val))
+                result[addr.lower()] = Decimal(usd_val) if isinstance(usd_val, Decimal) else Decimal(str(usd_val))
             except Exception:
                 logger.warning("coingecko: unparseable price for %s: %r", addr, usd_val)
         return result
@@ -162,7 +163,7 @@ class CoinGeckoProvider:
             headers={"x-cg-demo-api-key": self._api_key},
         )
         _check_response(response)
-        return response.json()  # type: ignore[no-any-return]
+        return _json.loads(response.text, parse_float=Decimal)  # type: ignore[no-any-return]
 
 
 def _check_response(response: httpx.Response) -> None:
@@ -181,6 +182,6 @@ def _extract_simple_price(data: dict[str, Any], coin_id: str) -> Decimal:
     if usd_val is None:
         raise CoinGeckoError(0, f"'usd' key missing for coin_id '{coin_id}'")
     try:
-        return Decimal(str(usd_val))
+        return Decimal(usd_val) if isinstance(usd_val, Decimal) else Decimal(str(usd_val))
     except Exception as exc:
         raise CoinGeckoError(0, f"unparseable USD value: {usd_val!r}") from exc

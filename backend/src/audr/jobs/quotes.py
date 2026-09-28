@@ -103,6 +103,20 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         )
         return
 
+    obs_count = await session.execute(
+        sa.text("SELECT COUNT(*) FROM quote_observation WHERE quote_set_id = :qset"),
+        {"qset": str(quote_set_id)},
+    )
+    if (obs_count.scalar() or 0) == 0:
+        logger.warning(
+            "quote_refresh: no usable observations — marking set failed run_id=%s quote_set=%s",
+            run_id,
+            quote_set_id,
+        )
+        await _mark_quote_set(session, quote_set_id, "failed")
+        await session.flush()
+        return
+
     await _mark_quote_set(session, quote_set_id, "complete")
     await session.flush()
 

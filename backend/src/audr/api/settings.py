@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.auth.dependencies import require_session
+from audr.api.auth import _require_csrf, _require_session
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
 from audr.jobs.store import JobKind, claim_job
@@ -310,7 +310,7 @@ async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
 
 @router.get("/settings", response_model=SettingsResponse)
 async def get_settings(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> SettingsResponse:
     """Return all schedule settings in the frontend-expected shape."""
@@ -320,7 +320,7 @@ async def get_settings(
 @router.patch("/settings", response_model=SettingsResponse)
 async def patch_settings(
     body: SettingsPatch,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> SettingsResponse:
     """Update schedule settings (optimistic-lock on revision)."""
@@ -333,6 +333,20 @@ async def patch_settings(
     if body.schedules:
         for kind_fe, patch in body.schedules.items():
             kind_db = _FE_TO_DB.get(kind_fe, kind_fe)
+
+            # AUD-272: validate interval_seconds — must be a whole number of minutes ≥ 60.
+            if patch.interval_seconds is not None:
+                if patch.interval_seconds <= 0 or patch.interval_seconds % 60 != 0:
+                    raise HTTPException(
+                        status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="interval_seconds must be a positive multiple of 60",
+                    )
+            if patch.freshness_seconds is not None and patch.freshness_seconds <= 0:
+                raise HTTPException(
+                    status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="freshness_seconds must be positive",
+                )
+
             cron_expr: str | None = None
             if patch.interval_seconds is not None:
                 cron_expr = _seconds_to_cron(patch.interval_seconds)
@@ -352,14 +366,30 @@ async def patch_settings(
                 params["freshness_s"] = freshness_s
 
             if len(sets) > 1:  # more than just the revision bump
-                await db.execute(
+                # AUD-271: CAS — read per-kind revision and guard the UPDATE to
+                # close the check-then-act race window.
+                kind_rev_row = (
+                    await db.execute(
+                        sa.text("SELECT revision FROM schedule WHERE kind = :kind"),
+                        {"kind": kind_db},
+                    )
+                ).first()
+                if kind_rev_row is None:
+                    continue  # unknown kind — skip
+                params["cas_revision"] = kind_rev_row[0]
+                result = await db.execute(
                     sa.text(
                         "UPDATE schedule SET "  # noqa: S608
                         + ", ".join(sets)
-                        + " WHERE kind = :kind"
+                        + " WHERE kind = :kind AND revision = :cas_revision"
                     ),
                     params,
                 )
+                if result.rowcount == 0:
+                    raise HTTPException(
+                        status_code=http_status.HTTP_409_CONFLICT,
+                        detail="revision conflict",
+                    )
 
     await db.commit()
     return await _query_settings_response(db)
@@ -373,7 +403,7 @@ async def patch_settings(
 @router.get("/settings/schedules/{kind}", response_model=ScheduleRead)
 async def get_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Return a single schedule by kind, or 404."""
@@ -390,7 +420,7 @@ async def get_schedule_route(
 async def patch_schedule(
     kind: str,
     body: ScheduleUpdate,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Update configurable schedule fields."""
@@ -425,7 +455,7 @@ async def patch_schedule(
 @router.post("/settings/schedules/{kind}/pause", response_model=ScheduleRead)
 async def pause_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Pause a schedule (sets paused_at = now())."""
@@ -443,7 +473,7 @@ async def pause_schedule_route(
 @router.post("/settings/schedules/{kind}/resume", response_model=ScheduleRead)
 async def resume_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Resume a paused schedule (clears paused_at)."""
@@ -466,7 +496,7 @@ async def resume_schedule_route(
 @router.post("/jobs", response_model=JobRef)
 async def trigger_job(
     body: TriggerJobInput,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> JobRef:
     """Queue an immediate job run, coalescing if one is already active."""
@@ -510,7 +540,7 @@ async def trigger_job(
 
 @router.get("/jobs", response_model=JobsListResponse)
 async def list_jobs(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     kind: str | None = None,
     cursor: str | None = None,
@@ -553,7 +583,7 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=JobRunResponse)
 async def get_job(
     job_id: uuid.UUID,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> JobRunResponse:
     """Return a single job run by ID, or 404."""
@@ -579,7 +609,7 @@ async def get_job(
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(
     job_id: uuid.UUID,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
     """Cancel a pending or in-progress job.
@@ -614,7 +644,7 @@ async def cancel_job(
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
     """Return system operational status in the frontend-expected shape."""
@@ -673,7 +703,7 @@ async def get_status(
 
 @router.get("/exports/portfolio")
 async def export_portfolio(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     format: str = Query(default="json", pattern="^(json|csv)$"),
 ) -> StreamingResponse:
@@ -699,24 +729,43 @@ async def export_portfolio(
 
 @router.get("/exports/history")
 async def export_history(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     format: str = Query(default="json", pattern="^(json|csv)$"),
     from_: str | None = Query(default=None, alias="from"),
     to: str | None = Query(default=None),
 ) -> StreamingResponse:
-    """Stream full history as JSON or CSV."""
+    """Stream full history as JSON or CSV.
+
+    Optional ``from`` / ``to`` query params accept ISO-8601 datetime strings
+    and bound the ``snapshotted_at`` range (both inclusive).
+    """
     import json as _json
+    from datetime import datetime as _dt
+
+    def _parse_dt(s: str | None) -> _dt | None:
+        if s is None:
+            return None
+        try:
+            return _dt.fromisoformat(s)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"invalid datetime: {s!r}",
+            ) from exc
+
+    from_dt = _parse_dt(from_)
+    to_dt = _parse_dt(to)
 
     if format == "csv":
-        content = await render_history_csv(db)
+        content = await render_history_csv(db, from_dt=from_dt, to_dt=to_dt)
         return StreamingResponse(
             iter([content]),
             media_type="text/csv",
             headers={"Content-Disposition": 'attachment; filename="history.csv"'},
         )
 
-    data = await export_full_history(db)
+    data = await export_full_history(db, from_dt=from_dt, to_dt=to_dt)
     payload = _json.dumps(data, default=str)
     return StreamingResponse(
         iter([payload]),
@@ -751,7 +800,7 @@ class PurgeResult(BaseModel):
 
 @router.get("/data/provider-purge-preview", response_model=PurgePreviewResponse)
 async def get_purge_preview(
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     provider: str = Query(...),
 ) -> PurgePreviewResponse:
@@ -768,7 +817,7 @@ async def get_purge_preview(
 @router.post("/data/provider-purge", response_model=PurgeResult)
 async def post_provider_purge(
     body: PurgeInput,
-    _session: Annotated[Any, Depends(require_session)],
+    _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> PurgeResult:
     """Execute a password-protected provider-data purge."""

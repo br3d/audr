@@ -90,13 +90,16 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
     }
 
 
-async def export_full_history(session: AsyncSession) -> dict:  # type: ignore[type-arg]
+async def export_full_history(
+    session: AsyncSession,
+    *,
+    from_dt: datetime | None = None,
+    to_dt: datetime | None = None,
+) -> dict:  # type: ignore[type-arg]
     """Export the complete valuation snapshot history as a structured dict.
 
-    Snapshots are ordered by ``snapshotted_at`` ASC.  Each line's asset name
-    comes from the ``asset_metadata_revision`` recorded latest before the
-    snapshot's ``snapshotted_at``; falls back to the current ``asset.name`` when
-    no revision predates the snapshot.
+    Uses a single JOIN query (not N+1).  Optional *from_dt* / *to_dt* bound the
+    ``snapshotted_at`` range (both inclusive).
 
     Returns::
 
@@ -104,95 +107,84 @@ async def export_full_history(session: AsyncSession) -> dict:  # type: ignore[ty
             "schema_version": 1,
             "record_type": "full_history",
             "exported_at": "<ISO-8601>",
-            "snapshots": [
-                {
-                    "snapshot_id": str,
-                    "snapshotted_at": str,
-                    "quality": str,
-                    "lines": [
-                        {
-                            "wallet_address": str,
-                            "asset_symbol": str,
-                            "asset_name": str,
-                            "raw_amount": str | None,
-                            "price_usd": str | None,
-                            "decimals": int,
-                        },
-                        ...
-                    ]
-                },
-                ...
-            ]
+            "snapshots": [...]
         }
     """
-    snapshots_result = await session.execute(
+    where_clauses = []
+    params: dict[str, object] = {}
+    if from_dt is not None:
+        where_clauses.append("vs.snapshotted_at >= :from_dt")
+        params["from_dt"] = from_dt
+    if to_dt is not None:
+        where_clauses.append("vs.snapshotted_at <= :to_dt")
+        params["to_dt"] = to_dt
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    result = await session.execute(
         sa.text(
-            """
-            SELECT id, snapshotted_at, quality
-            FROM valuation_snapshot
-            ORDER BY snapshotted_at ASC
-            """
-        )
+            f"""
+            SELECT
+                vs.id                              AS snapshot_id,
+                vs.snapshotted_at,
+                vs.quality,
+                w.address                          AS wallet_address,
+                a.symbol                           AS asset_symbol,
+                COALESCE(amr.name, a.name)         AS asset_name,
+                vl.raw_amount,
+                vl.price_usd,
+                COALESCE(a.decimals_override, a.decimals) AS decimals
+            FROM valuation_snapshot vs
+            LEFT JOIN valuation_line vl ON vl.snapshot_id = vs.id
+            LEFT JOIN wallet w ON w.id = vl.wallet_id
+            LEFT JOIN asset a ON a.id = vl.asset_id
+            LEFT JOIN LATERAL (
+                SELECT name
+                FROM asset_metadata_revision
+                WHERE asset_id = a.id
+                  AND recorded_at <= vs.snapshotted_at
+                ORDER BY recorded_at DESC
+                LIMIT 1
+            ) amr ON true
+            {where_sql}
+            ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
+            """  # noqa: S608
+        ),
+        params,
     )
-    snapshot_rows = snapshots_result.fetchall()
 
-    snapshots = []
-    for snap_row in snapshot_rows:
-        snap_id = snap_row[0]
-        snapshotted_at: datetime = snap_row[1]
-        quality: str = snap_row[2]
+    snapshots: list[dict] = []  # type: ignore[type-arg]
+    current_snap_id: str | None = None
+    current_snap: dict | None = None  # type: ignore[type-arg]
 
-        lines_result = await session.execute(
-            sa.text(
-                """
-                SELECT
-                    w.address                          AS wallet_address,
-                    a.symbol                           AS asset_symbol,
-                    COALESCE(amr.name, a.name)         AS asset_name,
-                    vl.raw_amount,
-                    vl.price_usd,
-                    COALESCE(a.decimals_override, a.decimals) AS decimals
-                FROM valuation_line vl
-                JOIN wallet w ON w.id = vl.wallet_id
-                JOIN asset a  ON a.id = vl.asset_id
-                LEFT JOIN LATERAL (
-                    SELECT name
-                    FROM asset_metadata_revision
-                    WHERE asset_id  = a.id
-                      AND recorded_at <= :snapshotted_at
-                    ORDER BY recorded_at DESC
-                    LIMIT 1
-                ) amr ON true
-                WHERE vl.snapshot_id = :snapshot_id
-                ORDER BY w.address, a.symbol
-                """
-            ),
-            {"snapshot_id": snap_id, "snapshotted_at": snapshotted_at},
-        )
-
-        lines = []
-        for line_row in lines_result.fetchall():
-            raw_amount = line_row[3]
-            price_usd  = line_row[4]
-            lines.append(
+    for row in result:
+        snap_id_str = str(row[0])
+        if snap_id_str != current_snap_id:
+            if current_snap is not None:
+                snapshots.append(current_snap)
+            current_snap_id = snap_id_str
+            current_snap = {
+                "snapshot_id": snap_id_str,
+                "snapshotted_at": row[1].isoformat(),
+                "quality": row[2],
+                "lines": [],
+            }
+        # row[3] (wallet_address) is None when the snapshot has no lines
+        if row[3] is not None and current_snap is not None:
+            raw_amount = row[6]
+            price_usd = row[7]
+            current_snap["lines"].append(
                 {
-                    "wallet_address": str(line_row[0]),
-                    "asset_symbol": str(line_row[1]),
-                    "asset_name": str(line_row[2]),
+                    "wallet_address": str(row[3]),
+                    "asset_symbol": str(row[4]),
+                    "asset_name": str(row[5]),
                     "raw_amount": str(Decimal(raw_amount)) if raw_amount is not None else None,
                     "price_usd": str(Decimal(price_usd)) if price_usd is not None else None,
-                    "decimals": int(line_row[5]),
+                    "decimals": int(row[8]),
                 }
             )
 
-        snapshots.append(
-            {
-                "snapshot_id": str(snap_id),
-                "snapshotted_at": snapshotted_at.isoformat(),
-                "quality": quality,
-                "lines": lines,
-            }
-        )
+    if current_snap is not None:
+        snapshots.append(current_snap)
 
     return {
         "schema_version": 1,
@@ -241,7 +233,12 @@ async def render_portfolio_csv(session: AsyncSession) -> str:
     return buf.getvalue()
 
 
-async def render_history_csv(session: AsyncSession) -> str:
+async def render_history_csv(
+    session: AsyncSession,
+    *,
+    from_dt: datetime | None = None,
+    to_dt: datetime | None = None,
+) -> str:
     """Render the full valuation history as a CSV string.
 
     Format::
@@ -249,7 +246,7 @@ async def render_history_csv(session: AsyncSession) -> str:
         # schema_version: 1
         snapshot_id,snapshotted_at,quality,wallet_address,asset_symbol,asset_name,raw_amount,price_usd,decimals
     """
-    history = await export_full_history(session)
+    history = await export_full_history(session, from_dt=from_dt, to_dt=to_dt)
 
     buf = io.StringIO()
     buf.write("# schema_version: 1\n")
