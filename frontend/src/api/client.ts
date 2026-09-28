@@ -539,7 +539,7 @@ export function changePassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  return put<void>('/auth/password', {
+  return patch<void>('/auth/password', {
     current_password: currentPassword,
     new_password: newPassword,
   })
