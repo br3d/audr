@@ -51,10 +51,10 @@ async def test_lease_loss_after_missed_heartbeat(db_session: AsyncSession) -> No
 @pytest.mark.integration
 async def test_duplicate_claim_rejected(db_session: AsyncSession) -> None:
     """Two workers cannot hold an active lease on the same job kind."""
-    run_id1 = await claim_job(db_session, kind=JobKind.QUOTE_REFRESH, max_retries=3)
+    run_id1 = await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3)
     assert run_id1 is not None
 
-    run_id2 = await claim_job(db_session, kind=JobKind.QUOTE_REFRESH, max_retries=3)
+    run_id2 = await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3)
     assert run_id2 is None  # second claim rejected
 
 
@@ -125,7 +125,7 @@ async def test_heartbeat_extends_lease(db_session: AsyncSession) -> None:
 @pytest.mark.integration
 async def test_complete_job_sets_done_status(db_session: AsyncSession) -> None:
     """complete_job transitions the run to completed."""
-    run_id = await claim_job(db_session, kind=JobKind.QUOTE_REFRESH, max_retries=3)
+    run_id = await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3)
     assert run_id is not None
     await complete_job(db_session, run_id=run_id)
     run = await get_job_run(db_session, run_id=run_id)

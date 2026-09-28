@@ -75,20 +75,24 @@ async def claim_job(
     if active.first() is not None:
         return None
 
-    # Check retry budget: count recent failed runs.
+    # Check retry budget: if the total number of failed runs for this kind is
+    # >= max_retries, no further claims are allowed.
     exhausted = await session.execute(
         sa.text(
-            """
-            SELECT COUNT(*) FROM job_run
-            WHERE kind = :kind
-              AND status = 'failed'
-              AND retry_count >= max_retries
-            """
+            "SELECT COUNT(*) FROM job_run WHERE kind = :kind AND status = 'failed'"
         ),
         {"kind": kind.value},
     )
-    if (exhausted.scalar() or 0) > 0:
+    if (exhausted.scalar() or 0) >= max_retries:
         return None
+
+    # Job fencing: QUOTE_REFRESH requires a live coingecko integration.
+    if kind == JobKind.QUOTE_REFRESH:
+        guard = await session.execute(
+            sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
+        )
+        if guard.first() is None:
+            return None
 
     # Insert a new in_progress run.
     run_id = uuid.uuid4()

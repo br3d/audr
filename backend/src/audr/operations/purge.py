@@ -88,22 +88,15 @@ async def execute_purge(
 
     # --- Step 3: Delete provider data ---
     if kind == "coingecko":
-        # Job fencing: cancel pending/in_progress quote_refresh jobs, then
-        # insert a failed sentinel with retry_count >= max_retries so that
-        # claim_job's retry-budget check prevents any new claims.
+        # Job fencing: cancel any pending/in_progress quote_refresh jobs.
+        # claim_job additionally checks integration existence, so no new
+        # claims will succeed once the integration row is deleted below.
         await session.execute(
             sa.text(
                 "UPDATE job_run SET status = 'cancelled'"
                 " WHERE kind = 'quote_refresh'"
                 " AND status IN ('pending', 'in_progress')"
             )
-        )
-        await session.execute(
-            sa.text(
-                "INSERT INTO job_run (id, kind, status, max_retries, retry_count, claimed_at, heartbeat_at)"
-                " VALUES (:id, 'quote_refresh', 'failed', 1, 1, now(), now())"
-            ),
-            {"id": str(uuid.uuid4())},
         )
 
         # Delete quote_observation rows linked to coingecko quote_sets.
@@ -127,8 +120,9 @@ async def execute_purge(
         )
 
     elif kind == "rpc":
-        # Job fencing: cancel pending/in_progress balance_scan and discovery jobs,
-        # then insert failed sentinels to exhaust retry budgets.
+        # Job fencing: cancel pending/in_progress balance_scan and discovery jobs.
+        # claim_job checks integration existence, so no new claims succeed once
+        # the rpc integration row is deleted below.
         await session.execute(
             sa.text(
                 "UPDATE job_run SET status = 'cancelled'"
@@ -136,14 +130,6 @@ async def execute_purge(
                 " AND status IN ('pending', 'in_progress')"
             )
         )
-        for fenced_kind in ("balance_scan", "discovery"):
-            await session.execute(
-                sa.text(
-                    "INSERT INTO job_run (id, kind, status, max_retries, retry_count, claimed_at, heartbeat_at)"
-                    " VALUES (:id, :kind, 'failed', 1, 1, now(), now())"
-                ),
-                {"id": str(uuid.uuid4()), "kind": fenced_kind},
-            )
 
         # Delete the rpc integration row.
         await session.execute(

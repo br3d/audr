@@ -79,32 +79,15 @@ async def discover_tokens(
 async def save_discovery_checkpoint(
     session: AsyncSession,
     *,
-    wallet_address: str,
+    run_id: uuid.UUID,
     checkpoint: dict[str, Any],
 ) -> None:
-    """Upsert a discovery checkpoint for *wallet_address*.
-
-    Wallet lookup is by address (lowercase); if the wallet row doesn't exist the
-    checkpoint is silently dropped (the wallet may have been removed).
-    """
-    wallet_id = await _wallet_id_for_address(session, wallet_address)
-    if wallet_id is None:
-        return
-
+    """Persist *checkpoint* on the job_run row identified by *run_id*."""
     await session.execute(
         sa.text(
-            """
-            INSERT INTO discovery_coverage (id, wallet_id, scanned_at, checkpoint)
-            VALUES (:id, :wallet_id, :now, :checkpoint::jsonb)
-            ON CONFLICT DO NOTHING
-            """
+            "UPDATE job_run SET checkpoint = :checkpoint::jsonb WHERE id = :id"
         ),
-        {
-            "id": str(uuid.uuid4()),
-            "wallet_id": str(wallet_id),
-            "now": datetime.now(tz=UTC),
-            "checkpoint": _json_dumps(checkpoint),
-        },
+        {"id": str(run_id), "checkpoint": _json_dumps(checkpoint)},
     )
     await session.flush()
 
@@ -112,23 +95,12 @@ async def save_discovery_checkpoint(
 async def get_discovery_checkpoint(
     session: AsyncSession,
     *,
-    wallet_address: str,
+    run_id: uuid.UUID,
 ) -> dict[str, Any] | None:
-    """Return the most recent discovery checkpoint for *wallet_address*, or None."""
-    wallet_id = await _wallet_id_for_address(session, wallet_address)
-    if wallet_id is None:
-        return None
-
+    """Return the checkpoint stored on the job_run row, or None."""
     result = await session.execute(
-        sa.text(
-            """
-            SELECT checkpoint FROM discovery_coverage
-            WHERE wallet_id = :wallet_id
-            ORDER BY scanned_at DESC
-            LIMIT 1
-            """
-        ),
-        {"wallet_id": str(wallet_id)},
+        sa.text("SELECT checkpoint FROM job_run WHERE id = :id"),
+        {"id": str(run_id)},
     )
     row = result.first()
     if row is None or row[0] is None:
