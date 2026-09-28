@@ -25,6 +25,8 @@ class JobKind(StrEnum):
     QUOTE_REFRESH = "quote_refresh"
     DISCOVERY = "discovery"
     VALUATION = "valuation"
+    VALIDATE_RPC = "validate_rpc"
+    VALIDATE_QUOTES = "validate_quotes"
 
 
 class JobRunStatus(StrEnum):

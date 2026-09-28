@@ -73,8 +73,8 @@ async def test_check_migration_readiness_at_head(db_session: AsyncSession) -> No
     result = await check_migration_readiness(db_session)
 
     assert result["up_to_date"] is True
-    assert result["current"] == "007"
-    assert result["head"] == "007"
+    assert result["current"] == "008"
+    assert result["head"] == "008"
 
 
 async def test_check_migration_readiness_stale(db_session: AsyncSession) -> None:
