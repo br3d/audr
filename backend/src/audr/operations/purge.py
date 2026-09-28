@@ -23,6 +23,7 @@ async def preview_purge(session: AsyncSession, *, kind: str) -> dict:  # type: i
         {
             "kind": str,
             "quote_observation_count": int,
+            "quote_set_count": int,
             "valuation_line_count": int,
             "integration_count": int,
         }
@@ -36,13 +37,22 @@ async def preview_purge(session: AsyncSession, *, kind: str) -> dict:  # type: i
             )
         )
         quote_obs_count: int = int(result.scalar() or 0)
-    else:
-        # RPC is not a quote provider — no quote observations to purge.
-        quote_obs_count = 0
 
-    # Simplified: count all valuation_line rows.
-    result = await session.execute(sa.text("SELECT COUNT(*) FROM valuation_line"))
-    valuation_line_count: int = int(result.scalar() or 0)
+        result = await session.execute(
+            sa.text("SELECT COUNT(*) FROM quote_set WHERE provider = 'coingecko'")
+        )
+        quote_set_count: int = int(result.scalar() or 0)
+
+        # Only count valuation_line rows that carry coingecko-derived prices.
+        result = await session.execute(
+            sa.text("SELECT COUNT(*) FROM valuation_line WHERE price_usd IS NOT NULL")
+        )
+        valuation_line_count: int = int(result.scalar() or 0)
+    else:
+        # RPC is not a quote provider — no quote or valuation monetary data to purge.
+        quote_obs_count = 0
+        quote_set_count = 0
+        valuation_line_count = 0
 
     result = await session.execute(
         sa.text("SELECT COUNT(*) FROM integration WHERE kind = :kind"),
@@ -53,6 +63,7 @@ async def preview_purge(session: AsyncSession, *, kind: str) -> dict:  # type: i
     return {
         "kind": kind,
         "quote_observation_count": quote_obs_count,
+        "quote_set_count": quote_set_count,
         "valuation_line_count": valuation_line_count,
         "integration_count": integration_count,
     }
@@ -112,6 +123,34 @@ async def execute_purge(
         # Delete coingecko quote_set rows.
         await session.execute(
             sa.text("DELETE FROM quote_set WHERE provider = 'coingecko'")
+        )
+
+        # Delete history_point rows for snapshots that will become empty after
+        # we remove the priced valuation_lines (those with no unpriced sibling).
+        await session.execute(
+            sa.text(
+                "DELETE FROM history_point"
+                " WHERE snapshot_id IN ("
+                "   SELECT id FROM valuation_snapshot"
+                "   WHERE id NOT IN ("
+                "     SELECT DISTINCT snapshot_id FROM valuation_line"
+                "     WHERE price_usd IS NULL"
+                "   )"
+                " )"
+            )
+        )
+
+        # Delete valuation_line rows that carry coingecko-derived prices.
+        await session.execute(
+            sa.text("DELETE FROM valuation_line WHERE price_usd IS NOT NULL")
+        )
+
+        # Delete valuation_snapshot rows that are now childless.
+        await session.execute(
+            sa.text(
+                "DELETE FROM valuation_snapshot"
+                " WHERE id NOT IN (SELECT DISTINCT snapshot_id FROM valuation_line)"
+            )
         )
 
         # Delete the coingecko integration row.

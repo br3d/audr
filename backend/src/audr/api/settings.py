@@ -760,7 +760,7 @@ async def get_purge_preview(
     return PurgePreviewResponse(
         provider=provider,
         quote_observation_count=raw["quote_observation_count"],
-        quote_set_count=raw["integration_count"],
+        quote_set_count=raw["quote_set_count"],
         affected_valuation_count=raw["valuation_line_count"],
     )
 
