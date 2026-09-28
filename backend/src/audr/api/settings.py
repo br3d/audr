@@ -730,8 +730,9 @@ class PurgeInput(BaseModel):
 
 
 class PurgeResult(BaseModel):
-    run_id: str
-    coalesced: bool
+    purged: bool
+    quote_observations_deleted: int
+    valuation_lines_deleted: int
 
 
 @router.get("/data/provider-purge-preview", response_model=PurgePreviewResponse)
@@ -763,8 +764,12 @@ async def post_provider_purge(
             detail="confirm must be true",
         )
     try:
-        await execute_purge(db, kind=body.provider, password=body.current_password)
+        result = await execute_purge(db, kind=body.provider, password=body.current_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     await db.commit()
-    return PurgeResult(run_id=str(uuid.uuid4()), coalesced=False)
+    return PurgeResult(
+        purged=result["purged"],
+        quote_observations_deleted=result["quote_observations_deleted"],
+        valuation_lines_deleted=result["valuation_lines_deleted"],
+    )
