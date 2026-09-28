@@ -33,7 +33,13 @@ _DEFAULT_TEST_DB_URL = "postgresql+psycopg://audr:audr@localhost:5433/audr_test"
 
 
 def _test_db_url() -> str:
-    return os.environ.get(_TEST_DB_URL_ENV, _DEFAULT_TEST_DB_URL)
+    # TEST_DATABASE_URL takes precedence; fall back to DATABASE_URL (set in CI compose),
+    # then the local dev default.
+    return (
+        os.environ.get(_TEST_DB_URL_ENV)
+        or os.environ.get("DATABASE_URL")
+        or _DEFAULT_TEST_DB_URL
+    )
 
 
 @pytest.fixture(scope="session")
