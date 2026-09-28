@@ -84,7 +84,10 @@ def _cron_to_seconds(cron_expr: str) -> int:
 
 
 def _seconds_to_cron(seconds: int) -> str:
-    """Convert an interval in seconds to the simplest equivalent cron expression."""
+    """Convert an interval in seconds to the simplest equivalent cron expression.
+
+    Precondition: seconds must be a positive multiple of 60.
+    """
     if seconds < 3600:
         mins = max(1, seconds // 60)
         return f"*/{mins} * * * *"
@@ -93,6 +96,25 @@ def _seconds_to_cron(seconds: int) -> str:
         return f"0 */{hours} * * *"
     days = max(1, seconds // 86400)
     return f"0 0 */{days} * *"
+
+
+def _validate_schedule_patch(patch: "SettingsSchedulePatch") -> None:
+    """Raise HTTP 422 when interval_seconds or freshness_seconds are out of range.
+
+    interval_seconds must be a positive multiple of 60 (whole minutes, minimum 1 min).
+    freshness_seconds must be positive when provided.
+    """
+    if patch.interval_seconds is not None:
+        if patch.interval_seconds <= 0 or patch.interval_seconds % 60 != 0:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="interval_seconds must be a positive whole-minute multiple (minimum 60)",
+            )
+    if patch.freshness_seconds is not None and patch.freshness_seconds <= 0:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="freshness_seconds must be positive",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +354,7 @@ async def patch_settings(
 
     if body.schedules:
         for kind_fe, patch in body.schedules.items():
+            _validate_schedule_patch(patch)
             kind_db = _FE_TO_DB.get(kind_fe, kind_fe)
             cron_expr: str | None = None
             if patch.interval_seconds is not None:
