@@ -26,6 +26,9 @@ from audr.assets.models import CatalogEntry, CatalogVersion
 class DiscoveryCandidate:
     token_address: str
     source: str  # "catalog" | "manual"
+    symbol: str = "UNKNOWN"
+    name: str = "Unknown Token"
+    decimals: int = 18
 
 
 @dataclass
@@ -61,7 +64,13 @@ async def discover_tokens(
             if addr in seen or addr in processed_from_checkpoint:
                 continue
             seen.add(addr)
-            candidates.append(DiscoveryCandidate(token_address=addr, source="catalog"))
+            candidates.append(DiscoveryCandidate(
+                token_address=addr,
+                source="catalog",
+                symbol=entry.symbol,
+                name=entry.name,
+                decimals=entry.decimals,
+            ))
 
     for raw_addr in manual_addresses:
         addr = raw_addr.lower()
@@ -74,6 +83,84 @@ async def discover_tokens(
         candidates=candidates,
         checkpoint={"processed": list(seen)},
     )
+
+
+async def persist_discovery_candidates(
+    session: AsyncSession,
+    *,
+    wallet_address: str,
+    candidates: list[DiscoveryCandidate],
+) -> int:
+    """Idempotently upsert asset + monitored_pair rows for each candidate.
+
+    Returns the count of newly created monitored_pair rows (existing pairs are
+    counted as zero).  The wallet row must already exist.
+    """
+    if not candidates:
+        return 0
+
+    addr = wallet_address.lower()
+    wallet_result = await session.execute(
+        sa.text("SELECT id FROM wallet WHERE address = :addr"),
+        {"addr": addr},
+    )
+    wallet_row = wallet_result.first()
+    if wallet_row is None:
+        return 0
+    wallet_id = str(wallet_row[0])
+
+    new_pairs = 0
+    for candidate in candidates:
+        token_addr = candidate.token_address.lower()
+
+        # Upsert asset — keep existing row unchanged if already present.
+        await session.execute(
+            sa.text(
+                """
+                INSERT INTO asset (id, token_address, symbol, name, decimals, source)
+                VALUES (:id, :token_address, :symbol, :name, :decimals, :source)
+                ON CONFLICT (token_address) DO NOTHING
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "token_address": token_addr,
+                "symbol": candidate.symbol,
+                "name": candidate.name,
+                "decimals": candidate.decimals,
+                "source": candidate.source,
+            },
+        )
+
+        asset_result = await session.execute(
+            sa.text("SELECT id FROM asset WHERE token_address = :addr"),
+            {"addr": token_addr},
+        )
+        asset_row = asset_result.first()
+        if asset_row is None:
+            continue
+        asset_id = str(asset_row[0])
+
+        # Upsert monitored_pair — unique on (wallet_id, asset_id).
+        result = await session.execute(
+            sa.text(
+                """
+                INSERT INTO monitored_pair (id, wallet_id, asset_id)
+                VALUES (:id, :wallet_id, :asset_id)
+                ON CONFLICT (wallet_id, asset_id) DO NOTHING
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+            },
+        )
+        if result.rowcount and result.rowcount > 0:
+            new_pairs += 1
+
+    await session.flush()
+    return new_pairs
 
 
 async def save_discovery_checkpoint(

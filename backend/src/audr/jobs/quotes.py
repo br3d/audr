@@ -58,6 +58,28 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         await session.flush()
         return
 
+    # Fencing: re-check run status and integration existence after the external
+    # API call.  The purge may have cancelled the run and deleted the integration
+    # while we were waiting for the provider response.
+    run_active = await session.execute(
+        sa.text("SELECT 1 FROM job_run WHERE id = :id AND status = 'in_progress'"),
+        {"id": str(run_id)},
+    )
+    integration_alive = await session.execute(
+        sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
+    )
+    if run_active.first() is None or integration_alive.first() is None:
+        logger.info(
+            "quote_refresh fenced: run cancelled or integration removed run_id=%s",
+            run_id,
+        )
+        await session.execute(
+            sa.text("DELETE FROM quote_set WHERE id = :id"),
+            {"id": str(quote_set_id)},
+        )
+        await session.flush()
+        return
+
     asset_id_map = await _get_asset_id_map(session, token_addresses)
 
     for address, price_usd in prices.items():

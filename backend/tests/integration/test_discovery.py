@@ -12,13 +12,18 @@ Covers:
   - Restart checkpoint: interrupted discovery resumes from checkpoint.
 """
 
+import uuid
+
 import pytest
+import sqlalchemy as sa
 from audr.portfolio.discovery import (
     DiscoveryResult,
     discover_tokens,
     get_discovery_checkpoint,
+    persist_discovery_candidates,
     save_discovery_checkpoint,
 )
+from audr.portfolio.balances import get_holdings, record_balance
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.jobs.store import (
@@ -93,3 +98,153 @@ async def test_checkpoint_is_none_for_fresh_run(db_session: AsyncSession) -> Non
 
     restored = await get_discovery_checkpoint(db_session, run_id=run_id)
     assert restored is None
+
+
+# ---------------------------------------------------------------------------
+# Persistence tests (AUD-270)
+# ---------------------------------------------------------------------------
+
+
+async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
+    wallet_id = uuid.uuid4()
+    await session.execute(
+        sa.text(
+            "INSERT INTO wallet (id, address, label, status) "
+            "VALUES (:id, :addr, '', 'active')"
+        ),
+        {"id": str(wallet_id), "addr": address.lower()},
+    )
+    await session.flush()
+    return wallet_id
+
+
+@pytest.mark.integration
+async def test_persist_creates_asset_and_monitored_pair(
+    db_session: AsyncSession,
+) -> None:
+    """persist_discovery_candidates creates asset + monitored_pair rows."""
+    wallet_addr = "0x" + "e" * 40
+    token_addr = "0x" + "f" * 40
+    await _insert_wallet(db_session, wallet_addr)
+
+    from audr.portfolio.discovery import DiscoveryCandidate
+
+    candidates = [
+        DiscoveryCandidate(
+            token_address=token_addr,
+            source="manual",
+            symbol="TEST",
+            name="Test Token",
+            decimals=18,
+        )
+    ]
+    new_pairs = await persist_discovery_candidates(
+        db_session,
+        wallet_address=wallet_addr,
+        candidates=candidates,
+    )
+
+    assert new_pairs == 1
+
+    # asset row exists
+    asset_row = (
+        await db_session.execute(
+            sa.text("SELECT id FROM asset WHERE token_address = :addr"),
+            {"addr": token_addr.lower()},
+        )
+    ).first()
+    assert asset_row is not None
+
+    # monitored_pair row exists
+    pair_row = (
+        await db_session.execute(
+            sa.text(
+                "SELECT mp.id FROM monitored_pair mp "
+                "JOIN wallet w ON w.id = mp.wallet_id "
+                "JOIN asset a ON a.id = mp.asset_id "
+                "WHERE w.address = :waddr AND a.token_address = :taddr"
+            ),
+            {"waddr": wallet_addr.lower(), "taddr": token_addr.lower()},
+        )
+    ).first()
+    assert pair_row is not None
+
+
+@pytest.mark.integration
+async def test_persist_is_idempotent(db_session: AsyncSession) -> None:
+    """Calling persist twice does not duplicate rows."""
+    wallet_addr = "0x1" + "1" * 39
+    token_addr = "0x2" + "2" * 39
+    await _insert_wallet(db_session, wallet_addr)
+
+    from audr.portfolio.discovery import DiscoveryCandidate
+
+    candidates = [
+        DiscoveryCandidate(token_address=token_addr, source="manual")
+    ]
+    first = await persist_discovery_candidates(
+        db_session, wallet_address=wallet_addr, candidates=candidates
+    )
+    second = await persist_discovery_candidates(
+        db_session, wallet_address=wallet_addr, candidates=candidates
+    )
+
+    assert first == 1
+    assert second == 0  # already existed — no new row
+
+    count = (
+        await db_session.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM monitored_pair mp "
+                "JOIN wallet w ON w.id = mp.wallet_id "
+                "JOIN asset a ON a.id = mp.asset_id "
+                "WHERE w.address = :waddr AND a.token_address = :taddr"
+            ),
+            {"waddr": wallet_addr.lower(), "taddr": token_addr.lower()},
+        )
+    ).scalar()
+    assert count == 1
+
+
+@pytest.mark.integration
+async def test_discover_persist_scan_shows_holdings(
+    db_session: AsyncSession,
+) -> None:
+    """End-to-end: discover → persist → record_balance → get_holdings returns token."""
+    wallet_addr = "0x3" + "3" * 39
+    token_addr = "0x4" + "4" * 39
+    await _insert_wallet(db_session, wallet_addr)
+
+    # Discover manually — no catalog needed
+    result = await discover_tokens(
+        db_session,
+        wallet_address=wallet_addr,
+        use_catalog=False,
+        manual_addresses=[token_addr],
+    )
+    assert any(c.token_address.lower() == token_addr.lower() for c in result.candidates)
+
+    # Persist candidates → creates asset + monitored_pair
+    new_pairs = await persist_discovery_candidates(
+        db_session,
+        wallet_address=wallet_addr,
+        candidates=result.candidates,
+    )
+    assert new_pairs == 1
+
+    # Simulate a balance scan result
+    await record_balance(
+        db_session,
+        wallet_address=wallet_addr,
+        token_address=token_addr,
+        raw_amount=500_000_000_000_000_000,
+        block_number=1_000_000,
+    )
+
+    # Holdings should now include the token
+    holdings = await get_holdings(db_session, wallet_address=wallet_addr)
+    match = next(
+        (h for h in holdings if h.token_address.lower() == token_addr.lower()), None
+    )
+    assert match is not None
+    assert match.raw_amount == 500_000_000_000_000_000

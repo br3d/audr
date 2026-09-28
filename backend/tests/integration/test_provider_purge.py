@@ -26,8 +26,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import respx
+
 from audr.auth.service import AuthenticationError
-from audr.jobs.store import JobKind, claim_job
+from audr.jobs.quotes import handle_quote_refresh
+from audr.jobs.store import JobKind, JobRunStatus, claim_job
 from audr.operations.purge import execute_purge, preview_purge
 from audr.settings.integrations import get_integration
 
@@ -388,3 +391,285 @@ async def test_purge_preview_coingecko_shows_correct_quote_count(
 
     result = await preview_purge(db_session, kind="coingecko")
     assert result["quote_observation_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Helpers: valuation data
+# ---------------------------------------------------------------------------
+
+
+async def _insert_valuation_snapshot(
+    session: AsyncSession,
+    quality: str = "complete",
+) -> uuid.UUID:
+    snap_id = uuid.uuid4()
+    await session.execute(
+        text(
+            "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)"
+            " VALUES (:id, now(), :quality, now())"
+        ),
+        {"id": str(snap_id), "quality": quality},
+    )
+    return snap_id
+
+
+async def _insert_valuation_line(
+    session: AsyncSession,
+    *,
+    snapshot_id: uuid.UUID,
+    wallet_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    price_usd: Decimal | None = Decimal("1.0"),
+) -> uuid.UUID:
+    line_id = uuid.uuid4()
+    value_usd = price_usd  # simplified 1-unit holding
+    await session.execute(
+        text(
+            "INSERT INTO valuation_line"
+            " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,"
+            "  price_usd, value_usd)"
+            " VALUES (:id, :snap, :wallet, :asset, 1000000000000000000, 100,"
+            "         :price, :value)"
+        ),
+        {
+            "id": str(line_id),
+            "snap": str(snapshot_id),
+            "wallet": str(wallet_id),
+            "asset": str(asset_id),
+            "price": str(price_usd) if price_usd is not None else None,
+            "value": str(value_usd) if value_usd is not None else None,
+        },
+    )
+    return line_id
+
+
+# ---------------------------------------------------------------------------
+# Tests: provider-scoped valuation counts
+# ---------------------------------------------------------------------------
+
+
+async def test_purge_preview_rpc_valuation_count_is_zero(
+    db_session: AsyncSession,
+) -> None:
+    """preview_purge for rpc always returns valuation_line_count == 0."""
+    wallet_id = await _insert_wallet(db_session)
+    asset_id = await _insert_asset(db_session)
+    snap_id = await _insert_valuation_snapshot(db_session)
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        price_usd=Decimal("100.0"),
+    )
+    await db_session.flush()
+
+    result = await preview_purge(db_session, kind="rpc")
+    assert result["valuation_line_count"] == 0
+    assert result["quote_set_count"] == 0
+
+
+async def test_purge_preview_coingecko_valuation_count_only_priced(
+    db_session: AsyncSession,
+) -> None:
+    """preview_purge for coingecko counts only valuation_line rows with price_usd set."""
+    wallet_id = await _insert_wallet(db_session)
+    asset1 = await _insert_asset(db_session, symbol="PRICED1")
+    asset2 = await _insert_asset(db_session, symbol="PRICED2")
+    asset3 = await _insert_asset(db_session, symbol="STALE")
+
+    snap_id = await _insert_valuation_snapshot(db_session, quality="partial")
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset1,
+        price_usd=Decimal("100.0"),
+    )
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset2,
+        price_usd=Decimal("200.0"),
+    )
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset3,
+        price_usd=None,  # stale / unpriced
+    )
+    await db_session.flush()
+
+    result = await preview_purge(db_session, kind="coingecko")
+    # Only the 2 priced lines should be counted, not the stale one.
+    assert result["valuation_line_count"] == 2
+
+
+async def test_purge_preview_coingecko_quote_set_count_accurate(
+    db_session: AsyncSession,
+) -> None:
+    """preview_purge for coingecko reports the actual number of quote_set rows."""
+    asset_id = await _insert_asset(db_session)
+    for _ in range(3):
+        await _insert_coingecko_quote(db_session, asset_id=asset_id)
+    await db_session.flush()
+
+    result = await preview_purge(db_session, kind="coingecko")
+    # quote_set_count must reflect actual rows, not just 0 or 1.
+    assert result["quote_set_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: valuation data deletion
+# ---------------------------------------------------------------------------
+
+
+async def test_purge_deletes_priced_valuation_lines(
+    db_session: AsyncSession,
+    owner_password: str,
+) -> None:
+    """execute_purge for coingecko deletes valuation_line rows that have price_usd set."""
+    wallet_id = await _insert_wallet(db_session)
+    asset_id = await _insert_asset(db_session)
+    snap_id = await _insert_valuation_snapshot(db_session)
+    line_id = await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        price_usd=Decimal("50.0"),
+    )
+    await db_session.flush()
+
+    await execute_purge(db_session, kind="coingecko", password=owner_password)
+
+    row = (
+        await db_session.execute(
+            text("SELECT id FROM valuation_line WHERE id = :id"), {"id": str(line_id)}
+        )
+    ).first()
+    assert row is None, "priced valuation_line must be deleted by coingecko purge"
+
+
+async def test_purge_preserves_unpriced_valuation_lines(
+    db_session: AsyncSession,
+    owner_password: str,
+) -> None:
+    """execute_purge for coingecko does NOT delete valuation_line rows with price_usd IS NULL."""
+    wallet_id = await _insert_wallet(db_session)
+    asset_id = await _insert_asset(db_session)
+    snap_id = await _insert_valuation_snapshot(db_session, quality="stale")
+    line_id = await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        price_usd=None,
+    )
+    await db_session.flush()
+
+    await execute_purge(db_session, kind="coingecko", password=owner_password)
+
+    row = (
+        await db_session.execute(
+            text("SELECT id FROM valuation_line WHERE id = :id"), {"id": str(line_id)}
+        )
+    ).first()
+    assert row is not None, "unpriced valuation_line must NOT be deleted by coingecko purge"
+
+
+# ---------------------------------------------------------------------------
+# Tests: resurrection race (fencing)
+# ---------------------------------------------------------------------------
+
+
+async def test_quote_refresh_fenced_on_cancelled_run(
+    db_session: AsyncSession,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A quote_refresh run whose job_run is cancelled before commit must not persist data.
+
+    This exercises the fencing check added to handle_quote_refresh: after the
+    external API call returns, the handler re-reads the job_run status.  If the
+    purge already cancelled it, no quote_set should be committed.
+
+    get_coingecko_api_key is patched to return a fake key so the test does not
+    depend on the key_state / encryption setup of the shared test database.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    # Use a unique wallet address to avoid collisions with the default fixtures.
+    unique_addr = "0xfeed" + "0" * 36
+    wallet_id: uuid.UUID
+    asset_id: uuid.UUID
+    run_id = uuid.uuid4()
+
+    async with db_session_factory() as s:
+        async with s.begin():
+            wallet_id = await _insert_wallet(s, unique_addr)
+            asset_id = await _insert_asset(s, token_address="0x" + "c" * 40, symbol="FENCE")
+            await _insert_balance(s, wallet_id=wallet_id, asset_id=asset_id)
+
+    async with db_session_factory() as s:
+        async with s.begin():
+            await s.execute(
+                text(
+                    "INSERT INTO job_run (id, kind, status, max_retries)"
+                    " VALUES (:id, 'quote_refresh', 'cancelled', 3)"
+                ),
+                {"id": str(run_id)},
+            )
+
+    try:
+        # Count quote_set rows before the call so we can assert no net addition.
+        before_count = (
+            await db_session.execute(
+                text("SELECT COUNT(*) FROM quote_set WHERE provider = 'coingecko'")
+            )
+        ).scalar()
+
+        # Patch get_coingecko_api_key so the handler proceeds without needing real
+        # encryption, and mock the HTTP call so it reaches the fencing check.
+        with (
+            patch(
+                "audr.jobs.quotes.get_coingecko_api_key",
+                new=AsyncMock(return_value="fake-key-for-fence-test"),
+            ),
+        ):
+            with respx.mock(assert_all_called=False) as mock_router:
+                # Mock all CoinGecko endpoints (simple/price and token_price/*).
+                mock_router.get(url__regex=r"coingecko").mock(
+                    return_value=httpx.Response(200, json={})
+                )
+                await handle_quote_refresh(db_session, run_id)
+
+        after_count = (
+            await db_session.execute(
+                text("SELECT COUNT(*) FROM quote_set WHERE provider = 'coingecko'")
+            )
+        ).scalar()
+
+        assert after_count == before_count, (
+            "fenced quote_refresh must not leave any new quote_set rows"
+        )
+    finally:
+        # Always clean up committed rows, even if the assertion fails.
+        async with db_session_factory() as s:
+            async with s.begin():
+                await s.execute(
+                    text("DELETE FROM balance_observation WHERE wallet_id = :w"),
+                    {"w": str(wallet_id)},
+                )
+                await s.execute(
+                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
+                )
+                await s.execute(
+                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
+                )
+                await s.execute(
+                    text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
+                )
