@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import text
@@ -118,20 +118,22 @@ async def test_no_alembic_version_returns_unknown(db_session: AsyncSession) -> N
 
 
 async def test_reset_password_revokes_sessions_not_key(
-    db_session: AsyncSession,
+    db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """reset_password revokes sessions and changes the password but leaves key_state intact."""
-    result = await reset_password(db_session, new_password="new-valid-password-xyz")
+    """reset_password commits, revokes sessions, and leaves key_state intact."""
+    async with db_session_factory() as session:
+        result = await reset_password(session, new_password="new-valid-password-xyz")
 
     assert result["password_changed"] is True
     assert result["sessions_revoked"] >= 0
 
     # key_state row must still be present — reset_password must never touch it.
-    key_row = await db_session.execute(
-        text("SELECT COUNT(*) FROM key_state WHERE name = 'master_key'")
-    )
-    key_count: int = int(key_row.scalar() or 0)
-    assert key_count == 1, "key_state must survive a password reset"
+    async with db_session_factory() as verify:
+        key_row = await verify.execute(
+            text("SELECT COUNT(*) FROM key_state WHERE name = 'master_key'")
+        )
+        key_count: int = int(key_row.scalar() or 0)
+        assert key_count == 1, "key_state must survive a password reset"
 
 
 async def test_reset_password_too_short_raises(db_session: AsyncSession) -> None:
@@ -148,3 +150,29 @@ async def test_reset_password_no_owner_raises(db_session: AsyncSession) -> None:
 
     with pytest.raises(ResetPasswordError, match="no owner found"):
         await reset_password(db_session, new_password="new-valid-password-xyz")
+
+
+# ---------------------------------------------------------------------------
+# Tests: _get_head_revision edge cases (AUD-277)
+# ---------------------------------------------------------------------------
+
+
+def test_get_head_revision_multiple_heads_raises() -> None:
+    """_get_head_revision raises RuntimeError when the migration tree has diverged (>1 head)."""
+    mock_script = MagicMock()
+    mock_script.get_heads.return_value = ["abc1234", "def5678"]
+
+    with patch("alembic.script.ScriptDirectory.from_config", return_value=mock_script):
+        with pytest.raises(RuntimeError, match="multiple alembic heads"):
+            _get_head_revision()
+
+
+def test_get_head_revision_no_heads_returns_none() -> None:
+    """_get_head_revision returns None when no migration scripts exist."""
+    mock_script = MagicMock()
+    mock_script.get_heads.return_value = []
+
+    with patch("alembic.script.ScriptDirectory.from_config", return_value=mock_script):
+        result = _get_head_revision()
+
+    assert result is None

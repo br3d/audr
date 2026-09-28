@@ -15,8 +15,11 @@ def _get_head_revision() -> str | None:
     None if alembic is unavailable or no migrations exist.  Raises if there
     are multiple heads (branch divergence requires manual resolution).
     """
-    from alembic.config import Config  # type: ignore[import-untyped]
-    from alembic.script import ScriptDirectory  # type: ignore[import-untyped]
+    try:
+        from alembic.config import Config  # type: ignore[import-untyped]
+        from alembic.script import ScriptDirectory  # type: ignore[import-untyped]
+    except ImportError:  # pragma: no cover
+        return None
 
     here = Path(__file__).resolve()
     for parent in here.parents:
