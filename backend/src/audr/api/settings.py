@@ -14,9 +14,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.auth.dependencies import require_session
+from audr.auth.service import AuthenticationError
 from audr.db import get_db
-from audr.operations.exports import export_current_portfolio, export_full_history, render_portfolio_csv
+from audr.operations.exports import export_current_portfolio, export_full_history, render_history_csv, render_portfolio_csv
 from audr.operations.migrations import check_migration_readiness
+from audr.operations.purge import execute_purge, preview_purge
 from audr.settings.schedules import (
     RevisionConflictError,
     get_schedule,
@@ -377,23 +379,17 @@ async def get_status(
 
 
 # ---------------------------------------------------------------------------
-# Data export route — POST /api/v1/data/export
+# Export routes — GET /api/v1/exports/portfolio  GET /api/v1/exports/history
 # ---------------------------------------------------------------------------
 
 
-@router.post("/data/export")
-async def export_data(
+@router.get("/exports/portfolio")
+async def export_portfolio(
     _session: Annotated[Any, Depends(require_session)],
     db: AsyncSession = Depends(get_db),
     format: str = Query(default="json", pattern="^(json|csv)$"),
-    scope: str = Query(default="current", pattern="^(current|history)$"),
 ) -> StreamingResponse:
-    """Stream portfolio data as JSON or CSV.
-
-    Query params:
-      - format: "json" (default) or "csv"
-      - scope: "current" (default, current portfolio) or "history" (all snapshots)
-    """
+    """Stream current portfolio as JSON or CSV."""
     import json as _json
 
     if format == "csv":
@@ -404,14 +400,95 @@ async def export_data(
             headers={"Content-Disposition": 'attachment; filename="portfolio.csv"'},
         )
 
-    if scope == "history":
-        data = await export_full_history(db)
-    else:
-        data = await export_current_portfolio(db)
-
+    data = await export_current_portfolio(db)
     payload = _json.dumps(data, default=str)
     return StreamingResponse(
         iter([payload]),
         media_type="application/json",
         headers={"Content-Disposition": 'attachment; filename="portfolio.json"'},
     )
+
+
+@router.get("/exports/history")
+async def export_history(
+    _session: Annotated[Any, Depends(require_session)],
+    db: AsyncSession = Depends(get_db),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    from_: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+) -> StreamingResponse:
+    """Stream full history as JSON or CSV."""
+    import json as _json
+
+    if format == "csv":
+        content = await render_history_csv(db)
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="history.csv"'},
+        )
+
+    data = await export_full_history(db)
+    payload = _json.dumps(data, default=str)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="history.json"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Purge routes — GET /api/v1/data/provider-purge-preview
+#                POST /api/v1/data/provider-purge
+# ---------------------------------------------------------------------------
+
+
+class PurgePreviewResponse(BaseModel):
+    provider: str
+    quote_observation_count: int
+    quote_set_count: int
+    affected_valuation_count: int
+
+
+class PurgeInput(BaseModel):
+    provider: str
+    confirm: bool
+    current_password: str
+
+
+class PurgeResult(BaseModel):
+    run_id: str
+    coalesced: bool
+
+
+@router.get("/data/provider-purge-preview", response_model=PurgePreviewResponse)
+async def get_purge_preview(
+    _session: Annotated[Any, Depends(require_session)],
+    db: AsyncSession = Depends(get_db),
+    provider: str = Query(...),
+) -> PurgePreviewResponse:
+    """Return counts of what WOULD be deleted by a purge without modifying data."""
+    raw = await preview_purge(db, kind=provider)
+    return PurgePreviewResponse(
+        provider=provider,
+        quote_observation_count=raw["quote_observation_count"],
+        quote_set_count=raw["integration_count"],
+        affected_valuation_count=raw["valuation_line_count"],
+    )
+
+
+@router.post("/data/provider-purge", response_model=PurgeResult)
+async def post_provider_purge(
+    body: PurgeInput,
+    _session: Annotated[Any, Depends(require_session)],
+    db: AsyncSession = Depends(get_db),
+) -> PurgeResult:
+    """Execute a password-protected provider-data purge."""
+    if not body.confirm:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="confirm must be true")
+    try:
+        await execute_purge(db, kind=body.provider, password=body.current_password)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    await db.commit()
+    return PurgeResult(run_id=str(uuid.uuid4()), coalesced=False)

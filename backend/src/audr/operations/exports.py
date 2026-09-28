@@ -237,3 +237,40 @@ async def render_portfolio_csv(session: AsyncSession) -> str:
         )
 
     return buf.getvalue()
+
+
+async def render_history_csv(session: AsyncSession) -> str:
+    """Render the full valuation history as a CSV string.
+
+    Format::
+
+        # schema_version: 1
+        snapshot_id,snapshotted_at,quality,wallet_address,asset_symbol,asset_name,raw_amount,price_usd,decimals
+    """
+    history = await export_full_history(session)
+
+    buf = io.StringIO()
+    buf.write("# schema_version: 1\n")
+
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(
+        ["snapshot_id", "snapshotted_at", "quality", "wallet_address", "asset_symbol", "asset_name", "raw_amount", "price_usd", "decimals"]
+    )
+
+    for snapshot in history["snapshots"]:
+        for line in snapshot["lines"]:
+            writer.writerow(
+                [
+                    snapshot["snapshot_id"],
+                    snapshot["snapshotted_at"],
+                    snapshot["quality"],
+                    line["wallet_address"],
+                    line["asset_symbol"],
+                    line["asset_name"],
+                    line["raw_amount"] if line["raw_amount"] is not None else "",
+                    line["price_usd"] if line["price_usd"] is not None else "",
+                    line["decimals"],
+                ]
+            )
+
+    return buf.getvalue()
