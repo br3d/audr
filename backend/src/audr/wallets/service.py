@@ -56,6 +56,7 @@ async def add_wallet(
     except IntegrityError as exc:
         await session.rollback()
         raise WalletAlreadyExistsError(normalised) from exc
+    await session.commit()
     return wallet
 
 
@@ -70,6 +71,7 @@ async def set_label(
     wallet.label = label
     wallet.updated_at = datetime.now(tz=UTC)
     await session.flush()
+    await session.commit()
     return wallet
 
 
@@ -83,6 +85,7 @@ async def stop_wallet(
     wallet.status = "stopped"
     wallet.updated_at = datetime.now(tz=UTC)
     await session.flush()
+    await session.commit()
     return wallet
 
 
@@ -96,6 +99,7 @@ async def reactivate_wallet(
     wallet.status = "active"
     wallet.updated_at = datetime.now(tz=UTC)
     await session.flush()
+    await session.commit()
     return wallet
 
 

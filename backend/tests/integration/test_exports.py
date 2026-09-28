@@ -324,8 +324,8 @@ async def test_export_unknown_not_zero(db_session: AsyncSession) -> None:
     assert holding is not None, (
         f"Expected an entry for wallet {wallet_addr!r} in the portfolio export"
     )
-    assert holding["balance"] is None, (
-        "balance should be null (None), not 0, when no observation exists"
+    assert holding["raw_amount"] is None, (
+        "raw_amount should be null (None), not 0, when no observation exists"
     )
 
 

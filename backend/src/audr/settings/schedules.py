@@ -196,7 +196,7 @@ async def is_due(session: AsyncSession, *, kind: str) -> bool:
     if last_run_at is None:
         return True
 
-    now = datetime.now(_UTC)
+    now = datetime.now(UTC)
     elapsed_s = int((now - last_run_at).total_seconds())
     return elapsed_s >= freshness_s
 
@@ -226,7 +226,7 @@ async def project_usage(
     budget: int | None = row["budget_calls_per_day"]
 
     # Count fires in a 24-hour window starting from midnight UTC today.
-    today_midnight = datetime.now(_UTC).replace(
+    today_midnight = datetime.now(UTC).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     window_end = today_midnight + timedelta(days=1)
