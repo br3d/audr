@@ -6,13 +6,14 @@
 #
 # Usage:
 #   ./scripts/seed_dev.sh [BASE_URL]
-#   BASE_URL defaults to http://localhost:8080
+#   BASE_URL defaults to http://localhost
+#   (the app is served — SPA + /api + /health — by nginx on port 80)
 #
 # The password seeded is the canonical test password defined in
 # backend/tests/fixtures/seed.py (TEST_PASSWORD = "Rand0mP@ssw0rd").
 set -euo pipefail
 
-BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost:8080}}"
+BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost}}"
 API="${BASE_URL}/api/v1"
 PASSWORD="Rand0mP@ssw0rd"
 BUTERIN_ADDRESS="0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
