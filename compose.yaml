@@ -1,0 +1,117 @@
+name: audr
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: audr
+      POSTGRES_USER: audr
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audr -d audr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - internal
+
+  init:
+    image: 192.168.1.90:8085/audr-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["python", "-m", "audr.operations.init_key"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: on-failure
+
+  migrate:
+    image: 192.168.1.90:8085/audr-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    restart: on-failure
+
+  api:
+    image: 192.168.1.90:8085/audr-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - internal
+
+  web:
+    image: 192.168.1.90:8085/audr-frontend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-server
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
+  worker:
+    image: 192.168.1.90:8085/audr-backend:latest
+    restart: unless-stopped
+    command: ["python", "-m", "audr.jobs.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+volumes:
+  db_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+
+networks:
+  internal:
+    driver: bridge

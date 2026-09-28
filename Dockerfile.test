@@ -1,0 +1,19 @@
+# Test runner image: installs all main + dev dependencies.
+# The backend source is bind-mounted at /workspace/backend at runtime.
+FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir uv
+
+WORKDIR /deps
+
+# Install dependencies from lock file into /deps/.venv (not under /workspace/backend)
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --extra dev --no-install-project
+
+WORKDIR /workspace/backend
+
+ENV PATH="/deps/.venv/bin:$PATH"
+ENV PYTHONPATH=/workspace/backend/src:/workspace/backend
+
+CMD ["pytest", "--tb=short", "-q"]

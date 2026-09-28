@@ -1,0 +1,68 @@
+"""Unit tests for environment parsing and startup validation."""
+
+import pytest
+from pydantic import ValidationError
+
+from audr.config import Settings
+
+
+@pytest.mark.unit
+def test_valid_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    settings = Settings()
+    assert settings.database_url == "postgresql+psycopg://user:pass@localhost/audr"
+    assert settings.secret_key.get_secret_value() == "super-secret-key"
+    assert settings.debug is False
+    assert settings.log_level == "INFO"
+
+
+@pytest.mark.unit
+def test_missing_database_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+    errors = exc_info.value.errors()
+    fields = {e["loc"][0] for e in errors}
+    assert "database_url" in fields
+
+
+@pytest.mark.unit
+def test_missing_secret_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+    errors = exc_info.value.errors()
+    fields = {e["loc"][0] for e in errors}
+    assert "secret_key" in fields
+
+
+@pytest.mark.unit
+def test_invalid_database_url_scheme_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+    errors = exc_info.value.errors()
+    messages = " ".join(str(e["msg"]) for e in errors)
+    assert "postgresql+psycopg://" in messages
+
+
+@pytest.mark.unit
+def test_debug_defaults_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.delenv("DEBUG", raising=False)
+    settings = Settings()
+    assert settings.debug is False
+
+
+@pytest.mark.unit
+def test_debug_can_be_set_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.setenv("DEBUG", "true")
+    settings = Settings()
+    assert settings.debug is True
