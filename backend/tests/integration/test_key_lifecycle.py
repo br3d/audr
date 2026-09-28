@@ -1,7 +1,7 @@
 """Integration tests for the master-key initialization lifecycle.
 
 These tests exercise audr.operations.init_key against a live PostgreSQL
-database (the key_state table, created by migration 001_foundation).  They
+database (the key_state table, created by the 0001 baseline migration).  They
 also verify the full encrypt→decrypt round-trip through the managed key.
 
 Requires (via fixtures in tests/conftest.py):

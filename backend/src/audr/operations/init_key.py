@@ -10,7 +10,7 @@ Usage::
         await init_key(session)          # idempotent — safe to call on every startup
         key = await get_master_key(session)  # 32-byte AES key
 
-The ``key_state`` table is created by the 001_foundation migration (T017).
+The ``key_state`` table is created by the 0001 baseline migration (originally T017).
 """
 
 from __future__ import annotations
