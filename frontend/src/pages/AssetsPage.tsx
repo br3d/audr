@@ -132,9 +132,10 @@ function AssetRow({
     }
   }
 
-  const rawLabel = asset.decimals === null
-    ? 'Decimals unknown — raw amounts shown'
-    : null
+  const unpricedNote =
+    asset.decimals === null
+      ? 'Unpriced: decimals unknown — raw balance shown, no value computed'
+      : null
 
   return (
     <li>
@@ -143,6 +144,9 @@ function AssetRow({
         {asset.name && <> — {asset.name}</>}
         {' '}
         <span aria-label={`Kind: ${asset.kind}`}>({asset.kind})</span>
+        {asset.excluded && (
+          <> <span aria-label="Excluded from totals">[excluded]</span></>
+        )}
         {asset.contract_address && (
           <>
             {' '}
@@ -151,13 +155,15 @@ function AssetRow({
         )}
       </div>
 
-      {rawLabel !== null && (
-        <p role="note">{rawLabel}</p>
+      {unpricedNote !== null && (
+        <p role="note">{unpricedNote}</p>
       )}
 
       {asset.has_metadata_conflict && (
         <div role="note">
           <strong>Metadata conflict detected.</strong>{' '}
+          On-chain and catalog decimals disagree — quantities and values may be
+          incorrect until resolved.{' '}
           {editingDecimals ? (
             <form onSubmit={handleSaveDecimals} aria-label="Resolve decimals">
               <label htmlFor={`decimals-${asset.id}`}>Correct decimals</label>
@@ -238,6 +244,8 @@ export default function AssetsPage() {
   }
 
   const assets = data?.items ?? []
+  const conflictCount = assets.filter((a) => a.has_metadata_conflict).length
+  const excludedCount = data?.items.filter((a) => a.excluded).length ?? 0
 
   return (
     <main>
@@ -257,8 +265,18 @@ export default function AssetsPage() {
             onChange={(e) => setShowExcluded(e.target.checked)}
           />
           {' Show excluded assets'}
+          {excludedCount > 0 && !showExcluded && (
+            <> ({excludedCount} hidden)</>
+          )}
         </label>
       </div>
+
+      {conflictCount > 0 && (
+        <p role="note">
+          {conflictCount} asset{conflictCount !== 1 ? 's have' : ' has'} a metadata
+          conflict. Resolve to ensure correct quantities and values.
+        </p>
+      )}
 
       {assets.length === 0 ? (
         <p>{showExcluded ? 'No excluded assets.' : 'No assets found.'}</p>

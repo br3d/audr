@@ -333,6 +333,16 @@ export function updateRpc(input: UpdateRpcInput): Promise<IntegrationEntry> {
   return put<IntegrationEntry>('/integrations/rpc', input)
 }
 
+export interface UpdateQuotesInput {
+  revision: string
+  provider: string
+  api_key?: string
+}
+
+export function updateQuotes(input: UpdateQuotesInput): Promise<IntegrationEntry> {
+  return put<IntegrationEntry>('/integrations/quotes', input)
+}
+
 export function validateIntegration(kind: 'rpc' | 'quotes'): Promise<JobRef> {
   return post<JobRef>(`/integrations/${kind}/validate`)
 }

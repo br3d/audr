@@ -24,6 +24,9 @@ vi.mock('../pages/SignInPage', () => ({
     ),
 }))
 
+vi.mock('../pages/DashboardPage', () => ({
+  default: () => React.createElement('div', { 'data-testid': 'dashboard-page' }),
+}))
 vi.mock('../pages/HoldingsPage', () => ({
   default: () => React.createElement('div', { 'data-testid': 'holdings-page' }),
 }))
@@ -146,9 +149,10 @@ describe('App routing and auth guard', () => {
     expect(container.querySelector('[data-testid="setup-page"]')).toBeNull()
   })
 
-  it('shows tab navigation and Holdings page when authenticated', () => {
+  it('shows tab navigation and Dashboard page when authenticated', () => {
     mountWithCache({ setup_required: false }, SESSION_OK)
-    expect(container.querySelector('[data-testid="holdings-page"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
+    expect(container.textContent).toContain('Dashboard')
     expect(container.textContent).toContain('Holdings')
     expect(container.textContent).toContain('Wallets')
     expect(container.textContent).toContain('Assets')
@@ -166,7 +170,7 @@ describe('App routing and auth guard', () => {
       walletsBtn.click()
     })
     expect(container.querySelector('[data-testid="wallets-page"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="holdings-page"]')).toBeNull()
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeNull()
   })
 
   it('transitions from SetupPage to SignInPage after setup completes', async () => {
@@ -206,7 +210,7 @@ describe('App routing and auth guard', () => {
       signInBtn.click()
     })
     await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="holdings-page"]')).toBeTruthy(),
+      () => expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy(),
       { timeout: 1000 },
     )
   })
@@ -222,7 +226,7 @@ describe('App routing and auth guard', () => {
         React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
       )
     })
-    expect(container.querySelector('[data-testid="holdings-page"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
 
     const signOutBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Sign out',

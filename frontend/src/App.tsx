@@ -3,16 +3,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchSetupStatus, fetchSession, logout, AuthError } from './api/client'
 import SetupPage from './pages/SetupPage'
 import SignInPage from './pages/SignInPage'
+import DashboardPage from './pages/DashboardPage'
 import HoldingsPage from './pages/HoldingsPage'
 import WalletsPage from './pages/WalletsPage'
 import AssetsPage from './pages/AssetsPage'
 import ConnectionsPage from './pages/ConnectionsPage'
 
-type MainPage = 'holdings' | 'wallets' | 'assets' | 'connections'
+type MainPage = 'dashboard' | 'holdings' | 'wallets' | 'assets' | 'connections'
 
 export default function App() {
   const queryClient = useQueryClient()
-  const [page, setPage] = useState<MainPage>('holdings')
+  const [page, setPage] = useState<MainPage>('dashboard')
 
   const setupQuery = useQuery({
     queryKey: ['setup-status'],
@@ -68,6 +69,12 @@ export default function App() {
     <div>
       <nav>
         <button
+          onClick={() => setPage('dashboard')}
+          aria-current={page === 'dashboard' ? 'page' : undefined}
+        >
+          Dashboard
+        </button>
+        <button
           onClick={() => setPage('holdings')}
           aria-current={page === 'holdings' ? 'page' : undefined}
         >
@@ -93,6 +100,7 @@ export default function App() {
         </button>
         <button onClick={handleSignOut}>Sign out</button>
       </nav>
+      {page === 'dashboard' && <DashboardPage />}
       {page === 'holdings' && <HoldingsPage />}
       {page === 'wallets' && <WalletsPage />}
       {page === 'assets' && <AssetsPage />}
