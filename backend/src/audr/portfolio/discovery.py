@@ -85,7 +85,7 @@ async def save_discovery_checkpoint(
     """Persist *checkpoint* on the job_run row identified by *run_id*."""
     await session.execute(
         sa.text(
-            "UPDATE job_run SET checkpoint = :checkpoint::jsonb WHERE id = :id"
+            "UPDATE job_run SET checkpoint = CAST(:checkpoint AS jsonb) WHERE id = :id"
         ),
         {"id": str(run_id), "checkpoint": _json_dumps(checkpoint)},
     )
