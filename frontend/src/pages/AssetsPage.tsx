@@ -8,8 +8,15 @@ import {
 } from '../api/client'
 import type { AssetItem } from '../api/client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { IconSearch, IconPlus, IconX } from '../components/Icons'
 
-function AddManualAssetForm({ onAdded }: { onAdded: () => void }) {
+function AddManualAssetForm({
+  onAdded,
+  onClose,
+}: {
+  onAdded: () => void
+  onClose: () => void
+}) {
   const [contractAddress, setContractAddress] = useState('')
   const [decimalsOverride, setDecimalsOverride] = useState('')
   const [symbolOverride, setSymbolOverride] = useState('')
@@ -35,6 +42,7 @@ function AddManualAssetForm({ onAdded }: { onAdded: () => void }) {
       setDecimalsOverride('')
       setSymbolOverride('')
       onAdded()
+      onClose()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
     } finally {
@@ -43,49 +51,75 @@ function AddManualAssetForm({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate aria-label="Add manual contract">
-      <h2>Add manual contract</h2>
-      <div>
-        <label htmlFor="contract-address">Contract address</label>
-        <input
-          id="contract-address"
-          type="text"
-          value={contractAddress}
-          onChange={(e) => setContractAddress(e.target.value)}
-          placeholder="0x…"
-          required
-          disabled={submitting}
-          autoComplete="off"
-        />
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Add manual contract">
+      <div className="modal-box">
+        <div className="modal-header">
+          <div className="modal-title">Add Manual Contract</div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <IconX width={16} height={16} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} noValidate>
+          <div className="form-grid">
+            <div className="form-group">
+              <label htmlFor="contract-address" className="form-label">Contract address</label>
+              <input
+                id="contract-address"
+                type="text"
+                className="input-folio input-mono"
+                value={contractAddress}
+                onChange={(e) => setContractAddress(e.target.value)}
+                placeholder="0x…"
+                required
+                disabled={submitting}
+                autoComplete="off"
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="decimals-override" className="form-label">
+                Decimals override <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                id="decimals-override"
+                type="number"
+                className="input-folio"
+                min={0}
+                max={78}
+                value={decimalsOverride}
+                onChange={(e) => setDecimalsOverride(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="symbol-override" className="form-label">
+                Symbol override <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                id="symbol-override"
+                type="text"
+                className="input-folio"
+                value={symbolOverride}
+                onChange={(e) => setSymbolOverride(e.target.value)}
+                disabled={submitting}
+                autoComplete="off"
+              />
+            </div>
+          </div>
+
+          {error !== null && <p role="alert" className="alert alert-danger mt-12">{error}</p>}
+
+          <div className="modal-footer">
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Adding…' : 'Add contract'}
+            </button>
+          </div>
+        </form>
       </div>
-      <div>
-        <label htmlFor="decimals-override">Decimals override (optional)</label>
-        <input
-          id="decimals-override"
-          type="number"
-          min={0}
-          max={78}
-          value={decimalsOverride}
-          onChange={(e) => setDecimalsOverride(e.target.value)}
-          disabled={submitting}
-        />
-      </div>
-      <div>
-        <label htmlFor="symbol-override">Symbol override (optional)</label>
-        <input
-          id="symbol-override"
-          type="text"
-          value={symbolOverride}
-          onChange={(e) => setSymbolOverride(e.target.value)}
-          disabled={submitting}
-          autoComplete="off"
-        />
-      </div>
-      {error !== null && <p role="alert">{error}</p>}
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Adding…' : 'Add contract'}
-      </button>
-    </form>
+    </div>
   )
 }
 
@@ -132,94 +166,106 @@ function AssetRow({
     }
   }
 
-  const unpricedNote =
-    asset.decimals === null
-      ? 'Unpriced: decimals unknown — raw balance shown, no value computed'
-      : null
-
   return (
-    <li>
-      <div>
-        <strong>{asset.symbol}</strong>
-        {asset.name && <> — {asset.name}</>}
-        {' '}
-        <span aria-label={`Kind: ${asset.kind}`}>({asset.kind})</span>
+    <tr>
+      <td>
+        <span className="fw-600">{asset.symbol}</span>
         {asset.excluded && (
-          <> <span aria-label="Excluded from totals">[excluded]</span></>
+          <span className="badge badge-neutral" style={{ marginLeft: 8 }}>excluded</span>
         )}
-        {asset.contract_address && (
-          <>
-            {' '}
-            <code>{asset.contract_address}</code>
-          </>
+        {asset.has_metadata_conflict && (
+          <span className="badge badge-warning" style={{ marginLeft: 8 }}>conflict</span>
         )}
-      </div>
+      </td>
+      <td className="text-secondary">{asset.name ?? '—'}</td>
+      <td>
+        <span className="badge badge-neutral" aria-label={`Kind: ${asset.kind}`}>
+          {asset.kind}
+        </span>
+      </td>
+      <td className="td-mono">
+        {asset.contract_address ? (
+          <span title={asset.contract_address}>
+            {asset.contract_address.slice(0, 6)}…{asset.contract_address.slice(-4)}
+          </span>
+        ) : (
+          <span className="text-muted">native</span>
+        )}
+      </td>
+      <td>
+        {asset.decimals === null ? (
+          <span className="text-warning" role="note">unknown</span>
+        ) : (
+          <span className="text-secondary">{asset.decimals}</span>
+        )}
+      </td>
+      <td>
+        <div className="row gap-8">
+          <button
+            type="button"
+            className={`btn btn-sm ${asset.excluded ? 'btn-secondary' : 'btn-ghost'}`}
+            onClick={handleToggleExclude}
+            disabled={saving}
+            aria-label={asset.excluded ? `Include ${asset.symbol}` : `Exclude ${asset.symbol}`}
+          >
+            {asset.excluded ? 'Include' : 'Exclude'}
+          </button>
 
-      {unpricedNote !== null && (
-        <p role="note">{unpricedNote}</p>
-      )}
-
-      {asset.has_metadata_conflict && (
-        <div role="note">
-          <strong>Metadata conflict detected.</strong>{' '}
-          On-chain and catalog decimals disagree — quantities and values may be
-          incorrect until resolved.{' '}
-          {editingDecimals ? (
-            <form onSubmit={handleSaveDecimals} aria-label="Resolve decimals">
-              <label htmlFor={`decimals-${asset.id}`}>Correct decimals</label>
-              <input
-                id={`decimals-${asset.id}`}
-                type="number"
-                min={0}
-                max={78}
-                value={decimalsInput}
-                onChange={(e) => setDecimalsInput(e.target.value)}
-                required
-                disabled={saving}
-              />
-              <button type="submit" disabled={saving}>
-                {saving ? 'Saving…' : 'Confirm'}
-              </button>
-              <button type="button" onClick={() => setEditingDecimals(false)} disabled={saving}>
-                Cancel
-              </button>
-            </form>
-          ) : (
+          {asset.has_metadata_conflict && !editingDecimals && (
             <button
               type="button"
+              className="btn btn-sm btn-secondary"
               onClick={() => {
                 setDecimalsInput(String(asset.decimals ?? ''))
                 setEditingDecimals(true)
               }}
               disabled={saving}
             >
-              Resolve decimals
+              Resolve
             </button>
           )}
         </div>
-      )}
 
-      <div>
-        <small>Source: {asset.metadata_source}</small>
-        {' '}
-        <button
-          type="button"
-          onClick={handleToggleExclude}
-          disabled={saving}
-          aria-label={asset.excluded ? `Include ${asset.symbol}` : `Exclude ${asset.symbol}`}
-        >
-          {asset.excluded ? 'Include' : 'Exclude'}
-        </button>
-      </div>
+        {editingDecimals && (
+          <form onSubmit={handleSaveDecimals} aria-label="Resolve decimals" className="row mt-8">
+            <input
+              id={`decimals-${asset.id}`}
+              type="number"
+              min={0}
+              max={78}
+              value={decimalsInput}
+              onChange={(e) => setDecimalsInput(e.target.value)}
+              required
+              disabled={saving}
+              className="input-folio"
+              style={{ width: 80 }}
+              aria-label="Correct decimals"
+            />
+            <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
+              {saving ? 'Saving…' : 'Confirm'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setEditingDecimals(false)}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+          </form>
+        )}
 
-      {error !== null && <p role="alert">{error}</p>}
-    </li>
+        {error !== null && <p role="alert" className="alert alert-danger mt-8">{error}</p>}
+      </td>
+    </tr>
   )
 }
 
 export default function AssetsPage() {
   const queryClient = useQueryClient()
   const [showExcluded, setShowExcluded] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [search, setSearch] = useState('')
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['assets', showExcluded],
@@ -231,12 +277,12 @@ export default function AssetsPage() {
   }
 
   if (isLoading) {
-    return <p>Loading assets…</p>
+    return <p aria-busy="true">Loading assets…</p>
   }
 
   if (error) {
     return (
-      <p role="alert">
+      <p role="alert" className="alert alert-danger">
         Failed to load assets.{' '}
         {error instanceof ApiError ? error.message : 'Please try again.'}
       </p>
@@ -247,46 +293,101 @@ export default function AssetsPage() {
   const conflictCount = assets.filter((a) => a.has_metadata_conflict).length
   const excludedCount = data?.items.filter((a) => a.excluded).length ?? 0
 
+  const filtered = search.trim()
+    ? assets.filter((a) => {
+        const q = search.toLowerCase()
+        return (
+          a.symbol.toLowerCase().includes(q) ||
+          (a.name ?? '').toLowerCase().includes(q) ||
+          (a.contract_address ?? '').toLowerCase().includes(q)
+        )
+      })
+    : assets
+
   return (
-    <main>
-      <h1>Assets</h1>
-      <p>
-        Holdings, contract identities, quantities and exclusions. Catalog
-        metadata describes tokens but is not a safety endorsement.
-      </p>
-
-      <AddManualAssetForm onAdded={invalidate} />
-
-      <div>
-        <label>
-          <input
-            type="checkbox"
-            checked={showExcluded}
-            onChange={(e) => setShowExcluded(e.target.checked)}
-          />
-          {' Show excluded assets'}
-          {excludedCount > 0 && !showExcluded && (
-            <> ({excludedCount} hidden)</>
-          )}
-        </label>
-      </div>
-
+    <div>
       {conflictCount > 0 && (
-        <p role="note">
+        <p role="note" className="alert alert-warning mb-16">
           {conflictCount} asset{conflictCount !== 1 ? 's have' : ' has'} a metadata
           conflict. Resolve to ensure correct quantities and values.
         </p>
       )}
 
+      <div className="toolbar">
+        <div className="search-bar">
+          <IconSearch className="search-icon" />
+          <input
+            type="search"
+            className="search-input"
+            placeholder="Search assets…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Filter assets"
+          />
+        </div>
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            className="checkbox-folio"
+            checked={showExcluded}
+            onChange={(e) => setShowExcluded(e.target.checked)}
+          />
+          <span className="toggle-label">
+            Show excluded
+            {excludedCount > 0 && !showExcluded && (
+              <span className="text-muted"> ({excludedCount} hidden)</span>
+            )}
+          </span>
+        </label>
+
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={() => setShowAddForm(true)}
+          style={{ marginLeft: 'auto' }}
+        >
+          <IconPlus width={14} height={14} />
+          Add contract
+        </button>
+      </div>
+
       {assets.length === 0 ? (
-        <p>{showExcluded ? 'No excluded assets.' : 'No assets found.'}</p>
+        <div className="empty-state">
+          <div className="empty-state-icon">🪙</div>
+          <div className="empty-state-text">No assets found</div>
+          <div className="empty-state-hint">
+            {showExcluded ? 'No excluded assets.' : 'Run a balance scan to discover holdings.'}
+          </div>
+        </div>
       ) : (
-        <ul aria-label="Assets">
-          {assets.map((a) => (
-            <AssetRow key={a.id} asset={a} onChanged={invalidate} />
-          ))}
-        </ul>
+        <div className="table-container">
+          <table className="table-folio" aria-label="Assets">
+            <thead>
+              <tr>
+                <th scope="col">Symbol</th>
+                <th scope="col">Name</th>
+                <th scope="col">Type</th>
+                <th scope="col">Contract</th>
+                <th scope="col">Decimals</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((a) => (
+                <AssetRow key={a.id} asset={a} onChanged={invalidate} />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
-    </main>
+
+      {showAddForm && (
+        <AddManualAssetForm
+          onAdded={invalidate}
+          onClose={() => setShowAddForm(false)}
+        />
+      )}
+    </div>
   )
 }

@@ -8,6 +8,7 @@ import type { PortfolioResponse } from '../api/client'
 
 vi.mock('../api/client', () => ({
   fetchPortfolio: vi.fn(),
+  fetchHistory: vi.fn(),
   ApiError: class ApiError extends Error {
     status = 500
     body = undefined
@@ -18,10 +19,15 @@ vi.mock('../api/client', () => ({
   },
 }))
 
+vi.mock('../components/HistoryChart', () => ({
+  default: () => null,
+}))
+
 import DashboardPage from '../pages/DashboardPage'
-import { fetchPortfolio } from '../api/client'
+import { fetchPortfolio, fetchHistory } from '../api/client'
 
 const mockFetchPortfolio = vi.mocked(fetchPortfolio)
+const mockFetchHistory = vi.mocked(fetchHistory)
 
 function makeQuality(overrides: Partial<PortfolioResponse['quality']> = {}): PortfolioResponse['quality'] {
   return {
@@ -88,9 +94,12 @@ async function unmount(container: HTMLDivElement, root: Root) {
   document.body.removeChild(container)
 }
 
+const EMPTY_HISTORY = { period: '30d' as const, entries: [], next_cursor: null }
+
 describe('DashboardPage', () => {
   beforeEach(() => {
     mockFetchPortfolio.mockResolvedValue(EMPTY_PORTFOLIO)
+    mockFetchHistory.mockResolvedValue(EMPTY_HISTORY)
   })
 
   afterEach(() => {
@@ -98,9 +107,9 @@ describe('DashboardPage', () => {
   })
 
   describe('total display', () => {
-    it('shows "unavailable" note when both total_usd and priced_subtotal_usd are null', async () => {
+    it('shows empty-state note when both total_usd and priced_subtotal_usd are null', async () => {
       const { container, root } = mountWithData(EMPTY_PORTFOLIO)
-      expect(container.textContent).toMatch(/unavailable/i)
+      expect(container.textContent).toMatch(/no priced holdings/i)
       await unmount(container, root)
     })
 
@@ -111,7 +120,7 @@ describe('DashboardPage', () => {
         priced_subtotal_usd: '4567.89',
       })
       expect(container.textContent).toContain('$4,567.89')
-      expect(container.textContent).toContain('Portfolio total')
+      expect(container.textContent).toContain('Portfolio Value')
       expect(container.textContent).not.toContain('incomplete')
       await unmount(container, root)
     })

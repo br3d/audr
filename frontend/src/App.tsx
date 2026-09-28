@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback, clearUnauthorizedCallback } from './api/client'
+import Layout from './components/Layout'
+import type { MainPage } from './components/Layout'
 import SetupPage from './pages/SetupPage'
 import SignInPage from './pages/SignInPage'
 import DashboardPage from './pages/DashboardPage'
@@ -12,17 +14,6 @@ import HistoryPage from './pages/HistoryPage'
 import SchedulesPage from './pages/SchedulesPage'
 import StatusPage from './pages/StatusPage'
 import AccountDataPage from './pages/AccountDataPage'
-
-type MainPage =
-  | 'dashboard'
-  | 'holdings'
-  | 'wallets'
-  | 'assets'
-  | 'connections'
-  | 'history'
-  | 'schedules'
-  | 'status'
-  | 'account'
 
 export default function App() {
   const queryClient = useQueryClient()
@@ -90,64 +81,7 @@ export default function App() {
   }
 
   return (
-    <div>
-      <nav>
-        <button
-          onClick={() => setPage('dashboard')}
-          aria-current={page === 'dashboard' ? 'page' : undefined}
-        >
-          Dashboard
-        </button>
-        <button
-          onClick={() => setPage('holdings')}
-          aria-current={page === 'holdings' ? 'page' : undefined}
-        >
-          Holdings
-        </button>
-        <button
-          onClick={() => setPage('wallets')}
-          aria-current={page === 'wallets' ? 'page' : undefined}
-        >
-          Wallets
-        </button>
-        <button
-          onClick={() => setPage('assets')}
-          aria-current={page === 'assets' ? 'page' : undefined}
-        >
-          Assets
-        </button>
-        <button
-          onClick={() => setPage('connections')}
-          aria-current={page === 'connections' ? 'page' : undefined}
-        >
-          Connections
-        </button>
-        <button
-          onClick={() => setPage('history')}
-          aria-current={page === 'history' ? 'page' : undefined}
-        >
-          History
-        </button>
-        <button
-          onClick={() => setPage('schedules')}
-          aria-current={page === 'schedules' ? 'page' : undefined}
-        >
-          Schedules
-        </button>
-        <button
-          onClick={() => setPage('status')}
-          aria-current={page === 'status' ? 'page' : undefined}
-        >
-          Status
-        </button>
-        <button
-          onClick={() => setPage('account')}
-          aria-current={page === 'account' ? 'page' : undefined}
-        >
-          Account &amp; Data
-        </button>
-        <button onClick={handleSignOut}>Sign out</button>
-      </nav>
+    <Layout page={page} setPage={setPage} onSignOut={handleSignOut}>
       {page === 'dashboard' && <DashboardPage />}
       {page === 'holdings' && <HoldingsPage />}
       {page === 'wallets' && <WalletsPage />}
@@ -157,6 +91,6 @@ export default function App() {
       {page === 'schedules' && <SchedulesPage />}
       {page === 'status' && <StatusPage />}
       {page === 'account' && <AccountDataPage />}
-    </div>
+    </Layout>
   )
 }
