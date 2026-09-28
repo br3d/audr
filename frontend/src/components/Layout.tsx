@@ -13,6 +13,7 @@ import {
   IconSun,
   IconMoon,
   IconSignOut,
+  IconChat,
 } from './Icons'
 
 // ---- Theme context ----
@@ -40,6 +41,7 @@ export type MainPage =
   | 'schedules'
   | 'status'
   | 'account'
+  | 'assistant'
 
 // ---- Nav config ----
 
@@ -53,6 +55,7 @@ const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<
   { page: 'status', label: 'Status', Icon: IconActivity },
   { page: 'connections', label: 'Connections', Icon: IconPlug },
   { page: 'account', label: 'Account & Data', Icon: IconSettings },
+  { page: 'assistant', label: 'Assistant', Icon: IconChat },
 ]
 
 const PAGE_TITLES: Record<MainPage, string> = {
@@ -65,6 +68,7 @@ const PAGE_TITLES: Record<MainPage, string> = {
   schedules: 'Schedules',
   status: 'Status',
   account: 'Account & Data',
+  assistant: 'Assistant',
 }
 
 // ---- Layout component ----

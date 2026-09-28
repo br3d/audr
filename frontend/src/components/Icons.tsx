@@ -109,6 +109,20 @@ export function IconSettings(props: IconProps) {
   )
 }
 
+export function IconChat(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path
+        d="M3 4.5A1.5 1.5 0 0 1 4.5 3h11A1.5 1.5 0 0 1 17 4.5v7A1.5 1.5 0 0 1 15.5 13H8l-3.5 3.5V13H4.5A1.5 1.5 0 0 1 3 11.5v-7z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 export function IconSearch(props: IconProps) {
   return (
     <svg {...defaults} {...props}>

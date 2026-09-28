@@ -1269,3 +1269,67 @@ body {
   border-radius: var(--r-sm) !important;
   font-size: 12px !important;
 }
+
+/* ----------------------------------------------------------------
+   Assistant panel
+   ---------------------------------------------------------------- */
+.assistant-panel {
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+  height: calc(100vh - 180px);
+}
+
+.assistant-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.assistant-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 12px;
+}
+
+.assistant-message {
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  max-width: 85%;
+}
+
+.assistant-message-assistant {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  align-self: flex-start;
+}
+
+.assistant-message-user {
+  background: var(--accent-bg);
+  color: var(--text-primary);
+  align-self: flex-end;
+}
+
+.assistant-typing {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.assistant-form {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-form .input-folio {
+  flex: 1;
+}
