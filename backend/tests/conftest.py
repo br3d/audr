@@ -17,6 +17,22 @@ from sqlalchemy.ext.asyncio import (
 
 from tests.fixtures.quotes import CoinGeckoStub, quotes_mock  # noqa: F401
 from tests.fixtures.rpc import EthRpcStub, rpc_mock, rpc_url  # noqa: F401
+from tests.fixtures.seed import (  # noqa: F401
+    AAVE_ADDRESS,
+    BUTERIN_ADDRESS,
+    BUTERIN_LABEL,
+    DAI_ADDRESS,
+    LINK_ADDRESS,
+    SEED_ASSETS,
+    TEST_PASSWORD,
+    UNI_ADDRESS,
+    USDC_ADDRESS,
+    USDT_ADDRESS,
+    WETH_ADDRESS,
+    buterin_wallet,
+    seeded_assets,
+    seeded_client,
+)
 
 
 @pytest.fixture(scope="session")
