@@ -18,6 +18,7 @@ from audr.portfolio.balances import record_balance
 from audr.portfolio.discovery import (
     discover_tokens,
     get_discovery_checkpoint,
+    persist_discovery_candidates,
     save_discovery_checkpoint,
 )
 from audr.providers.rpc_reader import RpcReader
@@ -38,7 +39,7 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
     for wallet in wallets:
         if wallet.status != "active":
             continue
-        checkpoint = await get_discovery_checkpoint(session, wallet_address=wallet.address)
+        checkpoint = await get_discovery_checkpoint(session, run_id=run_id)
         result = await discover_tokens(
             session,
             wallet_address=wallet.address,
@@ -49,14 +50,20 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
         if result.checkpoint is not None:
             await save_discovery_checkpoint(
                 session,
-                wallet_address=wallet.address,
+                run_id=run_id,
                 checkpoint=result.checkpoint,
             )
+        new_pairs = await persist_discovery_candidates(
+            session,
+            wallet_address=wallet.address,
+            candidates=result.candidates,
+        )
         logger.info(
-            "discovery run_id=%s wallet=%s candidates=%d",
+            "discovery run_id=%s wallet=%s candidates=%d new_pairs=%d",
             run_id,
             wallet.address,
             len(result.candidates),
+            new_pairs,
         )
     await session.commit()
 
