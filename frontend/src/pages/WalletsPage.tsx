@@ -9,8 +9,25 @@ import {
 } from '../api/client'
 import type { WalletItem } from '../api/client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { IconPlus, IconX, IconRefresh } from '../components/Icons'
 
-function AddWalletForm({ onAdded }: { onAdded: () => void }) {
+const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
+
+function validateEthAddress(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return 'Wallet address is required.'
+  if (!ETH_ADDRESS_RE.test(trimmed))
+    return 'Enter a valid Ethereum address (0x followed by 40 hex characters).'
+  return null
+}
+
+function AddWalletModal({
+  onAdded,
+  onClose,
+}: {
+  onAdded: () => void
+  onClose: () => void
+}) {
   const [address, setAddress] = useState('')
   const [label, setLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -19,72 +36,112 @@ function AddWalletForm({ onAdded }: { onAdded: () => void }) {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError(null)
-    const trimmed = address.trim()
-    if (!trimmed) {
-      setError('Wallet address is required.')
+    const validationError = validateEthAddress(address)
+    if (validationError) {
+      setError(validationError)
       return
     }
     setSubmitting(true)
     try {
       await addWallet({
-        address: trimmed,
+        address: address.trim(),
         label: label.trim() || undefined,
         chain_id: 1,
       })
-      setAddress('')
-      setLabel('')
       onAdded()
+      onClose()
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message)
-      } else {
-        setError('An unexpected error occurred.')
-      }
+      setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate aria-label="Add tracked address">
-      <div>
-        <label htmlFor="wallet-address">Ethereum address</label>
-        <input
-          id="wallet-address"
-          type="text"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="0x…"
-          required
-          disabled={submitting}
-          autoComplete="off"
-          aria-describedby="wallet-address-hint"
-        />
-        <p id="wallet-address-hint">
-          Any valid public mainnet address. No proof of control is required or
-          verified.
-        </p>
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add tracked address"
+    >
+      <div className="modal-box">
+        <div className="modal-header">
+          <div className="modal-title">Add Tracked Address</div>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <IconX width={16} height={16} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} noValidate>
+          <div className="form-grid">
+            <div className="form-group">
+              <label htmlFor="wallet-address" className="form-label">
+                Ethereum address
+              </label>
+              <input
+                id="wallet-address"
+                type="text"
+                className="input-folio input-mono"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="0x…"
+                required
+                disabled={submitting}
+                autoComplete="off"
+                aria-describedby="wallet-address-hint"
+              />
+              <p id="wallet-address-hint" className="form-hint">
+                Any valid public Ethereum mainnet address (0x + 40 hex characters). No
+                proof of control is required or verified.
+              </p>
+            </div>
+            <div className="form-group">
+              <label htmlFor="wallet-label" className="form-label">
+                Label <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                id="wallet-label"
+                type="text"
+                className="input-folio"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                disabled={submitting}
+                autoComplete="off"
+              />
+            </div>
+          </div>
+
+          {error !== null && (
+            <p role="alert" className="alert alert-danger mt-12">
+              {error}
+            </p>
+          )}
+
+          <div className="modal-footer">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Adding…' : 'Add tracked address'}
+            </button>
+          </div>
+        </form>
       </div>
-      <div>
-        <label htmlFor="wallet-label">Label (optional)</label>
-        <input
-          id="wallet-label"
-          type="text"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          disabled={submitting}
-          autoComplete="off"
-        />
-      </div>
-      {error !== null && <p role="alert">{error}</p>}
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Adding…' : 'Add tracked address'}
-      </button>
-    </form>
+    </div>
   )
 }
 
-function WalletRow({
+function WalletCard({
   wallet,
   onChanged,
 }: {
@@ -139,41 +196,62 @@ function WalletRow({
   }
 
   return (
-    <li>
-      <div>
-        <code>{wallet.address}</code>
-        {' — '}
-        {editing ? (
-          <form onSubmit={handleSaveLabel} aria-label="Edit label">
-            <input
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              disabled={saving}
-              autoComplete="off"
-            />
-            <button type="submit" disabled={saving}>
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button type="button" onClick={() => setEditing(false)} disabled={saving}>
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <>
-            <span>{wallet.label ?? '(no label)'}</span>
-            <button type="button" onClick={() => setEditing(true)} disabled={saving}>
-              Edit label
-            </button>
-          </>
-        )}
+    <li className="wallet-card">
+      <div className="wallet-card-header">
+        <div style={{ flex: 1 }}>
+          {editing ? (
+            <form onSubmit={handleSaveLabel} aria-label="Edit label" className="row">
+              <input
+                type="text"
+                className="input-folio"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                disabled={saving}
+                autoComplete="off"
+                style={{ flex: 1 }}
+              />
+              <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => setEditing(false)}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <div className="row">
+              <span className="wallet-label">{wallet.label ?? '(no label)'}</span>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => setEditing(true)}
+                disabled={saving}
+              >
+                Edit
+              </button>
+            </div>
+          )}
+          <div className="wallet-address mt-4">{wallet.address}</div>
+        </div>
+
+        <div>
+          {wallet.tracking_active ? (
+            <span className="badge badge-ok">Tracking</span>
+          ) : (
+            <span className="badge badge-neutral">Stopped</span>
+          )}
+        </div>
       </div>
-      <div>
-        <span>
-          {wallet.tracking_active ? 'Tracking active' : 'Tracking stopped'}
-        </span>
+
+      <div className="wallet-meta">
+        <span className="muted-text">{coverageText}</span>
         <button
           type="button"
+          className={`btn btn-sm ${wallet.tracking_active ? 'btn-ghost' : 'btn-secondary'}`}
           onClick={handleToggleTracking}
           disabled={saving}
           aria-label={
@@ -184,31 +262,34 @@ function WalletRow({
         >
           {wallet.tracking_active ? 'Stop tracking' : 'Resume tracking'}
         </button>
-        {!wallet.tracking_active && (
-          <p>
-            Stopping tracking removes this address from balance calculations but
-            retains its historical records.
-          </p>
-        )}
       </div>
-      <div>
-        <small>{coverageText}</small>
-      </div>
-      {error !== null && <p role="alert">{error}</p>}
+
+      {!wallet.tracking_active && (
+        <p className="muted-text mt-8">
+          Stopping tracking removes this address from balance calculations but retains its
+          historical records.
+        </p>
+      )}
+
+      {error !== null && (
+        <p role="alert" className="alert alert-danger mt-8">
+          {error}
+        </p>
+      )}
     </li>
   )
 }
 
 export default function WalletsPage() {
   const queryClient = useQueryClient()
+  const [showModal, setShowModal] = useState(false)
+  const [jobError, setJobError] = useState<string | null>(null)
+  const [jobMsg, setJobMsg] = useState<string | null>(null)
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['wallets'],
     queryFn: () => fetchWallets(),
   })
-
-  const [jobError, setJobError] = useState<string | null>(null)
-  const [jobMsg, setJobMsg] = useState<string | null>(null)
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ['wallets'] })
@@ -243,12 +324,12 @@ export default function WalletsPage() {
   }
 
   if (isLoading) {
-    return <p>Loading wallets…</p>
+    return <p aria-busy="true">Loading wallets…</p>
   }
 
   if (error) {
     return (
-      <p role="alert">
+      <p role="alert" className="alert alert-danger">
         Failed to load wallets.{' '}
         {error instanceof ApiError ? error.message : 'Please try again.'}
       </p>
@@ -258,36 +339,62 @@ export default function WalletsPage() {
   const wallets = data?.items ?? []
 
   return (
-    <main>
-      <h1>Wallets</h1>
-      <p>
-        Track any valid public mainnet Ethereum address. Labels describe tracked
-        addresses and do not imply that this application verified ownership or
-        control.
+    <div>
+      <p className="page-subheading">
+        Track any valid public Ethereum mainnet address. Labels are for your reference and
+        do not imply that this application verified ownership or control.
       </p>
 
-      <AddWalletForm onAdded={invalidate} />
-
-      <div>
-        <button type="button" onClick={handleRefresh} aria-label="Refresh balances">
+      <div className="toolbar mb-16">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setShowModal(true)}
+        >
+          <IconPlus width={14} height={14} />
+          Add address
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={handleRefresh}
+          aria-label="Refresh balances"
+        >
+          <IconRefresh width={14} height={14} />
           Refresh balances
         </button>
-        <button type="button" onClick={handleDiscover} aria-label="Discover tokens">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={handleDiscover}
+          aria-label="Discover tokens"
+        >
           Discover tokens
         </button>
-        {jobMsg !== null && <p role="status">{jobMsg}</p>}
-        {jobError !== null && <p role="alert">{jobError}</p>}
+        {jobMsg !== null && <p role="status" className="muted-text">{jobMsg}</p>}
+        {jobError !== null && <p role="alert" className="alert alert-danger">{jobError}</p>}
       </div>
 
       {wallets.length === 0 ? (
-        <p>No tracked addresses. Add a wallet above.</p>
+        <div className="empty-state">
+          <div className="empty-state-icon">👜</div>
+          <div className="empty-state-text">No tracked addresses</div>
+          <div className="empty-state-hint">Add an Ethereum address to get started.</div>
+        </div>
       ) : (
-        <ul aria-label="Tracked addresses">
+        <ul className="wallet-grid" aria-label="Tracked addresses">
           {wallets.map((w) => (
-            <WalletRow key={w.id} wallet={w} onChanged={invalidate} />
+            <WalletCard key={w.id} wallet={w} onChanged={invalidate} />
           ))}
         </ul>
       )}
-    </main>
+
+      {showModal && (
+        <AddWalletModal
+          onAdded={invalidate}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+    </div>
   )
 }

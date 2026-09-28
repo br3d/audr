@@ -5,9 +5,9 @@ import type { HistoryPeriod } from '../api/client'
 import HistoryChart from '../components/HistoryChart'
 
 const RANGES: { value: HistoryPeriod; label: string }[] = [
-  { value: '24h', label: '24 hours' },
-  { value: '7d', label: '7 days' },
-  { value: '30d', label: '30 days' },
+  { value: '24h', label: '24h' },
+  { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' },
   { value: 'all', label: 'All time' },
 ]
 
@@ -25,29 +25,30 @@ export default function HistoryPage() {
   const hasIncomplete = data?.entries.some((p) => p.quality === 'incomplete') ?? false
 
   return (
-    <main>
-      <h1>Portfolio History</h1>
-
-      <fieldset>
-        <legend>Range</legend>
-        {RANGES.map(({ value, label }) => (
-          <label key={value}>
-            <input
-              type="radio"
-              name="history-range"
-              value={value}
-              checked={period === value}
-              onChange={() => setPeriod(value)}
-            />
-            {' '}{label}
-          </label>
-        ))}
-      </fieldset>
+    <div>
+      <div className="toolbar mb-16">
+        <fieldset style={{ border: 'none', padding: 0 }}>
+          <legend className="visually-hidden">Range</legend>
+          <div className="range-tabs">
+            {RANGES.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                className={`range-tab${period === value ? ' active' : ''}`}
+                onClick={() => setPeriod(value)}
+                aria-pressed={period === value}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      </div>
 
       {isLoading && <p aria-busy="true">Loading history…</p>}
 
       {error && (
-        <p role="alert">
+        <p role="alert" className="alert alert-danger">
           Failed to load history.{' '}
           {error instanceof ApiError ? error.message : 'Please try again.'}
         </p>
@@ -55,35 +56,36 @@ export default function HistoryPage() {
 
       {data && (
         <>
-          {hasGaps && (
-            <p role="note">
-              This range contains gaps — periods where balance or price data was not
-              recorded. The chart shows gap markers; values on either side of a gap are
-              independent observations.
-            </p>
+          {(hasGaps || hasStale || hasIncomplete) && (
+            <div className="notice-list mb-16">
+              {hasGaps && (
+                <p role="note" className="notice-item">
+                  This range contains gaps — periods where balance or price data was not
+                  recorded. The chart shows gap markers.
+                </p>
+              )}
+              {hasStale && (
+                <p role="note" className="notice-item">
+                  Some points are marked <strong>stale</strong> — the underlying data had
+                  not been refreshed within the normal interval.
+                </p>
+              )}
+              {hasIncomplete && (
+                <p role="note" className="notice-item">
+                  Some points are marked <strong>incomplete</strong> — not all holdings
+                  had usable balances and prices at that snapshot.
+                </p>
+              )}
+            </div>
           )}
 
-          {hasStale && (
-            <p role="note">
-              Some points in this range are marked <strong>stale</strong> — the underlying
-              balance or price data had not been refreshed within the normal interval when
-              that snapshot was recorded.
-            </p>
-          )}
-
-          {hasIncomplete && (
-            <p role="note">
-              Some points in this range are marked <strong>incomplete</strong> — not all
-              holdings had usable balances and prices at the time of the snapshot. Totals
-              at those points reflect only the holdings that could be valued.
-            </p>
-          )}
-
-          <section aria-label="History chart">
-            <HistoryChart points={data.entries} />
-          </section>
+          <div className="card">
+            <section aria-label="History chart">
+              <HistoryChart points={data.entries} />
+            </section>
+          </div>
         </>
       )}
-    </main>
+    </div>
   )
 }

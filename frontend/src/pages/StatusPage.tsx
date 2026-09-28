@@ -15,15 +15,33 @@ function formatTimestamp(ts: string | null): string {
   })
 }
 
-function jobStatusLabel(status: JobRun['status']): string {
+function jobStatusBadge(status: JobRun['status']) {
   switch (status) {
-    case 'pending': return 'Pending'
-    case 'running': return 'Running'
-    case 'completed': return 'Completed'
-    case 'failed': return 'Failed'
-    case 'cancelled': return 'Cancelled'
-    default: return status
+    case 'pending':
+      return <span className="badge badge-neutral">Pending</span>
+    case 'running':
+      return <span className="badge badge-info">Running</span>
+    case 'completed':
+      return <span className="badge badge-ok">Completed</span>
+    case 'failed':
+      return <span className="badge badge-error">Failed</span>
+    case 'cancelled':
+      return <span className="badge badge-neutral">Cancelled</span>
+    default:
+      return <span className="badge badge-neutral">{status}</span>
   }
+}
+
+function dbStatusDot(status: string) {
+  if (status === 'ok') return 'status-dot-ok'
+  if (status === 'degraded') return 'status-dot-warn'
+  return 'status-dot-err'
+}
+
+function workerStatusDot(status: string) {
+  if (status === 'running') return 'status-dot-ok'
+  if (status === 'stopped') return 'status-dot-err'
+  return 'status-dot-muted'
 }
 
 function JobRow({ job, onCancelled }: { job: JobRun; onCancelled: () => void }) {
@@ -37,9 +55,7 @@ function JobRow({ job, onCancelled }: { job: JobRun; onCancelled: () => void }) 
       await cancelJob(job.id)
       onCancelled()
     } catch (err) {
-      setCancelError(
-        err instanceof ApiError ? err.message : 'Failed to cancel job.',
-      )
+      setCancelError(err instanceof ApiError ? err.message : 'Failed to cancel job.')
     } finally {
       setCancelling(false)
     }
@@ -48,81 +64,130 @@ function JobRow({ job, onCancelled }: { job: JobRun; onCancelled: () => void }) 
   const isActive = job.status === 'pending' || job.status === 'running'
 
   return (
-    <li>
-      <dl>
-        <dt>Kind</dt>
-        <dd>{job.kind}</dd>
-        <dt>Status</dt>
-        <dd
-          aria-label={`Job status: ${jobStatusLabel(job.status)}`}
-          data-status={job.status}
-        >
-          {jobStatusLabel(job.status)}
-        </dd>
-        <dt>Last attempt</dt>
-        <dd>{formatTimestamp(job.started_at)}</dd>
-        <dt>Last success</dt>
-        <dd>{job.status === 'completed' ? formatTimestamp(job.finished_at) : '—'}</dd>
-        <dt>Finished</dt>
-        <dd>{formatTimestamp(job.finished_at)}</dd>
-        <dt>Attempted / Succeeded / Failed</dt>
-        <dd>
-          {job.attempted} / {job.succeeded} / {job.failed}
-        </dd>
+    <tr>
+      <td className="fw-500">{job.kind}</td>
+      <td>
+        <span aria-label={`Job status: ${job.status}`} data-status={job.status}>
+          {jobStatusBadge(job.status)}
+        </span>
+      </td>
+      <td className="td-muted">{formatTimestamp(job.started_at)}</td>
+      <td className="td-muted">{formatTimestamp(job.finished_at)}</td>
+      <td className="td-muted">
+        {job.attempted}/{job.succeeded}/{job.failed}
+      </td>
+      <td>
         {job.error_message && (
-          <>
-            <dt>Error</dt>
-            <dd>{job.error_message}</dd>
-          </>
+          <span className="text-danger" title={job.error_message}>
+            {job.error_message.slice(0, 40)}
+            {job.error_message.length > 40 ? '…' : ''}
+          </span>
         )}
-      </dl>
-      {isActive && (
-        <div>
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={cancelling}
-            aria-label={`Cancel ${job.kind} job`}
-          >
-            {cancelling ? 'Cancelling…' : 'Cancel job'}
-          </button>
-          {cancelError !== null && <p role="alert">{cancelError}</p>}
-        </div>
-      )}
-    </li>
+        {isActive && (
+          <div>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              onClick={handleCancel}
+              disabled={cancelling}
+              aria-label={`Cancel ${job.kind} job`}
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel'}
+            </button>
+            {cancelError !== null && (
+              <p role="alert" className="alert alert-danger mt-4">
+                {cancelError}
+              </p>
+            )}
+          </div>
+        )}
+      </td>
+    </tr>
   )
 }
 
 function SystemStatus({ status }: { status: StatusResponse }) {
+  const dbStatus = status.db?.status ?? 'unknown'
+  const workerStatus = status.worker?.status ?? 'unknown'
+
   return (
     <section aria-label="System status">
-      <h2>System status</h2>
-      <dl>
-        <dt>Database</dt>
-        <dd>{status.db?.status ?? 'unknown'}</dd>
-        <dt>Worker heartbeat</dt>
-        <dd>{status.worker?.last_heartbeat_at ? formatTimestamp(status.worker.last_heartbeat_at) : 'No heartbeat received'}</dd>
-        <dt>Worker status</dt>
-        <dd>{status.worker?.status ?? 'unknown'}</dd>
+      <div className="status-grid">
+        <div className="status-item">
+          <div className="status-item-label">Database</div>
+          <div className="status-item-value row gap-8">
+            <span className={`status-dot ${dbStatusDot(dbStatus)}`} />
+            {dbStatus}
+          </div>
+        </div>
+
+        <div className="status-item">
+          <div className="status-item-label">Worker</div>
+          <div className="status-item-value row gap-8">
+            <span className={`status-dot ${workerStatusDot(workerStatus)}`} />
+            {workerStatus}
+          </div>
+        </div>
+
+        <div className="status-item">
+          <div className="status-item-label">Last Heartbeat</div>
+          <div className="status-item-value">
+            {formatTimestamp(status.worker?.last_heartbeat_at ?? null)}
+          </div>
+        </div>
+
         {status.recovery && (
-          <>
-            <dt>Recovery mode</dt>
-            <dd>{status.recovery.active ? 'Active — system is recovering' : 'None'}</dd>
-          </>
+          <div className="status-item">
+            <div className="status-item-label">Recovery mode</div>
+            <div className="status-item-value row gap-8">
+              {status.recovery.active ? (
+                <>
+                  <span className="status-dot status-dot-warn" />
+                  Active
+                </>
+              ) : (
+                <>
+                  <span className="status-dot status-dot-ok" />
+                  None
+                </>
+              )}
+            </div>
+          </div>
         )}
-        {status.schedules && (
-          <>
-            <dt>Balance scan — next execution</dt>
-            <dd>{formatTimestamp(status.schedules.balances?.next_due_at ?? null)}</dd>
-            <dt>Discovery — next execution</dt>
-            <dd>{formatTimestamp(status.schedules.discovery?.next_due_at ?? null)}</dd>
-            <dt>Quotes — next execution</dt>
-            <dd>{formatTimestamp(status.schedules.quotes?.next_due_at ?? null)}</dd>
-          </>
+
+        {status.version && (
+          <div className="status-item">
+            <div className="status-item-label">Version</div>
+            <div className="status-item-value td-mono">{status.version}</div>
+          </div>
         )}
-        <dt>Version</dt>
-        <dd>{status.version ?? 'unknown'}</dd>
-      </dl>
+      </div>
+
+      {status.schedules && (
+        <div className="card">
+          <div className="section-heading mb-12">Next scheduled runs</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <div className="row-between">
+              <span className="text-secondary">Balance scan</span>
+              <span className="td-muted">
+                {formatTimestamp(status.schedules.balances?.next_due_at ?? null)}
+              </span>
+            </div>
+            <div className="row-between">
+              <span className="text-secondary">Discovery</span>
+              <span className="td-muted">
+                {formatTimestamp(status.schedules.discovery?.next_due_at ?? null)}
+              </span>
+            </div>
+            <div className="row-between">
+              <span className="text-secondary">Quotes</span>
+              <span className="td-muted">
+                {formatTimestamp(status.schedules.quotes?.next_due_at ?? null)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -162,13 +227,10 @@ export default function StatusPage() {
   }
 
   return (
-    <main>
-      <h1>Status</h1>
-      <p>Current worker and job status. Job history refreshes every 10 seconds.</p>
-
-      {statusQuery.isLoading && <p>Loading system status…</p>}
+    <div>
+      {statusQuery.isLoading && <p aria-busy="true">Loading system status…</p>}
       {statusQuery.error && (
-        <p role="alert">
+        <p role="alert" className="alert alert-danger mb-16">
           Failed to load system status.{' '}
           {statusQuery.error instanceof ApiError
             ? statusQuery.error.message
@@ -177,12 +239,13 @@ export default function StatusPage() {
       )}
       {statusQuery.data && <SystemStatus status={statusQuery.data} />}
 
-      <section aria-label="Manual triggers">
-        <h2>Manual triggers</h2>
-        <p>Queue a job immediately, bypassing the schedule.</p>
-        <div role="group" aria-label="Trigger jobs">
+      <section aria-label="Manual triggers" className="card mt-20">
+        <div className="section-heading mb-8">Manual triggers</div>
+        <p className="muted-text mb-12">Queue a job immediately, bypassing the schedule.</p>
+        <div className="btn-group" role="group" aria-label="Trigger jobs">
           <button
             type="button"
+            className="btn btn-secondary"
             onClick={() => handleTrigger('balances')}
             aria-label="Trigger balance scan"
           >
@@ -190,6 +253,7 @@ export default function StatusPage() {
           </button>
           <button
             type="button"
+            className="btn btn-secondary"
             onClick={() => handleTrigger('discovery')}
             aria-label="Trigger token discovery"
           >
@@ -197,21 +261,30 @@ export default function StatusPage() {
           </button>
           <button
             type="button"
+            className="btn btn-secondary"
             onClick={() => handleTrigger('quotes')}
             aria-label="Trigger quote fetch"
           >
             Trigger quote fetch
           </button>
         </div>
-        {triggerMsg !== null && <p role="status">{triggerMsg}</p>}
-        {triggerError !== null && <p role="alert">{triggerError}</p>}
+        {triggerMsg !== null && (
+          <p role="status" className="alert alert-success mt-12">
+            {triggerMsg}
+          </p>
+        )}
+        {triggerError !== null && (
+          <p role="alert" className="alert alert-danger mt-12">
+            {triggerError}
+          </p>
+        )}
       </section>
 
-      <section aria-label="Job history">
-        <h2>Job history</h2>
-        {jobsQuery.isLoading && <p>Loading job history…</p>}
+      <section aria-label="Job history" className="mt-20">
+        <div className="section-heading mb-12">Job history</div>
+        {jobsQuery.isLoading && <p aria-busy="true">Loading job history…</p>}
         {jobsQuery.error && (
-          <p role="alert">
+          <p role="alert" className="alert alert-danger">
             Failed to load jobs.{' '}
             {jobsQuery.error instanceof ApiError
               ? jobsQuery.error.message
@@ -219,16 +292,32 @@ export default function StatusPage() {
           </p>
         )}
         {jobsQuery.data && jobsQuery.data.items.length === 0 && (
-          <p>No jobs have run yet.</p>
+          <div className="empty-state">
+            <div className="empty-state-text">No jobs have run yet</div>
+          </div>
         )}
         {jobsQuery.data && jobsQuery.data.items.length > 0 && (
-          <ul aria-label="Job runs">
-            {jobsQuery.data.items.map((job) => (
-              <JobRow key={job.id} job={job} onCancelled={invalidateAll} />
-            ))}
-          </ul>
+          <div className="table-container">
+            <table className="table-folio" aria-label="Job runs">
+              <thead>
+                <tr>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Started</th>
+                  <th scope="col">Finished</th>
+                  <th scope="col">A/S/F</th>
+                  <th scope="col">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobsQuery.data.items.map((job) => (
+                  <JobRow key={job.id} job={job} onCancelled={invalidateAll} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
-    </main>
+    </div>
   )
 }
