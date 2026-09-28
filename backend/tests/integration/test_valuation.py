@@ -157,6 +157,7 @@ class TestComputeQuality:
         holding = HoldingRow(
             wallet_id=uuid.uuid4(),
             asset_id=aid,
+            observation_id=uuid.uuid4(),
             token_address="0x" + "a" * 40,
             raw_amount=1,
             block_number=1,
@@ -171,8 +172,8 @@ class TestComputeQuality:
 
         aid1 = uuid.uuid4()
         aid2 = uuid.uuid4()
-        h1 = HoldingRow(uuid.uuid4(), aid1, "0x" + "a" * 40, 1, 1, 18)
-        h2 = HoldingRow(uuid.uuid4(), aid2, "0x" + "b" * 40, 1, 1, 18)
+        h1 = HoldingRow(uuid.uuid4(), aid1, uuid.uuid4(), "0x" + "a" * 40, 1, 1, 18)
+        h2 = HoldingRow(uuid.uuid4(), aid2, uuid.uuid4(), "0x" + "b" * 40, 1, 1, 18)
         quality, priced = _compute_quality([h1, h2], {aid1: Decimal("1")})
         assert quality == "partial"
         assert priced == 1
@@ -181,7 +182,7 @@ class TestComputeQuality:
         from audr.portfolio.snapshot import HoldingRow
 
         aid = uuid.uuid4()
-        holding = HoldingRow(uuid.uuid4(), aid, "0x" + "a" * 40, 1, 1, 18)
+        holding = HoldingRow(uuid.uuid4(), aid, uuid.uuid4(), "0x" + "a" * 40, 1, 1, 18)
         quality, priced = _compute_quality([holding], {})
         assert quality == "stale"
         assert priced == 0

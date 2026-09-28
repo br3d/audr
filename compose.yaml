@@ -21,23 +21,6 @@ services:
     networks:
       - internal
 
-  init:
-    image: 192.168.1.90:8085/audr-backend:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: ["python", "-m", "audr.operations.init_key"]
-    environment:
-      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
-      SECRET_KEY: ${SECRET_KEY}
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - internal
-    restart: on-failure
-
   migrate:
     image: 192.168.1.90:8085/audr-backend:latest
     build:
@@ -49,7 +32,24 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
     depends_on:
-      init:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: on-failure
+
+  init:
+    image: 192.168.1.90:8085/audr-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["python", "-m", "audr.operations.init_key"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      migrate:
         condition: service_completed_successfully
     networks:
       - internal
@@ -66,7 +66,7 @@ services:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
       SECRET_KEY: ${SECRET_KEY}
     depends_on:
-      migrate:
+      init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
@@ -100,7 +100,7 @@ services:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
       SECRET_KEY: ${SECRET_KEY}
     depends_on:
-      migrate:
+      init:
         condition: service_completed_successfully
     networks:
       - internal

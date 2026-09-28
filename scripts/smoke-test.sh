@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Run a quick smoke test against the live deployment.
 # Usage: ./scripts/smoke-test.sh [BASE_URL]
-#   BASE_URL defaults to http://192.168.1.228:8080
+#   BASE_URL defaults to http://192.168.1.228 (nginx serves on port 80)
 # Exits non-zero if any check fails.
 set -euo pipefail
 
-BASE_URL="${1:-${AUDR_BASE_URL:-http://192.168.1.228:8080}}"
+BASE_URL="${1:-${AUDR_BASE_URL:-http://192.168.1.228}}"
 PASS=0
 FAIL=0
 

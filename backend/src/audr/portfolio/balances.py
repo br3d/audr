@@ -92,7 +92,7 @@ async def get_holdings(
             SELECT
                 w.address   AS wallet_address,
                 a.token_address,
-                bo.raw_amount::bigint AS raw_amount,
+                bo.raw_amount::numeric AS raw_amount,
                 bo.block_number
             FROM balance_observation bo
             JOIN wallet w ON w.id = bo.wallet_id

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 class HoldingRow:
     wallet_id: uuid.UUID
     asset_id: uuid.UUID
+    observation_id: uuid.UUID
     token_address: str
     raw_amount: int
     block_number: int
@@ -88,9 +89,9 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
                 """
                 INSERT INTO valuation_line
                   (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,
-                   price_usd, value_usd, created_at)
+                   price_usd, value_usd, observation_id, created_at)
                 VALUES
-                  (:id, :snap, :wallet, :asset, :raw, :block, :price, :value, :now)
+                  (:id, :snap, :wallet, :asset, :raw, :block, :price, :value, :obs, :now)
                 """
             ),
             {
@@ -102,6 +103,7 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
                 "block": holding.block_number,
                 "price": str(price_decimal) if price_decimal is not None else None,
                 "value": format_decimal(value_decimal) if value_decimal is not None else None,
+                "obs": str(holding.observation_id),
                 "now": now,
             },
         )
@@ -189,9 +191,10 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
                 w.id   AS wallet_id,
                 a.id   AS asset_id,
                 a.token_address,
-                bo.raw_amount::bigint,
+                bo.raw_amount::numeric,
                 bo.block_number,
-                COALESCE(a.decimals_override, a.decimals) AS effective_decimals
+                COALESCE(a.decimals_override, a.decimals) AS effective_decimals,
+                bo.id  AS observation_id
             FROM balance_observation bo
             JOIN wallet w ON w.id = bo.wallet_id
             JOIN asset  a ON a.id = bo.asset_id
@@ -210,6 +213,7 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
         HoldingRow(
             wallet_id=uuid.UUID(str(row[0])),
             asset_id=uuid.UUID(str(row[1])),
+            observation_id=uuid.UUID(str(row[6])),
             token_address=row[2],
             raw_amount=int(row[3]),
             block_number=int(row[4]),

@@ -36,7 +36,7 @@ docker compose up -d --remove-orphans
 
 echo "  -> Waiting for API health check"
 for i in $(seq 1 30); do
-  if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+  if curl -sf http://localhost/health > /dev/null 2>&1; then
     echo "  -> API is healthy (attempt ${i})"
     exit 0
   fi
