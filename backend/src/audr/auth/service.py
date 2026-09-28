@@ -149,6 +149,23 @@ async def login(db: AsyncSession, password: str) -> tuple[UUID, str]:
     return session.id, session.csrf_token
 
 
+# Type alias used by audr.auth.dependencies — Session ORM row returned by get_session.
+SessionRow = Session
+
+
+async def get_session(db: AsyncSession, *, token: str) -> Session | None:
+    """Return the session for *token* (the cookie value, interpreted as a UUID).
+
+    Returns None if the token is not a valid UUID, or if no live session exists.
+    Delegates to get_valid_session after parsing the UUID.
+    """
+    try:
+        session_id = UUID(token)
+    except ValueError:
+        return None
+    return await get_valid_session(db, session_id)
+
+
 async def get_valid_session(db: AsyncSession, session_id: UUID) -> Session | None:
     """Return the session if it exists, is not expired, and is not revoked."""
     now = _utcnow()

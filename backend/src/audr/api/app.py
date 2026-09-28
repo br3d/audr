@@ -14,6 +14,7 @@ from audr.api.errors import unhandled_exception_handler
 from audr.api.health import router as health_router
 from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
+from audr.api.settings import router as settings_router
 from audr.api.wallets import router as wallets_router
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(wallets_router)
     app.include_router(holdings_router)
     app.include_router(history_router)
+    app.include_router(settings_router)
 
     return app
 
