@@ -60,7 +60,7 @@ async def reset_password(session: AsyncSession, *, new_password: str) -> dict:  
 
     # key_state is intentionally NOT touched here — encryption keys must never be replaced on password reset
 
-    # Step 8: Flush changes.
     await session.flush()
+    await session.commit()
 
     return {"sessions_revoked": sessions_revoked, "password_changed": True}
