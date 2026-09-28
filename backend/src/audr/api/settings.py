@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.auth.dependencies import require_session
+from audr.api.auth import _require_session as require_session
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
 from audr.jobs.store import JobKind, claim_job

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf
+from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.balances import get_holdings
@@ -56,7 +56,7 @@ class WalletHoldingsResponse(BaseModel):
 @router.get("/wallets/{wallet_id}/holdings", response_model=WalletHoldingsResponse)
 async def get_wallet_holdings(
     wallet_id: uuid.UUID,
-    _session: Annotated[Session, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> WalletHoldingsResponse:
     result = await db.execute(select(Wallet.address).where(Wallet.id == wallet_id))
@@ -84,7 +84,7 @@ async def get_wallet_holdings(
 
 @router.get("/portfolio/holdings", response_model=list[HoldingResponse])
 async def get_portfolio_holdings(
-    _session: Annotated[Session, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> list[HoldingResponse]:
     """Return holdings from the most recent published valuation snapshot.
