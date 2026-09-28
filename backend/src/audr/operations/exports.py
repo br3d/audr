@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from datetime import timezone as _tz
 _UTC = _tz.utc
@@ -13,6 +15,12 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.operations.csv_safe import sanitize
+
+_log = logging.getLogger(__name__)
+
+# Cap streaming exports to avoid runaway memory / response time.  When hit,
+# a warning is logged and the export is truncated at this row count.
+_MAX_HISTORY_EXPORT_ROWS = 5_000_000
 
 
 async def export_current_portfolio(session: AsyncSession) -> dict:  # type: ignore[type-arg]
@@ -90,9 +98,80 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
     }
 
 
-async def export_full_history(session: AsyncSession) -> dict:  # type: ignore[type-arg]
+# Single flat query shared by export_full_history and stream_history_csv.
+# LEFT JOIN valuation_line so that snapshots with no lines still appear
+# (they produce a row with NULLs for the line columns).
+_HISTORY_QUERY = sa.text(
+    """
+    SELECT
+        vs.id                                             AS snapshot_id,
+        vs.snapshotted_at,
+        vs.quality,
+        w.address                                         AS wallet_address,
+        a.symbol                                          AS asset_symbol,
+        COALESCE(amr.name, a.name)                        AS asset_name,
+        vl.raw_amount,
+        vl.price_usd,
+        COALESCE(a.decimals_override, a.decimals)         AS decimals
+    FROM valuation_snapshot vs
+    LEFT JOIN valuation_line vl      ON vl.snapshot_id = vs.id
+    LEFT JOIN wallet w               ON w.id = vl.wallet_id
+    LEFT JOIN asset a                ON a.id = vl.asset_id
+    LEFT JOIN LATERAL (
+        SELECT name
+        FROM asset_metadata_revision
+        WHERE asset_id = a.id
+          AND recorded_at <= vs.snapshotted_at
+        ORDER BY recorded_at DESC
+        LIMIT 1
+    ) amr ON true
+    WHERE (:from_ IS NULL OR vs.snapshotted_at >= :from_)
+      AND (:to_   IS NULL OR vs.snapshotted_at <= :to_)
+    ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
+    """
+)
+
+# For streaming CSV we use INNER JOINs: snapshots with no lines produce
+# no CSV rows, which is the correct semantic.
+_HISTORY_STREAM_QUERY = sa.text(
+    """
+    SELECT
+        vs.id                                             AS snapshot_id,
+        vs.snapshotted_at,
+        vs.quality,
+        w.address                                         AS wallet_address,
+        a.symbol                                          AS asset_symbol,
+        COALESCE(amr.name, a.name)                        AS asset_name,
+        vl.raw_amount,
+        vl.price_usd,
+        COALESCE(a.decimals_override, a.decimals)         AS decimals
+    FROM valuation_snapshot vs
+    JOIN valuation_line vl           ON vl.snapshot_id = vs.id
+    JOIN wallet w                    ON w.id = vl.wallet_id
+    JOIN asset a                     ON a.id = vl.asset_id
+    LEFT JOIN LATERAL (
+        SELECT name
+        FROM asset_metadata_revision
+        WHERE asset_id = a.id
+          AND recorded_at <= vs.snapshotted_at
+        ORDER BY recorded_at DESC
+        LIMIT 1
+    ) amr ON true
+    WHERE (:from_ IS NULL OR vs.snapshotted_at >= :from_)
+      AND (:to_   IS NULL OR vs.snapshotted_at <= :to_)
+    ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
+    """
+)
+
+
+async def export_full_history(
+    session: AsyncSession,
+    from_: datetime | None = None,
+    to_: datetime | None = None,
+) -> dict:  # type: ignore[type-arg]
     """Export the complete valuation snapshot history as a structured dict.
 
+    Uses a single flat JOIN query instead of N+1 per-snapshot queries.
     Snapshots are ordered by ``snapshotted_at`` ASC.  Each line's asset name
     comes from the ``asset_metadata_revision`` recorded latest before the
     snapshot's ``snapshotted_at``; falls back to the current ``asset.name`` when
@@ -125,81 +204,111 @@ async def export_full_history(session: AsyncSession) -> dict:  # type: ignore[ty
             ]
         }
     """
-    snapshots_result = await session.execute(
-        sa.text(
-            """
-            SELECT id, snapshotted_at, quality
-            FROM valuation_snapshot
-            ORDER BY snapshotted_at ASC
-            """
-        )
+    result = await session.execute(
+        _HISTORY_QUERY,
+        {"from_": from_, "to_": to_},
     )
-    snapshot_rows = snapshots_result.fetchall()
+    rows = result.fetchall()
 
-    snapshots = []
-    for snap_row in snapshot_rows:
-        snap_id = snap_row[0]
-        snapshotted_at: datetime = snap_row[1]
-        quality: str = snap_row[2]
+    snap_map: dict[str, dict] = {}  # type: ignore[type-arg]
+    snap_order: list[dict] = []  # type: ignore[type-arg]
 
-        lines_result = await session.execute(
-            sa.text(
-                """
-                SELECT
-                    w.address                          AS wallet_address,
-                    a.symbol                           AS asset_symbol,
-                    COALESCE(amr.name, a.name)         AS asset_name,
-                    vl.raw_amount,
-                    vl.price_usd,
-                    COALESCE(a.decimals_override, a.decimals) AS decimals
-                FROM valuation_line vl
-                JOIN wallet w ON w.id = vl.wallet_id
-                JOIN asset a  ON a.id = vl.asset_id
-                LEFT JOIN LATERAL (
-                    SELECT name
-                    FROM asset_metadata_revision
-                    WHERE asset_id  = a.id
-                      AND recorded_at <= :snapshotted_at
-                    ORDER BY recorded_at DESC
-                    LIMIT 1
-                ) amr ON true
-                WHERE vl.snapshot_id = :snapshot_id
-                ORDER BY w.address, a.symbol
-                """
-            ),
-            {"snapshot_id": snap_id, "snapshotted_at": snapshotted_at},
-        )
+    for row in rows:
+        snap_id = str(row[0])
+        snapshotted_at: datetime = row[1]
+        quality: str = row[2]
+        wallet_addr = row[3]
 
-        lines = []
-        for line_row in lines_result.fetchall():
-            raw_amount = line_row[3]
-            price_usd  = line_row[4]
-            lines.append(
-                {
-                    "wallet_address": str(line_row[0]),
-                    "asset_symbol": str(line_row[1]),
-                    "asset_name": str(line_row[2]),
-                    "raw_amount": str(Decimal(raw_amount)) if raw_amount is not None else None,
-                    "price_usd": str(Decimal(price_usd)) if price_usd is not None else None,
-                    "decimals": int(line_row[5]),
-                }
-            )
-
-        snapshots.append(
-            {
-                "snapshot_id": str(snap_id),
+        if snap_id not in snap_map:
+            entry: dict = {  # type: ignore[type-arg]
+                "snapshot_id": snap_id,
                 "snapshotted_at": snapshotted_at.isoformat(),
                 "quality": quality,
-                "lines": lines,
+                "lines": [],
             }
-        )
+            snap_map[snap_id] = entry
+            snap_order.append(entry)
+
+        if wallet_addr is not None:
+            raw_amount = row[6]
+            price_usd = row[7]
+            snap_map[snap_id]["lines"].append(
+                {
+                    "wallet_address": str(wallet_addr),
+                    "asset_symbol": str(row[4]),
+                    "asset_name": str(row[5]),
+                    "raw_amount": str(Decimal(raw_amount)) if raw_amount is not None else None,
+                    "price_usd": str(Decimal(price_usd)) if price_usd is not None else None,
+                    "decimals": int(row[8]),
+                }
+            )
 
     return {
         "schema_version": 1,
         "record_type": "full_history",
         "exported_at": datetime.now(_UTC).isoformat(),
-        "snapshots": snapshots,
+        "snapshots": snap_order,
     }
+
+
+def _csv_row(*cells: object) -> str:
+    """Render one CSV row as a string (including newline)."""
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerow(cells)
+    return buf.getvalue()
+
+
+async def stream_history_csv(
+    session: AsyncSession,
+    from_: datetime | None = None,
+    to_: datetime | None = None,
+) -> AsyncGenerator[str, None]:
+    """Stream the full valuation history as CSV chunks, row by row.
+
+    Uses a server-side cursor (session.stream) so the entire result set is
+    never held in memory.  Honors ``from_`` / ``to_`` date filters.
+    Logs a warning and stops early if the export exceeds
+    ``_MAX_HISTORY_EXPORT_ROWS``.
+
+    Format::
+
+        # schema_version: 1
+        snapshot_id,snapshotted_at,quality,wallet_address,asset_symbol,asset_name,raw_amount,price_usd,decimals
+    """
+    yield "# schema_version: 1\n"
+    yield _csv_row(
+        "snapshot_id", "snapshotted_at", "quality",
+        "wallet_address", "asset_symbol", "asset_name",
+        "raw_amount", "price_usd", "decimals",
+    )
+
+    stream = await session.stream(_HISTORY_STREAM_QUERY, {"from_": from_, "to_": to_})
+    stream = stream.yield_per(500)
+
+    row_count = 0
+    async for row in stream:
+        raw_amount = str(Decimal(row[6])) if row[6] is not None else ""
+        price_usd = str(Decimal(row[7])) if row[7] is not None else ""
+        yield _csv_row(
+            str(row[0]),
+            row[1].isoformat(),
+            str(row[2]),
+            sanitize(str(row[3])),
+            sanitize(str(row[4])),
+            sanitize(str(row[5])),
+            raw_amount,
+            price_usd,
+            int(row[8]),
+        )
+        row_count += 1
+        if row_count >= _MAX_HISTORY_EXPORT_ROWS:
+            _log.warning(
+                "history export truncated at %d rows (from_=%s, to_=%s)",
+                _MAX_HISTORY_EXPORT_ROWS,
+                from_,
+                to_,
+            )
+            return
 
 
 async def render_portfolio_csv(session: AsyncSession) -> str:
@@ -241,38 +350,13 @@ async def render_portfolio_csv(session: AsyncSession) -> str:
     return buf.getvalue()
 
 
-async def render_history_csv(session: AsyncSession) -> str:
-    """Render the full valuation history as a CSV string.
+async def render_history_csv(
+    session: AsyncSession,
+    from_: datetime | None = None,
+    to_: datetime | None = None,
+) -> str:
+    """Render the full valuation history as a CSV string (buffers for compatibility).
 
-    Format::
-
-        # schema_version: 1
-        snapshot_id,snapshotted_at,quality,wallet_address,asset_symbol,asset_name,raw_amount,price_usd,decimals
+    Prefer ``stream_history_csv`` for large exports.
     """
-    history = await export_full_history(session)
-
-    buf = io.StringIO()
-    buf.write("# schema_version: 1\n")
-
-    writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(
-        ["snapshot_id", "snapshotted_at", "quality", "wallet_address", "asset_symbol", "asset_name", "raw_amount", "price_usd", "decimals"]
-    )
-
-    for snapshot in history["snapshots"]:
-        for line in snapshot["lines"]:
-            writer.writerow(
-                [
-                    snapshot["snapshot_id"],
-                    snapshot["snapshotted_at"],
-                    snapshot["quality"],
-                    sanitize(line["wallet_address"]),
-                    sanitize(line["asset_symbol"]),
-                    sanitize(line["asset_name"]),
-                    line["raw_amount"] if line["raw_amount"] is not None else "",
-                    line["price_usd"] if line["price_usd"] is not None else "",
-                    line["decimals"],
-                ]
-            )
-
-    return buf.getvalue()
+    return "".join([chunk async for chunk in stream_history_csv(session, from_=from_, to_=to_)])

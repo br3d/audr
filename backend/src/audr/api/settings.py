@@ -20,8 +20,8 @@ from audr.jobs.store import JobKind, claim_job
 from audr.operations.exports import (
     export_current_portfolio,
     export_full_history,
-    render_history_csv,
     render_portfolio_csv,
+    stream_history_csv,
 )
 from audr.operations.purge import execute_purge, preview_purge
 from audr.settings.schedules import (
@@ -637,6 +637,22 @@ async def export_portfolio(
     )
 
 
+def _parse_export_date(value: str | None, param: str) -> datetime | None:
+    """Parse an ISO-8601 date/datetime query param; raise 422 on bad input."""
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid '{param}' parameter: {exc}",
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
 @router.get("/exports/history")
 async def export_history(
     _session: Annotated[Any, Depends(_require_session)],
@@ -645,18 +661,20 @@ async def export_history(
     from_: str | None = Query(default=None, alias="from"),
     to: str | None = Query(default=None),
 ) -> StreamingResponse:
-    """Stream full history as JSON or CSV."""
+    """Stream full history as JSON or CSV.  Optional ``from`` / ``to`` bound the date range."""
     import json as _json
 
+    from_dt = _parse_export_date(from_, "from")
+    to_dt = _parse_export_date(to, "to")
+
     if format == "csv":
-        content = await render_history_csv(db)
         return StreamingResponse(
-            iter([content]),
+            stream_history_csv(db, from_=from_dt, to_=to_dt),
             media_type="text/csv",
             headers={"Content-Disposition": 'attachment; filename="history.csv"'},
         )
 
-    data = await export_full_history(db)
+    data = await export_full_history(db, from_=from_dt, to_=to_dt)
     payload = _json.dumps(data, default=str)
     return StreamingResponse(
         iter([payload]),
