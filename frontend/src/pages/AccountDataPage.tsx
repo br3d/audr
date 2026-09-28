@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   changePassword,
   fetchPurgePreview,
@@ -13,6 +13,7 @@ import {
 // --- Password change ---
 
 function PasswordSection() {
+  const queryClient = useQueryClient()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -37,12 +38,9 @@ function PasswordSection() {
     setSaving(true)
     try {
       await changePassword(current, next)
-      setMsg(
-        'Password changed. All other sessions have been signed out. Sign in again to continue.',
-      )
-      setCurrent('')
-      setNext('')
-      setConfirm('')
+      // Backend clears the current session cookie on password change.
+      // Reset the session query so the app returns to the sign-in screen.
+      queryClient.resetQueries({ queryKey: ['session'] })
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : 'Failed to change password.',

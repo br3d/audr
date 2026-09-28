@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchSetupStatus, fetchSession, logout, AuthError } from './api/client'
+import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback, clearUnauthorizedCallback } from './api/client'
 import SetupPage from './pages/SetupPage'
 import SignInPage from './pages/SignInPage'
 import DashboardPage from './pages/DashboardPage'
@@ -40,6 +40,17 @@ export default function App() {
     enabled: setupQuery.data?.setup_required === false,
     retry: (_, error) => !(error instanceof AuthError),
   })
+
+  // Register a global 401 handler so any API call that encounters an expired
+  // session (not just the initial session query) redirects to sign-in.
+  useEffect(() => {
+    setUnauthorizedCallback(() => {
+      queryClient.resetQueries({ queryKey: ['session'] })
+    })
+    return () => {
+      clearUnauthorizedCallback()
+    }
+  }, [queryClient])
 
   function handleSetupComplete() {
     queryClient.setQueryData(['setup-status'], { setup_required: false })
