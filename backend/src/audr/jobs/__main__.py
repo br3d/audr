@@ -1,4 +1,4 @@
-"""Worker process entrypoint — DISCOVERY and BALANCE_SCAN job handlers (AUD-244)."""
+"""Worker process entrypoint — DISCOVERY, BALANCE_SCAN, and QUOTE_REFRESH job handlers (AUD-244/AUD-67)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.db import _get_session_factory
 from audr.jobs.store import JobKind
 from audr.jobs.worker import Worker
+from audr.jobs.quotes import handle_quote_refresh
 from audr.portfolio.balances import record_balance
 from audr.portfolio.discovery import (
     discover_tokens,
@@ -142,12 +143,14 @@ async def _main() -> None:
 
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
+    quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
 
     logger.info("worker started")
     while not stop.is_set():
         try:
             did_work = await discovery_worker.run_once()
             did_work |= await balance_worker.run_once()
+            did_work |= await quote_worker.run_once()
         except Exception:
             logger.exception("worker poll error")
             did_work = False
