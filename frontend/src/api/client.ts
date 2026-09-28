@@ -410,6 +410,91 @@ export function fetchPortfolio(walletId?: string): Promise<PortfolioResponse> {
   return get<PortfolioResponse>(`/portfolio${params}`)
 }
 
+// --- Settings types ---
+
+export interface ScheduleConfig {
+  enabled: boolean
+  interval_seconds: number
+  freshness_seconds?: number
+  next_due_at?: string | null
+}
+
+export interface SchedulesConfig {
+  balances?: ScheduleConfig
+  discovery?: ScheduleConfig
+  quotes?: ScheduleConfig
+}
+
+export interface SettingsResponse {
+  revision: string
+  schedules?: SchedulesConfig
+  request_id?: string
+  generated_at?: string
+}
+
+export interface PatchSettingsInput {
+  revision: string
+  schedules?: SchedulesConfig
+}
+
+// --- Status types ---
+
+export interface DbStatus {
+  status: 'ok' | 'error' | 'degraded'
+}
+
+export interface WorkerStatus {
+  status: 'running' | 'stopped' | 'unknown'
+  last_heartbeat_at: string | null
+}
+
+export interface RecoveryStatus {
+  active: boolean
+  reason?: string | null
+}
+
+export interface StatusResponse {
+  db?: DbStatus
+  worker?: WorkerStatus
+  recovery?: RecoveryStatus
+  schedules?: SchedulesConfig
+  version?: string | null
+  request_id?: string
+  generated_at?: string
+}
+
+// --- Jobs list response ---
+
+export interface JobsResponse {
+  items: JobRun[]
+  next_cursor: string | null
+  request_id: string
+  generated_at: string
+}
+
+// --- Export types ---
+
+export interface ExportProgressEvent {
+  type: 'progress' | 'complete' | 'error'
+  records_written?: number
+  message?: string
+}
+
+// --- Purge types ---
+
+export interface PurgePreviewResponse {
+  provider: string
+  quote_observation_count: number
+  quote_set_count: number
+  affected_valuation_count: number
+}
+
+export interface PurgeInput {
+  provider: string
+  confirm: true
+  current_password: string
+}
+
 // --- Jobs API ---
 
 export function triggerJob(kind: JobKind): Promise<JobRef> {
@@ -418,6 +503,75 @@ export function triggerJob(kind: JobKind): Promise<JobRef> {
 
 export function fetchJob(id: string): Promise<JobRun> {
   return get<JobRun>(`/jobs/${id}`)
+}
+
+export function fetchJobs(kind?: JobKind, cursor?: string): Promise<JobsResponse> {
+  const params = new URLSearchParams()
+  if (kind) params.set('kind', kind)
+  if (cursor) params.set('cursor', cursor)
+  const qs = params.toString()
+  return get<JobsResponse>(`/jobs${qs ? '?' + qs : ''}`)
+}
+
+export function cancelJob(id: string): Promise<void> {
+  return post<void>(`/jobs/${id}/cancel`)
+}
+
+// --- Settings API ---
+
+export function fetchSettings(): Promise<SettingsResponse> {
+  return get<SettingsResponse>('/settings')
+}
+
+export function patchSettings(input: PatchSettingsInput): Promise<SettingsResponse> {
+  return request<SettingsResponse>('PATCH', '/settings', input)
+}
+
+// --- Status API ---
+
+export function fetchStatus(): Promise<StatusResponse> {
+  return get<StatusResponse>('/status')
+}
+
+// --- Password API ---
+
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  return put<void>('/auth/password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  })
+}
+
+// --- Export API ---
+
+export function exportPortfolioUrl(format: 'json' | 'csv'): string {
+  return `${BASE}/exports/portfolio?format=${format}`
+}
+
+export function exportHistoryUrl(
+  format: 'json' | 'csv',
+  from?: string,
+  to?: string,
+): string {
+  const params = new URLSearchParams({ format })
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  return `${BASE}/exports/history?${params.toString()}`
+}
+
+// --- Purge API ---
+
+export function fetchPurgePreview(provider: string): Promise<PurgePreviewResponse> {
+  return get<PurgePreviewResponse>(
+    `/data/provider-purge-preview?provider=${encodeURIComponent(provider)}`,
+  )
+}
+
+export function submitPurge(input: PurgeInput): Promise<JobRef> {
+  return post<JobRef>('/data/provider-purge', input)
 }
 
 // --- History types ---

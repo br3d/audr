@@ -9,8 +9,20 @@ import WalletsPage from './pages/WalletsPage'
 import AssetsPage from './pages/AssetsPage'
 import ConnectionsPage from './pages/ConnectionsPage'
 import HistoryPage from './pages/HistoryPage'
+import SchedulesPage from './pages/SchedulesPage'
+import StatusPage from './pages/StatusPage'
+import AccountDataPage from './pages/AccountDataPage'
 
-type MainPage = 'dashboard' | 'holdings' | 'wallets' | 'assets' | 'connections' | 'history'
+type MainPage =
+  | 'dashboard'
+  | 'holdings'
+  | 'wallets'
+  | 'assets'
+  | 'connections'
+  | 'history'
+  | 'schedules'
+  | 'status'
+  | 'account'
 
 export default function App() {
   const queryClient = useQueryClient()
@@ -105,6 +117,24 @@ export default function App() {
         >
           History
         </button>
+        <button
+          onClick={() => setPage('schedules')}
+          aria-current={page === 'schedules' ? 'page' : undefined}
+        >
+          Schedules
+        </button>
+        <button
+          onClick={() => setPage('status')}
+          aria-current={page === 'status' ? 'page' : undefined}
+        >
+          Status
+        </button>
+        <button
+          onClick={() => setPage('account')}
+          aria-current={page === 'account' ? 'page' : undefined}
+        >
+          Account &amp; Data
+        </button>
         <button onClick={handleSignOut}>Sign out</button>
       </nav>
       {page === 'dashboard' && <DashboardPage />}
@@ -113,6 +143,9 @@ export default function App() {
       {page === 'assets' && <AssetsPage />}
       {page === 'connections' && <ConnectionsPage />}
       {page === 'history' && <HistoryPage />}
+      {page === 'schedules' && <SchedulesPage />}
+      {page === 'status' && <StatusPage />}
+      {page === 'account' && <AccountDataPage />}
     </div>
   )
 }
