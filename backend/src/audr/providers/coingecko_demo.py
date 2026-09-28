@@ -12,6 +12,7 @@ Never logs or exposes the API key.
 
 from __future__ import annotations
 
+import json
 import logging
 from decimal import Decimal
 from typing import Any
@@ -162,7 +163,7 @@ class CoinGeckoProvider:
             headers={"x-cg-demo-api-key": self._api_key},
         )
         _check_response(response)
-        return response.json()  # type: ignore[no-any-return]
+        return json.loads(response.text, parse_float=Decimal)  # type: ignore[no-any-return]
 
 
 def _check_response(response: httpx.Response) -> None:

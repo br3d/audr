@@ -179,6 +179,40 @@ async def test_get_token_prices_normalises_address_to_lowercase() -> None:
 
 
 @pytest.mark.contract
+async def test_get_eth_price_preserves_full_decimal_precision() -> None:
+    """Prices with >15 sig digits are stored exactly, not rounded through float."""
+    # Pass raw bytes — json= would go through Python float and lose digits
+    raw = b'{"ethereum": {"usd": 1234.567890123456789}}'
+    expected = Decimal("1234.567890123456789")
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/simple/price").mock(
+            return_value=Response(200, content=raw, headers={"content-type": "application/json"})
+        )
+        async with CoinGeckoProvider(api_key=_FAKE_KEY) as provider:
+            price = await provider.get_eth_price()
+
+    assert price == expected
+
+
+@pytest.mark.contract
+async def test_get_token_prices_preserves_tiny_price_precision() -> None:
+    """Tiny prices with >17 sig digits survive JSON parsing without float rounding."""
+    raw = b'{"' + _USDC_ADDR.lower().encode() + b'": {"usd": 0.000000000000012345678901234567}}'
+    expected = Decimal("0.000000000000012345678901234567")
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            return_value=Response(200, content=raw, headers={"content-type": "application/json"})
+        )
+        async with CoinGeckoProvider(api_key=_FAKE_KEY) as provider:
+            prices = await provider.get_token_prices([_USDC_ADDR])
+
+    assert _USDC_ADDR in prices
+    assert prices[_USDC_ADDR] == expected, (
+        f"precision lost: got {prices[_USDC_ADDR]!r}, expected {expected!r}"
+    )
+
+
+@pytest.mark.contract
 async def test_context_manager_closes_client() -> None:
     """Provider used as async context manager closes its HTTP client cleanly."""
     with respx.mock() as mock:
