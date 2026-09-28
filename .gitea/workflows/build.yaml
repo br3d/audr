@@ -1,0 +1,50 @@
+name: Build & Push Images
+
+# Builds the backend + frontend images and pushes them to the local Harbor
+# registry. Runs on push to main (rolling `latest`) and on release tags.
+# Requires Actions secrets: HARBOR_USERNAME, HARBOR_PASSWORD.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+env:
+  REGISTRY: 192.168.1.90:8085
+
+jobs:
+  build-push:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tags
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Harbor
+        run: echo "${{ secrets.HARBOR_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.HARBOR_USERNAME }}" --password-stdin
+
+      - name: Build backend image
+        run: |
+          docker build --target runtime \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}" \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}" .
+
+      - name: Build frontend image
+        run: |
+          docker build --target frontend-server \
+            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}" \
+            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}" .
+
+      - name: Push images
+        run: |
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}"
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}"
+          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}"
+          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}"

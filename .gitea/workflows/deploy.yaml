@@ -1,0 +1,53 @@
+name: Deploy
+
+# Deploys the audr stack to the deploy host (192.168.1.228) — which is also the
+# self-hosted runner host, so deployment runs locally against compose.yaml.
+# Triggered manually (workflow_dispatch) or by pushing a release tag (vX.Y.Z),
+# per the agreed rollout policy (manual / by tag — no auto-deploy on merge).
+#
+# Requires Actions secrets: HARBOR_USERNAME, HARBOR_PASSWORD, DB_PASSWORD, SECRET_KEY.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy'
+        default: 'latest'
+        required: true
+  push:
+    tags: ['v*']
+
+env:
+  REGISTRY: 192.168.1.90:8085
+
+jobs:
+  deploy:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: t
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Harbor
+        run: echo "${{ secrets.HARBOR_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.HARBOR_USERNAME }}" --password-stdin
+
+      - name: Pull & deploy stack
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          IMAGE_TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          # Pin the deployed tag by retagging the requested images to :latest,
+          # which is what compose.yaml references.
+          for svc in audr-backend audr-frontend; do
+            docker pull "$REGISTRY/$svc:$IMAGE_TAG"
+            docker tag  "$REGISTRY/$svc:$IMAGE_TAG" "$REGISTRY/$svc:latest"
+          done
+          docker compose -f compose.yaml up -d --no-build
+          docker compose -f compose.yaml ps

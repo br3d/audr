@@ -1,0 +1,29 @@
+name: CI
+
+# Runs the project test suite on every push and pull request.
+# Executes on the self-hosted `host` runner (deploy host 192.168.1.228) so that
+# docker compose bind-mounts in compose.test.yaml resolve against the checkout.
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backend unit + integration tests (compose)
+        run: docker compose -f compose.test.yaml --profile backend run --rm --build backend-tests
+      - name: Teardown
+        if: always()
+        run: docker compose -f compose.test.yaml down -v --remove-orphans
+
+  frontend-tests:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Frontend tests (vitest)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run test
