@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import type { HistoryPoint } from '../api/client'
-import HistoryChart from '../components/HistoryChart'
+import HistoryChart, { buildChartData } from '../components/HistoryChart'
 
 const POINTS: HistoryPoint[] = [
   {
@@ -151,5 +151,75 @@ describe('HistoryChart', () => {
     const summary = container.querySelector('summary')
     expect(summary?.textContent).toMatch(/3 points/i)
     await unmount(container, root)
+  })
+
+  it('buildChartData sorts oldest-first from newest-first input', () => {
+    const newestFirst: HistoryPoint[] = [
+      {
+        snapshot_id: 'n1',
+        snapshotted_at: '2026-03-03T00:00:00Z',
+        total_value_usd: '3000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+      {
+        snapshot_id: 'n2',
+        snapshotted_at: '2026-03-02T00:00:00Z',
+        total_value_usd: '2000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+      {
+        snapshot_id: 'n3',
+        snapshotted_at: '2026-03-01T00:00:00Z',
+        total_value_usd: '1000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+    ]
+    const data = buildChartData(newestFirst)
+    expect(data[0].snapshotted_at).toBe('2026-03-01T00:00:00Z')
+    expect(data[data.length - 1].snapshotted_at).toBe('2026-03-03T00:00:00Z')
+  })
+
+  it('buildChartData does not mutate the input array', () => {
+    const newestFirst: HistoryPoint[] = [
+      {
+        snapshot_id: 'x1',
+        snapshotted_at: '2026-03-02T00:00:00Z',
+        total_value_usd: '2000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+      {
+        snapshot_id: 'x2',
+        snapshotted_at: '2026-03-01T00:00:00Z',
+        total_value_usd: '1000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+    ]
+    buildChartData(newestFirst)
+    expect(newestFirst[0].snapshotted_at).toBe('2026-03-02T00:00:00Z')
   })
 })
