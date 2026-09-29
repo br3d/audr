@@ -1,0 +1,71 @@
+# Docker build context exclusions.
+# Keeps credentials out of the build context entirely and avoids uploading
+# large, regenerable trees (node_modules, venvs, caches) on every build.
+#
+# NOTE: .dockerignore patterns are matched against the full path relative to
+# the context root, so a bare `node_modules` only excludes a root-level one.
+# Recursive exclusions need both the bare and the `**/` form.
+
+# --- Credentials and secrets (never belong in a build context) ---
+id_ed25519*
+**/id_ed25519*
+*.pem
+**/*.pem
+*.key
+**/*.key
+secrets/
+**/secrets/
+.env
+.env.*
+**/.env
+**/.env.*
+
+# --- VCS and agent/tooling metadata ---
+.git
+.gitignore
+.github
+.agents
+.claude
+.specify
+
+# --- Dependency trees and build output (rebuilt inside the image) ---
+node_modules
+**/node_modules
+.venv
+**/.venv
+frontend/dist
+frontend/coverage
+
+# --- Python caches and artifacts ---
+__pycache__
+**/__pycache__
+*.pyc
+**/*.pyc
+*.pyo
+**/*.pyo
+*.egg-info
+**/*.egg-info
+.pytest_cache
+**/.pytest_cache
+.mypy_cache
+**/.mypy_cache
+.ruff_cache
+**/.ruff_cache
+.coverage
+**/.coverage
+htmlcov
+**/htmlcov
+
+# --- Test/dev noise ---
+*.log
+**/*.log
+playwright-report
+**/playwright-report
+test-results
+**/test-results
+
+# --- Docs and specs (not needed to build the app) ---
+docs/
+specs/
+README.md
+LICENSE

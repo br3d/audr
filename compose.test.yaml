@@ -4,8 +4,6 @@ name: audr-test
 # Usage:
 #   docker compose -f compose.test.yaml run --rm backend-tests
 #   docker compose -f compose.test.yaml run --rm frontend-tests
-#   docker compose -f compose.test.yaml run --rm e2e
-#   docker compose -f compose.test.yaml run --rm benchmark
 
 services:
   db-test:
@@ -91,60 +89,18 @@ services:
     profiles:
       - frontend
 
-  e2e:
-    build:
-      context: .
-      dockerfile: Dockerfile.e2e
-    command: ["npx", "playwright", "test", "--reporter=list"]
-    environment:
-      APP_URL: http://api-test:8000
-    depends_on:
-      migrate-test:
-        condition: service_completed_successfully
-    networks:
-      - test-net
-    profiles:
-      - e2e
-
-  api-test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    environment:
-      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
-      SECRET_KEY_PATH: /dev/null
-      MASTER_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
-    depends_on:
-      migrate-test:
-        condition: service_completed_successfully
-    networks:
-      - test-net
-    profiles:
-      - e2e
-
-  benchmark:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    command: >
-      pytest
-      --tb=short
-      -q
-      -m "benchmark"
-      --benchmark-only
-    environment:
-      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
-      RPC_MOCK_URL: http://provider-mock:8080/rpc
-    depends_on:
-      migrate-test:
-        condition: service_completed_successfully
-      provider-mock:
-        condition: service_healthy
-    networks:
-      - test-net
-    profiles:
-      - benchmark
+# Removed profiles (AUD-329):
+#   e2e / api-test — referenced a Dockerfile.e2e that never existed, and the
+#     api-test service set SECRET_KEY_PATH / MASTER_KEY_HEX, neither of which
+#     audr.config.Settings reads (it requires SECRET_KEY), so the container
+#     could not start. The API also serves no SPA assets, so APP_URL pointed at
+#     a host that returns no frontend. Playwright specs live in tests/e2e and
+#     are run locally against a dev stack: `cd frontend && npm run e2e`
+#     (config: frontend/playwright.config.ts). Re-add a containerised profile
+#     only alongside a real Dockerfile.e2e and a correctly wired app service.
+#   benchmark — passed --benchmark-only, but pytest-benchmark is not a dev
+#     dependency and no test carries a `benchmark` marker, so the profile
+#     always failed at collection.
 
 volumes:
   frontend_node_modules:
