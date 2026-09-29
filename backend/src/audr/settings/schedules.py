@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
-from croniter import croniter as CronIter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -26,7 +25,6 @@ _SELECT_SCHEDULE = """
 SELECT
     id,
     kind,
-    cron_expr,
     enabled,
     revision,
     paused_at,
@@ -44,15 +42,14 @@ def _row_to_dict(row: tuple) -> dict:  # type: ignore[type-arg]
     return {
         "id": row[0],
         "kind": row[1],
-        "cron_expr": row[2],
-        "enabled": row[3],
-        "revision": row[4],
-        "paused_at": row[5],
-        "freshness_s": row[6],
-        "budget_calls_per_day": row[7],
-        "last_run_at": row[8],
-        "next_run_at": row[9],
-        "updated_at": row[10],
+        "enabled": row[2],
+        "revision": row[3],
+        "paused_at": row[4],
+        "freshness_s": row[5],
+        "budget_calls_per_day": row[6],
+        "last_run_at": row[7],
+        "next_run_at": row[8],
+        "updated_at": row[9],
     }
 
 
@@ -74,7 +71,6 @@ async def update_schedule(
     session: AsyncSession,
     *,
     kind: str,
-    cron_expr: str | None = None,
     freshness_s: int | None = None,
     budget_calls_per_day: int | None = None,
     expected_revision: int | None = None,
@@ -87,15 +83,11 @@ async def update_schedule(
             the stored revision.
         LookupError: if no schedule row exists for *kind*.
     """
-    # Validate inputs before touching the DB.
-    if cron_expr is not None and not CronIter.is_valid(cron_expr):
-        raise ValueError("invalid cron expression")
     if freshness_s is not None and freshness_s < 0:
         raise ValueError("freshness_s must be non-negative")
     if budget_calls_per_day is not None and budget_calls_per_day <= 0:
         raise ValueError("budget_calls_per_day must be positive")
 
-    # Fetch current row (for revision check and return value).
     current = await get_schedule(session, kind=kind)
     if current is None:
         raise LookupError(f"no schedule row for kind={kind!r}")
@@ -106,13 +98,9 @@ async def update_schedule(
             f"expected {expected_revision}, found {current['revision']}"
         )
 
-    # Build SET clause dynamically from supplied fields.
     set_parts: list[str] = ["revision = revision + 1", "updated_at = now()"]
     params: dict = {"kind": kind}  # type: ignore[type-arg]
 
-    if cron_expr is not None:
-        set_parts.append("cron_expr = :cron_expr")
-        params["cron_expr"] = cron_expr
     if freshness_s is not None:
         set_parts.append("freshness_s = :freshness_s")
         params["freshness_s"] = freshness_s
@@ -129,7 +117,7 @@ async def update_schedule(
     await session.flush()
 
     updated = await get_schedule(session, kind=kind)
-    assert updated is not None  # we just wrote it
+    assert updated is not None
     return updated
 
 
@@ -222,24 +210,15 @@ async def project_usage(
     if row is None:
         raise LookupError(f"no schedule row for kind={kind!r}")
 
-    cron_expr: str = row["cron_expr"]
+    freshness_s: int | None = row["freshness_s"]
     budget: int | None = row["budget_calls_per_day"]
 
-    # Count fires in a 24-hour window starting from midnight UTC today.
-    today_midnight = datetime.now(UTC).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    window_end = today_midnight + timedelta(days=1)
+    if freshness_s is None or freshness_s <= 0:
+        runs_per_day = 0
+    else:
+        runs_per_day = max(1, 86400 // freshness_s)
 
-    cron = CronIter(cron_expr, today_midnight)
-    runs_per_day = 0
-    while True:
-        next_fire = cron.get_next(datetime)
-        if next_fire >= window_end:
-            break
-        runs_per_day += 1
-
-    calls_per_run = 1  # placeholder
+    calls_per_run = 1
     total_calls = runs_per_day * calls_per_run * days
 
     over_budget: bool
@@ -258,33 +237,3 @@ async def project_usage(
         "budget_calls_per_day": budget,
         "over_budget": over_budget,
     }
-
-
-async def coalesce_missed(
-    session: AsyncSession, *, kind: str, now: datetime
-) -> int:
-    """Coalesce any missed cron slots since last_run_at into at most one run.
-
-    Returns 1 if the schedule is enabled, not paused, and at least one slot
-    was missed.  Returns 0 otherwise.  Never returns > 1 (no backfill).
-    """
-    row = await get_schedule(session, kind=kind)
-    if row is None:
-        return 0
-    if not row["enabled"]:
-        return 0
-    if row["paused_at"] is not None:
-        return 0
-
-    last_run_at: datetime | None = row["last_run_at"]
-    if last_run_at is None:
-        # Never ran — treat as one missed slot.
-        return 1
-
-    cron_expr: str = row["cron_expr"]
-    cron = CronIter(cron_expr, last_run_at)
-    next_fire = cron.get_next(datetime)
-
-    if next_fire <= now:
-        return 1
-    return 0
