@@ -161,6 +161,9 @@ _HISTORY_STREAM_QUERY = sa.text(
       AND (:to_   IS NULL OR vs.snapshotted_at <= :to_)
     ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
     """
+).bindparams(
+    sa.bindparam("from_", type_=sa.TIMESTAMP(timezone=True)),
+    sa.bindparam("to_", type_=sa.TIMESTAMP(timezone=True)),
 )
 
 
