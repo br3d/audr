@@ -84,7 +84,9 @@ services:
     working_dir: /workspace
     command: ["npm", "run", "test"]
     volumes:
-      - ./frontend:/workspace:ro
+      # Not :ro — Docker must be able to create the /workspace/node_modules
+      # mountpoint, which does not exist in a fresh checkout.
+      - ./frontend:/workspace
       - frontend_node_modules:/workspace/node_modules
     networks:
       - test-net
