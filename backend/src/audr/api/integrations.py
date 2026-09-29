@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
-from audr.jobs.store import JobKind, claim_job
+from audr.jobs.store import JobKind, enqueue_job
 from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url
 from audr.settings.integrations import RevisionConflictError, get_integration, upsert_integration
 from audr.settings.quotes import save_coingecko_credentials
@@ -283,28 +283,22 @@ async def post_integration_validate(
         )
     job_kind = _KIND_TO_JOB[kind]
 
-    # Coalesce if one is already running.
-    active_result = await db.execute(
+    # Coalesce if a run is already queued or running — the worker will pick up
+    # the existing request; no need to stack another.
+    existing = await db.execute(
         sa.text(
-            "SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"
+            "SELECT id FROM job_run WHERE kind = :kind"
+            " AND status IN ('pending', 'in_progress')"
+            " ORDER BY created_at DESC LIMIT 1"
         ),
         {"kind": str(job_kind)},
     )
-    active_row = active_result.first()
-    if active_row is not None:
-        return JobRef(run_id=str(active_row[0]), coalesced=True)
+    ex_row = existing.first()
+    if ex_row is not None:
+        return JobRef(run_id=str(ex_row[0]), coalesced=True)
 
-    run_id = await claim_job(db, kind=job_kind)
-    if run_id is None:
-        existing = await db.execute(
-            sa.text(
-                "SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"
-            ),
-            {"kind": str(job_kind)},
-        )
-        ex_row = existing.first()
-        existing_id = str(ex_row[0]) if ex_row else str(uuid.uuid4())
-        return JobRef(run_id=existing_id, coalesced=True)
-
+    # Enqueue a pending request; the on-demand validation worker claims and
+    # executes it on its next poll (AUD-313).
+    run_id = await enqueue_job(db, kind=job_kind)
     await db.commit()
     return JobRef(run_id=str(run_id), coalesced=False)

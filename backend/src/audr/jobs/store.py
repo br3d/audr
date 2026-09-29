@@ -152,6 +152,84 @@ async def claim_job(
     return run_id
 
 
+async def enqueue_job(
+    session: AsyncSession,
+    *,
+    kind: JobKind,
+    max_retries: int = 3,
+) -> uuid.UUID:
+    """Insert a ``pending`` job run as an on-demand queue entry.
+
+    Unlike :func:`claim_job` (which starts a run immediately as ``in_progress``),
+    this only records a request.  A worker running :func:`claim_pending_job`
+    picks it up on its next poll and executes it.  Used for interactively
+    triggered jobs such as integration validation (AUD-313).
+    """
+    run_id = uuid.uuid4()
+    await session.execute(
+        sa.text(
+            "INSERT INTO job_run (id, kind, status, max_retries)"
+            " VALUES (:id, :kind, 'pending', :max_retries)"
+        ),
+        {"id": run_id, "kind": kind.value, "max_retries": max_retries},
+    )
+    await session.flush()
+    return run_id
+
+
+async def claim_pending_job(
+    session: AsyncSession,
+    *,
+    kind: JobKind,
+    worker_id: str | None = None,
+) -> uuid.UUID | None:
+    """Claim the oldest ``pending`` run of *kind* and move it to ``in_progress``.
+
+    For on-demand jobs (validation) whose queue entries are created by
+    :func:`enqueue_job`.  Returns the resumed run ID, or None if nothing is
+    pending or a run of this kind is already active.  Never inserts a new run,
+    so the worker stays idle until a request is actually enqueued.
+    """
+    # Reclaim any lease abandoned by a crashed worker before checking activity.
+    await _expire_stale_leases(session, kind=kind)
+
+    active = await session.execute(
+        sa.text(
+            "SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"
+        ),
+        {"kind": kind.value},
+    )
+    if active.first() is not None:
+        return None
+
+    now = datetime.now(tz=UTC)
+    claimed = await session.execute(
+        sa.text(
+            """
+            UPDATE job_run
+            SET status = 'in_progress',
+                worker_id = :worker_id,
+                claimed_at = :now,
+                heartbeat_at = :now
+            WHERE id = (
+                SELECT id FROM job_run
+                WHERE kind = :kind AND status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id
+            """
+        ),
+        {"kind": kind.value, "worker_id": worker_id, "now": now},
+    )
+    row = claimed.first()
+    if row is None:
+        return None
+    await session.flush()
+    return row[0]
+
+
 async def heartbeat(session: AsyncSession, *, run_id: uuid.UUID) -> None:
     """Advance the heartbeat timestamp for *run_id* to prevent lease expiry."""
     await session.execute(

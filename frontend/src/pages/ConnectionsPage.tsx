@@ -28,9 +28,11 @@ function healthBadge(status: IntegrationEntry['health']['status']) {
 function RpcForm({
   current,
   onSaved,
+  onValidated,
 }: {
   current: IntegrationEntry | null
   onSaved: () => void
+  onValidated: () => void
 }) {
   const [url, setUrl] = useState('')
   const [allowPrivate, setAllowPrivate] = useState(false)
@@ -67,6 +69,7 @@ function RpcForm({
     try {
       await validateIntegration('rpc')
       setValidateMsg('Validation job queued.')
+      onValidated()
     } catch (err) {
       setValidateMsg(
         err instanceof ApiError ? `Validation failed: ${err.message}` : 'Validation failed.',
@@ -181,9 +184,11 @@ function RpcForm({
 function QuotesForm({
   current,
   onSaved,
+  onValidated,
 }: {
   current: IntegrationEntry | null
   onSaved: () => void
+  onValidated: () => void
 }) {
   const [provider, setProvider] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -220,6 +225,7 @@ function QuotesForm({
     try {
       await validateIntegration('quotes')
       setValidateMsg('Validation job queued.')
+      onValidated()
     } catch (err) {
       setValidateMsg(
         err instanceof ApiError ? `Validation failed: ${err.message}` : 'Validation failed.',
@@ -334,6 +340,10 @@ export default function ConnectionsPage() {
   const { data, error, isLoading } = useQuery({
     queryKey: ['integrations'],
     queryFn: fetchIntegrations,
+    // While a validation job is in flight, poll so the badge advances from
+    // "Validating…" to OK/Error without a manual reload (AUD-313).
+    refetchInterval: (query) =>
+      query.state.data?.items.some((i) => i.health.status === 'validating') ? 2000 : false,
   })
 
   const rpc = data?.items.find((i) => i.kind === 'rpc') ?? null
@@ -366,8 +376,8 @@ export default function ConnectionsPage() {
         Configure the Ethereum RPC endpoint and price quote provider. No wallet connection,
         private key, or seed phrase is ever requested.
       </p>
-      <RpcForm current={rpc} onSaved={handleRpcSaved} />
-      <QuotesForm current={quotes} onSaved={handleQuotesSaved} />
+      <RpcForm current={rpc} onSaved={handleRpcSaved} onValidated={handleRpcSaved} />
+      <QuotesForm current={quotes} onSaved={handleQuotesSaved} onValidated={handleQuotesSaved} />
     </div>
   )
 }
