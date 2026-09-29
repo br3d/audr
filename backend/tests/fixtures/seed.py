@@ -9,6 +9,7 @@ Constants
 BUTERIN_ADDRESS  – Vitalik Buterin's well-known Ethereum address (lowercase).
 BUTERIN_LABEL    – Display name stored with the wallet.
 TEST_PASSWORD    – Owner initialisation password.
+MAINNET_RPC_URL  – Infura mainnet JSON-RPC endpoint used to seed the RPC integration.
 WETH/USDC/USDT/DAI/LINK/UNI/AAVE constants – mainnet ERC-20 addresses.
 
 Fixtures
@@ -39,6 +40,7 @@ from audr.db import get_db
 BUTERIN_ADDRESS: str = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
 BUTERIN_LABEL: str = "Buterin"
 TEST_PASSWORD: str = "Rand0mP@ssw0rd"
+MAINNET_RPC_URL: str = "https://mainnet.infura.io/v3/4b1e7340470f489dbb76684df2861a9b"
 
 # Well-known mainnet ERC-20 token addresses (all lowercase).
 WETH_ADDRESS: str = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"

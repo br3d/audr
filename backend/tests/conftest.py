@@ -23,6 +23,7 @@ from tests.fixtures.seed import (  # noqa: F401
     BUTERIN_LABEL,
     DAI_ADDRESS,
     LINK_ADDRESS,
+    MAINNET_RPC_URL,
     SEED_ASSETS,
     TEST_PASSWORD,
     UNI_ADDRESS,
