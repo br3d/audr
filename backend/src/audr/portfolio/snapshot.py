@@ -233,9 +233,10 @@ async def _get_latest_prices(session: AsyncSession) -> dict[uuid.UUID, Decimal]:
             JOIN quote_set qs ON qs.id = qo.quote_set_id
             WHERE qs.status = 'complete'
               AND qs.fetched_at = (
-                  SELECT MAX(fetched_at)
-                  FROM quote_set
-                  WHERE status = 'complete'
+                  SELECT MAX(qs2.fetched_at)
+                  FROM quote_set qs2
+                  JOIN quote_observation qo2 ON qo2.quote_set_id = qs2.id
+                  WHERE qs2.status = 'complete'
               )
             """
         )

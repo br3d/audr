@@ -673,3 +673,69 @@ async def test_quote_refresh_fenced_on_cancelled_run(
                 await s.execute(
                     text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
                 )
+
+
+@pytest.mark.integration
+async def test_quote_refresh_marks_empty_on_zero_observations(
+    db_session: AsyncSession,
+) -> None:
+    """handle_quote_refresh marks the quote_set 'empty' when no usable prices are returned.
+
+    Regression (AUD-273): zero-observation sets were previously marked 'complete', causing
+    _get_latest_prices to shadow earlier sets that had valid prices.
+
+    All rows are inserted within db_session (rolled-back transaction) so the fencing
+    checks in handle_quote_refresh find the job_run and integration without needing
+    separate committed sessions.
+    """
+    import httpx
+    from unittest.mock import AsyncMock, patch
+
+    run_id = uuid.uuid4()
+
+    # Asset with a non-zero balance so _get_held_asset_addresses returns it.
+    wallet_id = await _insert_wallet(db_session, "0xface" + "0" * 36)
+    asset_id = await _insert_asset(
+        db_session, token_address="0x" + "e1" * 20, symbol="ZEROPRICE"
+    )
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
+
+    # Fencing check needs an in_progress job_run and a coingecko integration.
+    await db_session.execute(
+        text(
+            "INSERT INTO job_run (id, kind, status, max_retries)"
+            " VALUES (:id, 'quote_refresh', 'in_progress', 3)"
+        ),
+        {"id": str(run_id)},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO integration (kind, encrypted_blob)"
+            " VALUES ('coingecko', :blob) ON CONFLICT (kind) DO NOTHING"
+        ),
+        {"blob": b"\x00"},
+    )
+    await db_session.flush()
+
+    with patch(
+        "audr.jobs.quotes.get_coingecko_api_key",
+        new=AsyncMock(return_value="fake-key"),
+    ):
+        with respx.mock(assert_all_called=False) as mock_router:
+            # CoinGecko returns no prices for any of the held tokens.
+            mock_router.get(url__regex=r"coingecko").mock(
+                return_value=httpx.Response(200, json={})
+            )
+            await handle_quote_refresh(db_session, run_id)
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT status FROM quote_set"
+                " WHERE provider = 'coingecko'"
+                " ORDER BY fetched_at DESC LIMIT 1"
+            )
+        )
+    ).first()
+    assert row is not None
+    assert row[0] == "empty", f"expected 'empty' but got '{row[0]}'"
