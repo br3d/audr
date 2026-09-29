@@ -1,5 +1,5 @@
-"""Worker process entrypoint — DISCOVERY, BALANCE_SCAN, QUOTE_REFRESH, and
-on-demand VALIDATE_RPC / VALIDATE_QUOTES job handlers (AUD-244/AUD-67/AUD-313)."""
+"""Worker process entrypoint — DISCOVERY, BALANCE_SCAN, QUOTE_REFRESH, EVENT_INDEXER, and
+on-demand VALIDATE_RPC / VALIDATE_QUOTES job handlers (AUD-244/AUD-67/AUD-307/AUD-313)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from audr.assets.catalog import import_catalog
 from audr.db import _get_session_factory
 from audr.jobs.canonicality import recheck_canonicality
+from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import JobKind
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
@@ -195,6 +196,7 @@ async def _main() -> None:
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
+    event_worker = Worker(factory, kind=JobKind.EVENT_INDEXER, handler=handle_event_indexer)
     # Valuation runs on-demand: enqueued by handle_quote_refresh after each
     # successful quote refresh so snapshots are produced in step with price data.
     valuation_worker = Worker(
@@ -218,6 +220,7 @@ async def _main() -> None:
             did_work = await discovery_worker.run_once()
             did_work |= await balance_worker.run_once()
             did_work |= await quote_worker.run_once()
+            did_work |= await event_worker.run_once()
             did_work |= await valuation_worker.run_once()
             did_work |= await validate_rpc_worker.run_once()
             did_work |= await validate_quotes_worker.run_once()

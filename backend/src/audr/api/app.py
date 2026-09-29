@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from audr.api.auth import router as auth_router
 from audr.api.errors import unhandled_exception_handler
+from audr.api.events import router as events_router
 from audr.api.health import router as health_router
 from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(history_router)
     app.include_router(integrations_router)
     app.include_router(settings_router)
+    app.include_router(events_router)
 
     return app
 
