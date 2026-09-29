@@ -98,6 +98,24 @@ class SettingsPatch(BaseModel):
     schedules: dict[str, SettingsSchedulePatch] | None = None
 
 
+def _validate_schedule_patch(patch: SettingsSchedulePatch) -> None:
+    """Raise HTTP 422 when interval_seconds or freshness_seconds are non-positive.
+
+    ``freshness_s`` (stored directly, no cron conversion) drives ``is_due``:
+    a value of 0 or less makes the schedule due on every check.
+    """
+    if patch.interval_seconds is not None and patch.interval_seconds <= 0:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="interval_seconds must be positive",
+        )
+    if patch.freshness_seconds is not None and patch.freshness_seconds <= 0:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="freshness_seconds must be positive",
+        )
+
+
 class DbStatus(BaseModel):
     status: str
 
@@ -242,7 +260,7 @@ async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
     schedules: dict[str, ScheduleConfig] = {}
     max_revision = 0
     for row in rows:
-        revision: int = row[4]
+        revision: int = row[3]
         kind_fe, config = _row_to_schedule_config(row)
         schedules[kind_fe] = config
         max_revision = max(max_revision, revision)
@@ -279,6 +297,7 @@ async def patch_settings(
 
     if body.schedules:
         for kind_fe, patch in body.schedules.items():
+            _validate_schedule_patch(patch)
             kind_db = _FE_TO_DB.get(kind_fe, kind_fe)
             freshness_s = patch.freshness_seconds if patch.freshness_seconds is not None else patch.interval_seconds
 
