@@ -6,6 +6,7 @@ CoinGecko API responses using respx HTTP mocks — no real network calls.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,7 @@ from httpx import Response
 from audr.providers.coingecko_demo import (
     CoinGeckoError,
     CoinGeckoProvider,
+    NewsItem,
     RateLimitError,
 )
 
@@ -210,6 +212,87 @@ async def test_get_token_prices_preserves_tiny_price_precision() -> None:
     assert prices[_USDC_ADDR] == expected, (
         f"precision lost: got {prices[_USDC_ADDR]!r}, expected {expected!r}"
     )
+
+
+@pytest.mark.contract
+async def test_get_news_parses_articles() -> None:
+    """get_news returns a NewsItem per well-formed article, oldest fields intact."""
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/news").mock(
+            return_value=Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "1234",
+                            "title": "Ethereum rallies on upgrade news",
+                            "url": "https://example.com/eth-rally",
+                            "news_site": "Example News",
+                            "thumb_2x": "https://example.com/thumb.png",
+                            "updated_at": 1700000000,
+                        }
+                    ]
+                },
+            )
+        )
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        items = await provider.get_news()
+        await provider.close()
+
+    assert items == [
+        NewsItem(
+            external_id="1234",
+            title="Ethereum rallies on upgrade news",
+            url="https://example.com/eth-rally",
+            news_site="Example News",
+            published_at=datetime.fromtimestamp(1700000000, tz=UTC),
+            thumbnail_url="https://example.com/thumb.png",
+        )
+    ]
+
+
+@pytest.mark.contract
+async def test_get_news_sends_page_param() -> None:
+    """get_news forwards the page query parameter."""
+    with respx.mock() as mock:
+        route = mock.get(f"{_BASE}/news", params={"page": "2"}).mock(
+            return_value=Response(200, json={"data": []})
+        )
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        items = await provider.get_news(page=2)
+        await provider.close()
+
+    assert route.called
+    assert items == []
+
+
+@pytest.mark.contract
+async def test_get_news_skips_malformed_entries() -> None:
+    """Entries missing required fields are skipped, not raised."""
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/news").mock(
+            return_value=Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "1", "title": "No URL"},
+                        {
+                            "id": "2",
+                            "title": "Valid",
+                            "url": "https://example.com/valid",
+                            "news_site": "Example",
+                            "updated_at": 1700000000,
+                        },
+                    ]
+                },
+            )
+        )
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        items = await provider.get_news()
+        await provider.close()
+
+    assert len(items) == 1
+    assert items[0].external_id == "2"
 
 
 @pytest.mark.contract

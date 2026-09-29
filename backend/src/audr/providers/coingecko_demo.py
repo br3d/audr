@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -38,6 +40,18 @@ class CoinGeckoError(Exception):
 
 class RateLimitError(CoinGeckoError):
     """Raised when CoinGecko returns HTTP 429."""
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    """A single article from CoinGecko's /news feed."""
+
+    external_id: str
+    title: str
+    url: str
+    news_site: str
+    published_at: datetime
+    thumbnail_url: str | None = None
 
 
 class CoinGeckoProvider:
@@ -151,6 +165,24 @@ class CoinGeckoProvider:
 
         return prices
 
+    async def get_news(self, *, page: int = 1) -> list[NewsItem]:
+        """Return recent general crypto news articles from CoinGecko's /news feed.
+
+        The Demo tier does not support filtering by coin — callers match
+        articles to held assets by keyword (symbol/name) themselves. Articles
+        with an unparseable id, url, or timestamp are skipped rather than
+        raising, since a malformed article should not fail the whole page.
+        """
+        data = await self._get("/news", params={"page": str(page)})
+        items: list[NewsItem] = []
+        for entry in data.get("data", []):
+            if not isinstance(entry, dict):
+                continue
+            item = _parse_news_item(entry)
+            if item is not None:
+                items.append(item)
+        return items
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -171,6 +203,29 @@ def _check_response(response: httpx.Response) -> None:
         raise RateLimitError(429, "rate limited")
     if not response.is_success:
         raise CoinGeckoError(response.status_code)
+
+
+def _parse_news_item(entry: dict[str, Any]) -> NewsItem | None:
+    external_id = entry.get("id")
+    title = entry.get("title")
+    url = entry.get("url")
+    updated_at = entry.get("updated_at")
+    if not external_id or not title or not url or updated_at is None:
+        logger.warning("coingecko: skipping malformed news entry: %r", entry)
+        return None
+    try:
+        published_at = datetime.fromtimestamp(int(updated_at), tz=UTC)
+    except (TypeError, ValueError, OSError):
+        logger.warning("coingecko: unparseable news timestamp: %r", updated_at)
+        return None
+    return NewsItem(
+        external_id=str(external_id),
+        title=str(title),
+        url=str(url),
+        news_site=str(entry.get("news_site") or "coingecko"),
+        published_at=published_at,
+        thumbnail_url=str(entry["thumb_2x"]) if entry.get("thumb_2x") else None,
+    )
 
 
 def _extract_simple_price(data: dict[str, Any], coin_id: str) -> Decimal:
