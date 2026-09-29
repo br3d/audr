@@ -4,16 +4,16 @@ A successful provider call that returns no usable prices should be recorded
 as 'empty' rather than 'complete' so that _get_latest_prices never shadows
 an earlier set that carried real prices.
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: 0003
+Revises: 0002
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0002"
-down_revision: str | None = "0001"
+revision = "0003"
+down_revision: str | None = "0002"
 branch_labels = None
 depends_on = None
 
