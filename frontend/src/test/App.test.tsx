@@ -272,4 +272,72 @@ describe('App routing and auth guard', () => {
       { timeout: 1000 },
     )
   })
+
+  it('unauthenticated boot fetches session exactly once — no infinite loop', async () => {
+    mockSession.mockRejectedValue(new AuthError())
+    const qc = makeQueryClient()
+    qc.setQueryData(['setup-status'], { setup_required: false })
+
+    // Capture the registered callback so we can invoke it directly below
+    let capturedCallback: (() => void) | undefined
+    mockSetUnauthorizedCallback.mockImplementationOnce((cb: () => void) => {
+      capturedCallback = cb
+    })
+
+    await act(async () => {
+      root.render(
+        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
+      )
+    })
+    await vi.waitFor(
+      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
+      { timeout: 1000 },
+    )
+
+    // Exactly one session fetch; retry is disabled for AuthError
+    expect(mockSession).toHaveBeenCalledTimes(1)
+
+    // Simulating a 401 callback while session is in error state must be a no-op
+    // (the guard prevents a reset when status !== 'success')
+    expect(capturedCallback).toBeDefined()
+    await act(async () => {
+      capturedCallback?.()
+    })
+    // Still exactly one fetch — no second reset/refetch triggered
+    expect(mockSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('unauthorized callback is no-op when session is already in error state', async () => {
+    // Session is pre-populated as success so initial render is synchronous,
+    // then any real fetch after a reset will fail with AuthError
+    mockSession.mockRejectedValue(new AuthError())
+    const qc = makeQueryClient()
+    qc.setQueryData(['setup-status'], { setup_required: false })
+    qc.setQueryData(['session'], SESSION_OK)
+
+    let capturedCallback: (() => void) | undefined
+    mockSetUnauthorizedCallback.mockImplementationOnce((cb: () => void) => {
+      capturedCallback = cb
+    })
+
+    await act(async () => {
+      root.render(
+        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
+      )
+    })
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
+
+    // First callback invocation: session is 'success' → triggers reset → session enters error
+    await act(async () => { capturedCallback?.() })
+    await vi.waitFor(
+      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
+      { timeout: 1000 },
+    )
+    const fetchCountAfterFirst = mockSession.mock.calls.length
+
+    // Second callback invocation: session is now 'error' → guard blocks → no additional fetches
+    await act(async () => { capturedCallback?.() })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockSession).toHaveBeenCalledTimes(fetchCountAfterFirst)
+  })
 })
