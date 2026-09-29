@@ -112,7 +112,7 @@ async def test_add_wallet_returns_201(http_client: httpx.AsyncClient) -> None:
     data = r.json()
     assert data["address"] == _ADDR_A
     assert data["label"] == "My Wallet"
-    assert data["status"] == "active"
+    assert data["tracking_active"] is True
     assert "id" in data
 
 
@@ -159,7 +159,7 @@ async def test_list_wallets_empty(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_get_csrf(http_client)
     r = await http_client.get(_WALLETS_URL, headers={"x-csrf-token": csrf})
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["items"] == []
 
 
 @pytest.mark.integration
@@ -169,7 +169,7 @@ async def test_list_wallets_returns_added_wallets(http_client: httpx.AsyncClient
     await _add_wallet(http_client, csrf, address=_ADDR_B, label="B")
     r = await http_client.get(_WALLETS_URL, headers={"x-csrf-token": csrf})
     assert r.status_code == 200
-    addresses = [w["address"] for w in r.json()]
+    addresses = [w["address"] for w in r.json()["items"]]
     assert _ADDR_A in addresses
     assert _ADDR_B in addresses
 
@@ -234,7 +234,7 @@ async def test_stop_wallet(http_client: httpx.AsyncClient) -> None:
         f"{_WALLETS_URL}/{wallet_id}/stop", headers={"x-csrf-token": csrf}
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "stopped"
+    assert r.json()["tracking_active"] is False
 
 
 @pytest.mark.integration
@@ -249,7 +249,7 @@ async def test_reactivate_wallet(http_client: httpx.AsyncClient) -> None:
         f"{_WALLETS_URL}/{wallet_id}/reactivate", headers={"x-csrf-token": csrf}
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "active"
+    assert r.json()["tracking_active"] is True
 
 
 @pytest.mark.integration
