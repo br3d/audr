@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from audr.jobs.store import (
     JobKind,
     claim_job,
+    claim_pending_job,
     complete_job,
     fail_job,
     heartbeat,
@@ -35,6 +36,7 @@ class Worker:
         worker_id: str | None = None,
         max_retries: int = 3,
         heartbeat_interval: float = _HEARTBEAT_INTERVAL_S,
+        on_demand: bool = False,
     ) -> None:
         self._factory = session_factory
         self._kind = kind
@@ -42,6 +44,9 @@ class Worker:
         self._worker_id = worker_id or str(uuid.uuid4())
         self._max_retries = max_retries
         self._heartbeat_interval = heartbeat_interval
+        # On-demand workers only run queued (pending) requests instead of
+        # starting a fresh run each poll — used for interactive validation jobs.
+        self._on_demand = on_demand
         self._stop_event: asyncio.Event = asyncio.Event()
 
     def stop(self) -> None:
@@ -50,12 +55,19 @@ class Worker:
     async def run_once(self) -> bool:
         """Claim and execute one job.  Returns True if a job was processed."""
         async with self._factory() as session:
-            run_id = await claim_job(
-                session,
-                kind=self._kind,
-                max_retries=self._max_retries,
-                worker_id=self._worker_id,
-            )
+            if self._on_demand:
+                run_id = await claim_pending_job(
+                    session,
+                    kind=self._kind,
+                    worker_id=self._worker_id,
+                )
+            else:
+                run_id = await claim_job(
+                    session,
+                    kind=self._kind,
+                    max_retries=self._max_retries,
+                    worker_id=self._worker_id,
+                )
             if run_id is None:
                 return False
             await session.commit()

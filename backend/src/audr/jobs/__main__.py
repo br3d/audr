@@ -1,4 +1,5 @@
-"""Worker process entrypoint — DISCOVERY, BALANCE_SCAN, and QUOTE_REFRESH job handlers (AUD-244/AUD-67)."""
+"""Worker process entrypoint — DISCOVERY, BALANCE_SCAN, QUOTE_REFRESH, and
+on-demand VALIDATE_RPC / VALIDATE_QUOTES job handlers (AUD-244/AUD-67/AUD-313)."""
 
 from __future__ import annotations
 
@@ -11,9 +12,10 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.db import _get_session_factory
-from audr.jobs.store import JobKind
-from audr.jobs.worker import Worker
 from audr.jobs.quotes import handle_quote_refresh
+from audr.jobs.store import JobKind
+from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
+from audr.jobs.worker import Worker
 from audr.portfolio.balances import record_balance
 from audr.portfolio.discovery import (
     discover_tokens,
@@ -151,6 +153,17 @@ async def _main() -> None:
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
+    # On-demand validation workers — only run when a request is enqueued from
+    # the Connections settings page (AUD-313).
+    validate_rpc_worker = Worker(
+        factory, kind=JobKind.VALIDATE_RPC, handler=handle_validate_rpc, on_demand=True
+    )
+    validate_quotes_worker = Worker(
+        factory,
+        kind=JobKind.VALIDATE_QUOTES,
+        handler=handle_validate_quotes,
+        on_demand=True,
+    )
 
     logger.info("worker started")
     while not stop.is_set():
@@ -158,6 +171,8 @@ async def _main() -> None:
             did_work = await discovery_worker.run_once()
             did_work |= await balance_worker.run_once()
             did_work |= await quote_worker.run_once()
+            did_work |= await validate_rpc_worker.run_once()
+            did_work |= await validate_quotes_worker.run_once()
         except Exception:
             logger.exception("worker poll error")
             did_work = False
