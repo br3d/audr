@@ -22,7 +22,7 @@ services:
       - internal
 
   migrate:
-    image: 192.168.1.90:8085/audr-backend:latest
+    image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -44,7 +44,7 @@ services:
     restart: "no"
 
   init:
-    image: 192.168.1.90:8085/audr-backend:latest
+    image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -62,7 +62,7 @@ services:
     restart: "no"
 
   api:
-    image: 192.168.1.90:8085/audr-backend:latest
+    image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -84,7 +84,7 @@ services:
       - internal
 
   web:
-    image: 192.168.1.90:8085/audr-frontend:latest
+    image: 192.168.1.90:8085/audr-frontend:${FRONTEND_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -99,7 +99,7 @@ services:
       - internal
 
   worker:
-    image: 192.168.1.90:8085/audr-backend:latest
+    image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
     restart: unless-stopped
     command: ["python", "-m", "audr.jobs"]
     environment:
