@@ -8,7 +8,7 @@ import {
   ApiError,
 } from '../api/client'
 import type { WalletItem } from '../api/client'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { IconPlus, IconX, IconRefresh } from '../components/Icons'
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
@@ -158,7 +158,7 @@ function WalletCard({
     setError(null)
     setSaving(true)
     try {
-      await patchWallet(wallet.id, { label: label.trim() || undefined })
+      await patchWallet(wallet.id, { label: label.trim() || null })
       setEditing(false)
       onChanged()
     } catch (err) {
@@ -286,9 +286,18 @@ export default function WalletsPage() {
   const [jobError, setJobError] = useState<string | null>(null)
   const [jobMsg, setJobMsg] = useState<string | null>(null)
 
-  const { data, error, isLoading } = useQuery({
+  const {
+    data,
+    error,
+    isLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['wallets'],
-    queryFn: () => fetchWallets(),
+    queryFn: ({ pageParam }) => fetchWallets(pageParam as string | undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
 
   function invalidate() {
@@ -336,7 +345,7 @@ export default function WalletsPage() {
     )
   }
 
-  const wallets = data?.items ?? []
+  const wallets = data?.pages.flatMap((p) => p.items) ?? []
 
   return (
     <div>
@@ -382,11 +391,25 @@ export default function WalletsPage() {
           <div className="empty-state-hint">Add an Ethereum address to get started.</div>
         </div>
       ) : (
-        <ul className="wallet-grid" aria-label="Tracked addresses">
-          {wallets.map((w) => (
-            <WalletCard key={w.id} wallet={w} onChanged={invalidate} />
-          ))}
-        </ul>
+        <>
+          <ul className="wallet-grid" aria-label="Tracked addresses">
+            {wallets.map((w) => (
+              <WalletCard key={w.id} wallet={w} onChanged={invalidate} />
+            ))}
+          </ul>
+          {hasNextPage && (
+            <div className="mt-16" style={{ textAlign: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void fetchNextPage()}
+                disabled={isFetchingNextPage}
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {showModal && (
