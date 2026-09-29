@@ -1,7 +1,7 @@
 """On-chain event log and indexer checkpoint tables (AUD-307).
 
-Revision ID: 008
-Revises: 007
+Revision ID: 0004
+Revises: 0003
 Create Date: 2026-09-28
 """
 
@@ -10,8 +10,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "008"
-down_revision = "007"
+revision = "0004"
+down_revision = "0003"
 branch_labels = None
 depends_on = None
 
