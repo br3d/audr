@@ -90,22 +90,22 @@ async def test_migration_failure_returns_readiness_false(
 ) -> None:
     """check_migration_readiness returns up_to_date=False when DB is behind head.
 
-    Simulates a database pinned at revision "004" while the codebase has advanced
-    to "007".  The head revision is patched so the test is environment-independent.
+    Simulates a database pinned at an old revision while the codebase has advanced
+    to a newer one.  The head revision is patched so the test is environment-independent.
     """
     # Force the recorded schema revision to an old value (rolled back after the test).
     await db_session.execute(text("DELETE FROM alembic_version"))
     await db_session.execute(
-        text("INSERT INTO alembic_version (version_num) VALUES ('004')")
+        text("INSERT INTO alembic_version (version_num) VALUES ('0000_stale')")
     )
     await db_session.flush()
 
-    with patch("audr.operations.migrations._get_head_revision", return_value="007"):
+    with patch("audr.operations.migrations._get_head_revision", return_value="0001"):
         result = await check_migration_readiness(db_session)
 
     assert result["up_to_date"] is False
-    assert result["current"] == "004"
-    assert result["head"] == "007"
+    assert result["current"] == "0000_stale"
+    assert result["head"] == "0001"
 
 
 async def test_migration_readiness_up_to_date(
