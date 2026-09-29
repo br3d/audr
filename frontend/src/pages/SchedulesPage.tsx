@@ -39,7 +39,7 @@ interface ScheduleCardProps {
   disabled: boolean
 }
 
-function ScheduleCard({
+export function ScheduleCard({
   id,
   label,
   kind,
@@ -49,7 +49,16 @@ function ScheduleCard({
   onChange,
   disabled,
 }: ScheduleCardProps) {
+  const [draftValue, setDraftValue] = useState<string | null>(null)
   const warning = costWarning(intervalSeconds, kind)
+
+  function commitDraft() {
+    if (draftValue === null) return
+    const v = parseInt(draftValue, 10)
+    const clamped = isNaN(v) ? intervalSeconds : Math.min(86400, Math.max(30, v))
+    onChange(clamped, enabled)
+    setDraftValue(null)
+  }
 
   return (
     <div className="schedule-card">
@@ -82,12 +91,17 @@ function ScheduleCard({
               min={30}
               max={86400}
               step={30}
-              value={intervalSeconds}
+              value={draftValue !== null ? draftValue : String(intervalSeconds)}
               disabled={disabled}
               style={{ maxWidth: 160 }}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10)
-                if (!isNaN(v) && v >= 30) onChange(v, enabled)
+              onFocus={() => setDraftValue(String(intervalSeconds))}
+              onChange={(e) => setDraftValue(e.target.value)}
+              onBlur={() => commitDraft()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitDraft()
+                }
               }}
               aria-describedby={warning ? `${id}-warning` : undefined}
             />
