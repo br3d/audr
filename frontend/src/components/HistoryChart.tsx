@@ -42,18 +42,24 @@ function formatTooltipValue(value: number | null): string {
   return '$' + new Decimal(value).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
+export function buildChartData(points: HistoryPoint[]): ChartDatum[] {
+  return [...points]
+    .sort((a, b) => a.snapshotted_at.localeCompare(b.snapshotted_at))
+    .map((p) => ({
+      snapshotted_at: p.snapshotted_at,
+      // parseFloat is acceptable here: chart rendering does not require decimal precision
+      value: p.total_value_usd !== null ? parseFloat(p.total_value_usd) : null,
+      has_gap: p.has_gap,
+      quality: p.quality,
+    }))
+}
+
 export default function HistoryChart({ points }: Props) {
   if (points.length === 0) {
     return <p role="note">No history data available for this range.</p>
   }
 
-  const data: ChartDatum[] = points.map((p) => ({
-    snapshotted_at: p.snapshotted_at,
-    // parseFloat is acceptable here: chart rendering does not require decimal precision
-    value: p.total_value_usd !== null ? parseFloat(p.total_value_usd) : null,
-    has_gap: p.has_gap,
-    quality: p.quality,
-  }))
+  const data = buildChartData(points)
 
   const gapTimestamps = data.filter((d) => d.has_gap).map((d) => d.snapshotted_at)
 
