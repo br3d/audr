@@ -1,0 +1,194 @@
+name: Build & Deploy (guarded)
+
+# Guarded build + auto-deploy pipeline for the audr stack (AUD-294).
+#
+# One serialized job on the self-hosted host runner (192.168.1.228, which is
+# also the deploy host). Build and deploy live in ONE job so ordering and image
+# freshness are guaranteed — no cross-workflow race.
+#
+# Serialization used to come for free from the runner's capacity of 1. That
+# capacity is now 2 (AUD-310 item 2, so CI jobs stop queueing behind each
+# other), which would let two pushes to main deploy concurrently against the
+# same live stack, the same :rollback tag and the same Harbor :latest. The
+# `concurrency` group below restores the guarantee explicitly and is shared
+# with build.yaml, the other workflow that moves :latest.
+#
+# Safety guards (added after the 2026-09-28 auto-deploy outage):
+#   1. Secrets preflight — refuses to deploy if ~/audr/.env or the db_password
+#      secret is missing. The stack's DB password is fixed at DB init; a missing
+#      /regenerated secret is exactly what caused the "password authentication
+#      failed" outage, so we hard-fail instead of proceeding.
+#   2. Rollback snapshot — the currently-running :latest images are retagged
+#      :rollback before anything changes.
+#   3. Migration applied via the compose `migrate` service (alembic upgrade head).
+#   4. Health-gate — waits for THREE signals: the api container healthcheck
+#      (/health/live inside the container), a public GET /health/ready through
+#      nginx returning `"status":"ok"` (real DB + master-key check — a bare
+#      /health or / would be answered by the SPA fallback even with a dead API,
+#      see AUD-328), and the web port :80 serving the SPA.
+#   5. Auto-rollback — any failure after the snapshot restores the previous
+#      images and brings the stack back up.
+#   6. Harbor :latest is only advanced AFTER the health-gate passes, so a failed
+#      deploy never leaves a poisoned :latest in the registry.
+#
+# Triggers: push to main (guarded auto-deploy), release tags v*, and manual
+# workflow_dispatch. Harbor (192.168.1.90:8085) is anonymous — no docker login.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to build & deploy (default: commit sha)'
+        required: false
+        default: ''
+  push:
+    branches: [main]
+    tags: ['v*']
+
+# Never cancel a deploy in flight: a build-deploy job killed between the
+# rollback snapshot and the health-gate would leave the stack half-changed with
+# no one left to roll it back. Queue instead.
+concurrency:
+  group: audr-deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: 192.168.1.90:8085
+  DEPLOY_DIR: /home/codex/audr
+
+jobs:
+  build-deploy:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tags
+        id: meta
+        run: |
+          sha="${GITHUB_SHA:0:12}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$sha" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build images
+        run: |
+          set -euo pipefail
+          docker build --target runtime \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}" .
+          docker build --target frontend-server \
+            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.tag }}" .
+
+      - name: Push build tag to Harbor
+        run: |
+          set -euo pipefail
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}"
+          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.tag }}"
+
+      - name: Sync compose file to deploy dir
+        run: |
+          set -euo pipefail
+          cp compose.yaml "$DEPLOY_DIR/compose.yaml"
+
+      - name: Guarded deploy
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          REGISTRY="192.168.1.90:8085"
+          DEPLOY_DIR="/home/codex/audr"
+          BACKEND="$REGISTRY/audr-backend"
+          FRONTEND="$REGISTRY/audr-frontend"
+          HEALTH_RETRIES="${HEALTH_RETRIES:-40}"
+          HEALTH_SLEEP="${HEALTH_SLEEP:-3}"
+          log(){ echo "[deploy $(date -u +%FT%TZ)] $*"; }
+
+          cd "$DEPLOY_DIR"
+
+          # ---- 1. secrets preflight (NEVER regenerate) ----------------------
+          log "Preflight in $DEPLOY_DIR (tag=$TAG)"
+          [ -f .env ] || { log "FATAL: .env missing — refusing (would break DB auth)"; exit 2; }
+          [ -f secrets/db_password.txt ] || { log "FATAL: secrets/db_password.txt missing"; exit 2; }
+          grep -q '^DB_PASSWORD=' .env  || { log "FATAL: DB_PASSWORD missing in .env"; exit 2; }
+          grep -q '^SECRET_KEY=' .env   || { log "FATAL: SECRET_KEY missing in .env"; exit 2; }
+
+          # DB must be reachable before we touch the stack.
+          docker compose up -d db
+          for i in $(seq 1 20); do
+            if docker compose exec -T db pg_isready -U audr -d audr >/dev/null 2>&1; then break; fi
+            [ "$i" = 20 ] && { log "FATAL: db not ready"; exit 2; }
+            sleep 2
+          done
+          log "db reachable"
+
+          # ---- 2. rollback snapshot -----------------------------------------
+          for repo in "$BACKEND" "$FRONTEND"; do
+            if docker image inspect "$repo:latest" >/dev/null 2>&1; then
+              docker tag "$repo:latest" "$repo:rollback"
+              log "snapshot $repo:latest -> :rollback"
+            fi
+          done
+
+          rollback(){
+            log "!! FAILURE — rolling back to previous images"
+            for repo in "$BACKEND" "$FRONTEND"; do
+              if docker image inspect "$repo:rollback" >/dev/null 2>&1; then
+                docker tag "$repo:rollback" "$repo:latest"
+              fi
+            done
+            docker compose up -d --remove-orphans || true
+            log "rollback complete"
+          }
+          trap 'rollback; exit 1' ERR
+
+          # ---- 3. pull new images, retag local :latest ----------------------
+          log "Pulling $TAG"
+          docker pull "$BACKEND:$TAG"
+          docker pull "$FRONTEND:$TAG"
+          docker tag "$BACKEND:$TAG"  "$BACKEND:latest"
+          docker tag "$FRONTEND:$TAG" "$FRONTEND:latest"
+
+          # ---- 4. migrations (alembic upgrade head) -------------------------
+          log "Running migrations"
+          docker compose run --rm migrate
+
+          # ---- 5. deploy ----------------------------------------------------
+          log "Recreating services"
+          docker compose up -d --remove-orphans
+
+          # ---- 6. health-gate ----------------------------------------------
+          # Three independent signals (AUD-328). The old gate paired the api
+          # container healthcheck with `curl http://localhost:80/`, but nginx
+          # proxies only `^/(api|health)/` (trailing slash) and serves
+          # index.html for everything else — so the :80 check passes even with
+          # the api container dead, and contributed nothing. The public-path
+          # signal is now /health/ready (matches the proxy regex, does a real
+          # DB + master-key check) with a body assertion, so an SPA fallback
+          # response can never satisfy the gate.
+          log "Health-gate"
+          ok=0
+          for i in $(seq 1 "$HEALTH_RETRIES"); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' audr-api-1 2>/dev/null || echo none)"
+            ready="$(curl -s -m 5 http://localhost:80/health/ready 2>/dev/null || true)"
+            spa_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:80/ 2>/dev/null || echo 000)"
+            case "$ready" in *'"status":"ok"'*) ready_ok=1 ;; *) ready_ok=0 ;; esac
+            if [ "$state" = healthy ] && [ "$ready_ok" = 1 ] && [ "$spa_code" = 200 ]; then
+              ok=1; log "healthy on attempt $i (api=$state ready=ok web=$spa_code)"; break
+            fi
+            sleep "$HEALTH_SLEEP"
+          done
+          if [ "$ok" != 1 ]; then
+            log "health-gate FAILED (api state=$state web=$spa_code ready=${ready:-<none>})"
+            docker compose ps || true
+            false
+          fi
+
+          trap - ERR
+
+          # ---- 7. advance Harbor :latest ONLY after health passes -----------
+          docker push "$BACKEND:latest"  || log "warn: push $BACKEND:latest failed"
+          docker push "$FRONTEND:latest" || log "warn: push $FRONTEND:latest failed"
+          log "Deploy OK — tag=$TAG"
