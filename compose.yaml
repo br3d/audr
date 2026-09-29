@@ -36,7 +36,12 @@ services:
         condition: service_healthy
     networks:
       - internal
-    restart: on-failure
+    # One-shot. Must NOT restart: `init`/`api` wait on it with
+    # service_completed_successfully, so an unbounded `restart: on-failure`
+    # turns a failed migration into a `docker compose up` that blocks forever
+    # instead of an error (2026-09-29 outage: the deploy job hung 2h18m mid
+    # rollback and held the audr-deploy lock). Fail fast, let the deploy roll back.
+    restart: "no"
 
   init:
     image: 192.168.1.90:8085/audr-backend:latest
@@ -53,7 +58,8 @@ services:
         condition: service_completed_successfully
     networks:
       - internal
-    restart: on-failure
+    # One-shot, same reasoning as `migrate` above.
+    restart: "no"
 
   api:
     image: 192.168.1.90:8085/audr-backend:latest
