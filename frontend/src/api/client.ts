@@ -375,7 +375,7 @@ export function addWallet(input: AddWalletInput): Promise<WalletItem> {
 }
 
 export interface PatchWalletInput {
-  label?: string
+  label?: string | null
   tracking_active?: boolean
 }
 

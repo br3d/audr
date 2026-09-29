@@ -7,7 +7,7 @@ import {
   ApiError,
 } from '../api/client'
 import type { AssetItem } from '../api/client'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { IconSearch, IconPlus, IconX } from '../components/Icons'
 
 function AddManualAssetForm({
@@ -267,9 +267,19 @@ export default function AssetsPage() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [search, setSearch] = useState('')
 
-  const { data, error, isLoading } = useQuery({
+  const {
+    data,
+    error,
+    isLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['assets', showExcluded],
-    queryFn: () => fetchAssets(showExcluded ? true : undefined),
+    queryFn: ({ pageParam }) =>
+      fetchAssets(showExcluded ? true : undefined, pageParam as string | undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
 
   function invalidate() {
@@ -289,9 +299,9 @@ export default function AssetsPage() {
     )
   }
 
-  const assets = data?.items ?? []
+  const assets = data?.pages.flatMap((p) => p.items) ?? []
   const conflictCount = assets.filter((a) => a.has_metadata_conflict).length
-  const excludedCount = data?.items.filter((a) => a.excluded).length ?? 0
+  const excludedCount = assets.filter((a) => a.excluded).length
 
   const filtered = search.trim()
     ? assets.filter((a) => {
@@ -361,25 +371,39 @@ export default function AssetsPage() {
           </div>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="table-folio" aria-label="Assets">
-            <thead>
-              <tr>
-                <th scope="col">Symbol</th>
-                <th scope="col">Name</th>
-                <th scope="col">Type</th>
-                <th scope="col">Contract</th>
-                <th scope="col">Decimals</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((a) => (
-                <AssetRow key={a.id} asset={a} onChanged={invalidate} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="table-container">
+            <table className="table-folio" aria-label="Assets">
+              <thead>
+                <tr>
+                  <th scope="col">Symbol</th>
+                  <th scope="col">Name</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Contract</th>
+                  <th scope="col">Decimals</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((a) => (
+                  <AssetRow key={a.id} asset={a} onChanged={invalidate} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {hasNextPage && (
+            <div className="mt-16" style={{ textAlign: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void fetchNextPage()}
+                disabled={isFetchingNextPage}
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {showAddForm && (

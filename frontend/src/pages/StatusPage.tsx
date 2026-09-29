@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchStatus, fetchJobs, cancelJob, triggerJob, ApiError } from '../api/client'
 import type { StatusResponse, JobRun } from '../api/client'
 
@@ -203,9 +203,11 @@ export default function StatusPage() {
     refetchInterval: 15000,
   })
 
-  const jobsQuery = useQuery({
+  const jobsQuery = useInfiniteQuery({
     queryKey: ['jobs'],
-    queryFn: () => fetchJobs(),
+    queryFn: ({ pageParam }) => fetchJobs(undefined, pageParam as string | undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: 10000,
   })
 
@@ -291,32 +293,54 @@ export default function StatusPage() {
               : 'Please try again.'}
           </p>
         )}
-        {jobsQuery.data && jobsQuery.data.items.length === 0 && (
-          <div className="empty-state">
-            <div className="empty-state-text">No jobs have run yet</div>
-          </div>
-        )}
-        {jobsQuery.data && jobsQuery.data.items.length > 0 && (
-          <div className="table-container">
-            <table className="table-folio" aria-label="Job runs">
-              <thead>
-                <tr>
-                  <th scope="col">Kind</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Started</th>
-                  <th scope="col">Finished</th>
-                  <th scope="col">A/S/F</th>
-                  <th scope="col">Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobsQuery.data.items.map((job) => (
-                  <JobRow key={job.id} job={job} onCancelled={invalidateAll} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {(() => {
+          const jobs = jobsQuery.data?.pages.flatMap((p) => p.items) ?? []
+          if (jobsQuery.data && jobs.length === 0) {
+            return (
+              <div className="empty-state">
+                <div className="empty-state-text">No jobs have run yet</div>
+              </div>
+            )
+          }
+          if (jobs.length > 0) {
+            return (
+              <>
+                <div className="table-container">
+                  <table className="table-folio" aria-label="Job runs">
+                    <thead>
+                      <tr>
+                        <th scope="col">Kind</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Started</th>
+                        <th scope="col">Finished</th>
+                        <th scope="col">A/S/F</th>
+                        <th scope="col">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobs.map((job) => (
+                        <JobRow key={job.id} job={job} onCancelled={invalidateAll} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {jobsQuery.hasNextPage && (
+                  <div className="mt-16" style={{ textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void jobsQuery.fetchNextPage()}
+                      disabled={jobsQuery.isFetchingNextPage}
+                    >
+                      {jobsQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
+                    </button>
+                  </div>
+                )}
+              </>
+            )
+          }
+          return null
+        })()}
       </section>
     </div>
   )

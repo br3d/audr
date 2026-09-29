@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -50,59 +49,12 @@ _WORKER_STALE_MINUTES = 10
 
 
 # ---------------------------------------------------------------------------
-# Cron ↔ interval_seconds helpers
-# ---------------------------------------------------------------------------
-
-
-def _cron_to_seconds(cron_expr: str) -> int:
-    """Convert a simple cron expression to an interval in seconds.
-
-    Handles the common patterns produced by _seconds_to_cron; falls back to
-    croniter for anything else.
-    """
-    m = re.fullmatch(r"\*/(\d+) \* \* \* \*", cron_expr)
-    if m:
-        return int(m.group(1)) * 60
-    if cron_expr == "* * * * *":
-        return 60
-    if cron_expr == "0 * * * *":
-        return 3600
-    m = re.fullmatch(r"0 \*/(\d+) \* \* \*", cron_expr)
-    if m:
-        return int(m.group(1)) * 3600
-    if cron_expr == "0 0 * * *":
-        return 86400
-    m = re.fullmatch(r"0 0 \*/(\d+) \* \*", cron_expr)
-    if m:
-        return int(m.group(1)) * 86400
-    # Fallback: use croniter to compute one period length
-    from croniter import croniter as CronIter
-    it = CronIter(cron_expr, start_time=0)
-    t1: float = it.get_next(float)
-    t2: float = it.get_next(float)
-    return max(60, round(t2 - t1))
-
-
-def _seconds_to_cron(seconds: int) -> str:
-    """Convert an interval in seconds to the simplest equivalent cron expression."""
-    if seconds < 3600:
-        mins = max(1, seconds // 60)
-        return f"*/{mins} * * * *"
-    if seconds < 86400:
-        hours = max(1, seconds // 3600)
-        return f"0 */{hours} * * *"
-    days = max(1, seconds // 86400)
-    return f"0 0 */{days} * *"
-
-
-# ---------------------------------------------------------------------------
 # Pydantic schemas — internal (per-kind schedule CRUD)
 # ---------------------------------------------------------------------------
 
 
 class ScheduleRead(BaseModel):
     kind: str
-    cron_expr: str
     enabled: bool
     paused: bool
     revision: int
@@ -113,7 +65,6 @@ class ScheduleRead(BaseModel):
 
 
 class ScheduleUpdate(BaseModel):
-    cron_expr: str | None = None
     freshness_s: int | None = None
     budget_calls_per_day: int | None = None
     expected_revision: int | None = None
@@ -208,7 +159,7 @@ class TriggerJobInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 _SELECT_SCHEDULE_COLS = """
-    id, kind, cron_expr, enabled, revision, paused_at,
+    id, kind, enabled, revision, paused_at,
     freshness_s, budget_calls_per_day, last_run_at, next_run_at, updated_at
 """
 
@@ -216,21 +167,19 @@ _SELECT_SCHEDULE_COLS = """
 def _row_to_schedule_read(row: Any) -> ScheduleRead:  # noqa: ANN401
     return ScheduleRead(
         kind=row[1],
-        cron_expr=row[2],
-        enabled=row[3],
-        paused=row[5] is not None,
-        revision=row[4],
-        freshness_s=row[6],
-        budget_calls_per_day=row[7],
-        last_run_at=row[8],
-        next_run_at=row[9],
+        enabled=row[2],
+        paused=row[4] is not None,
+        revision=row[3],
+        freshness_s=row[5],
+        budget_calls_per_day=row[6],
+        last_run_at=row[7],
+        next_run_at=row[8],
     )
 
 
 def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
     return ScheduleRead(
         kind=d["kind"],
-        cron_expr=d["cron_expr"],
         enabled=d["enabled"],
         paused=d["paused_at"] is not None,
         revision=d["revision"],
@@ -244,18 +193,16 @@ def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
 def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401
     """Return (frontend_kind, ScheduleConfig) from a schedule table row."""
     kind_db: str = row[1]
-    cron_expr: str = row[2]
-    enabled: bool = row[3]
-    freshness_s: int | None = row[6]
-    next_run_at: datetime | None = row[9]
+    enabled: bool = row[2]
+    freshness_s: int | None = row[5]
+    next_run_at: datetime | None = row[8]
 
     kind_fe = _DB_TO_FE.get(kind_db, kind_db)
-    interval_s = _cron_to_seconds(cron_expr)
     next_due = next_run_at.isoformat() if next_run_at else None
 
     return kind_fe, ScheduleConfig(
         enabled=enabled,
-        interval_seconds=interval_s,
+        interval_seconds=freshness_s or 0,
         freshness_seconds=freshness_s,
         next_due_at=next_due,
     )
@@ -333,10 +280,7 @@ async def patch_settings(
     if body.schedules:
         for kind_fe, patch in body.schedules.items():
             kind_db = _FE_TO_DB.get(kind_fe, kind_fe)
-            cron_expr: str | None = None
-            if patch.interval_seconds is not None:
-                cron_expr = _seconds_to_cron(patch.interval_seconds)
-            freshness_s = patch.freshness_seconds
+            freshness_s = patch.freshness_seconds if patch.freshness_seconds is not None else patch.interval_seconds
 
             sets: list[str] = ["revision = revision + 1"]
             params: dict[str, Any] = {"kind": kind_db}
@@ -344,9 +288,6 @@ async def patch_settings(
             if patch.enabled is not None:
                 sets.append("enabled = :enabled")
                 params["enabled"] = patch.enabled
-            if cron_expr is not None:
-                sets.append("cron_expr = :cron_expr")
-                params["cron_expr"] = cron_expr
             if freshness_s is not None:
                 sets.append("freshness_s = :freshness_s")
                 params["freshness_s"] = freshness_s
@@ -398,7 +339,6 @@ async def patch_schedule(
         d = await update_schedule(
             db,
             kind=kind,
-            cron_expr=body.cron_expr,
             freshness_s=body.freshness_s,
             budget_calls_per_day=body.budget_calls_per_day,
             expected_revision=body.expected_revision,

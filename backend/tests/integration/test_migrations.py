@@ -73,8 +73,10 @@ async def test_check_migration_readiness_at_head(db_session: AsyncSession) -> No
     result = await check_migration_readiness(db_session)
 
     assert result["up_to_date"] is True
-    assert result["current"] == "0001"
-    assert result["head"] == "0001"
+    # Revision-agnostic: pinning a literal revision id makes this test fail on
+    # every new migration (it broke when 0002_drop_cron_expr landed). What the
+    # test actually cares about is that current has caught up to head.
+    assert result["current"] == result["head"]
 
 
 async def test_check_migration_readiness_stale(db_session: AsyncSession) -> None:
