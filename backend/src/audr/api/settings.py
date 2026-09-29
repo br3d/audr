@@ -42,6 +42,7 @@ _DB_TO_FE: dict[str, str] = {
     "balance_scan": "balances",
     "quote_refresh": "quotes",
     "discovery": "discovery",
+    "valuation": "valuation",
 }
 _FE_TO_DB: dict[str, str] = {v: k for k, v in _DB_TO_FE.items()}
 
@@ -454,14 +455,21 @@ async def trigger_job(
 
     run_id = await claim_job(db, kind=job_kind)
     if run_id is None:
-        # Coalesced by a concurrent claim between our check and claim_job.
+        # claim_job returns None for several reasons: concurrent claim, retry
+        # budget exhausted, schedule gate, or missing integration.  Try to
+        # return the in-progress run if one exists; otherwise 409 so the
+        # client doesn't poll a fabricated ID indefinitely.
         existing = await db.execute(
             sa.text("SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"),
             {"kind": kind_db},
         )
         ex_row = existing.first()
-        existing_id = str(ex_row[0]) if ex_row else str(uuid.uuid4())
-        return JobRef(run_id=existing_id, coalesced=True)
+        if ex_row is not None:
+            return JobRef(run_id=str(ex_row[0]), coalesced=True)
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=f"cannot claim job kind={body.kind!r}: retry budget exhausted, schedule gate, or missing integration",
+        )
 
     await db.commit()
     return JobRef(run_id=str(run_id), coalesced=False)
@@ -722,8 +730,9 @@ class PurgeInput(BaseModel):
 
 
 class PurgeResult(BaseModel):
-    run_id: str
-    coalesced: bool
+    purged: bool
+    quote_observations_deleted: int
+    valuation_lines_deleted: int
 
 
 @router.get("/data/provider-purge-preview", response_model=PurgePreviewResponse)
@@ -755,8 +764,12 @@ async def post_provider_purge(
             detail="confirm must be true",
         )
     try:
-        await execute_purge(db, kind=body.provider, password=body.current_password)
+        result = await execute_purge(db, kind=body.provider, password=body.current_password)
     except AuthenticationError as exc:
         raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     await db.commit()
-    return PurgeResult(run_id=str(uuid.uuid4()), coalesced=False)
+    return PurgeResult(
+        purged=result["purged"],
+        quote_observations_deleted=result["quote_observations_deleted"],
+        valuation_lines_deleted=result["valuation_lines_deleted"],
+    )

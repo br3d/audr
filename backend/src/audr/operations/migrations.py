@@ -12,23 +12,31 @@ def _get_head_revision() -> str | None:
     """Return the current alembic head revision by reading the script directory.
 
     Walks up from this file's location looking for ``alembic.ini``.  Returns
-    None if alembic is unavailable or no migrations exist.
+    None if alembic is unavailable or no migrations exist.  Raises if there
+    are multiple heads (branch divergence requires manual resolution).
     """
     try:
         from alembic.config import Config  # type: ignore[import-untyped]
         from alembic.script import ScriptDirectory  # type: ignore[import-untyped]
+    except ImportError:  # pragma: no cover
+        return None
 
-        here = Path(__file__).resolve()
-        for parent in here.parents:
-            candidate = parent / "alembic.ini"
-            if candidate.exists():
-                cfg = Config(str(candidate))
-                script = ScriptDirectory.from_config(cfg)
-                heads = script.get_heads()
-                return heads[0] if heads else None
-    except Exception:  # pragma: no cover
-        pass
-    return None  # pragma: no cover
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "alembic.ini"
+        if candidate.exists():
+            cfg = Config(str(candidate))
+            script = ScriptDirectory.from_config(cfg)
+            heads = script.get_heads()
+            if not heads:
+                return None
+            if len(heads) > 1:
+                raise RuntimeError(
+                    f"multiple alembic heads detected: {heads!r}; "
+                    "run `alembic merge heads` to resolve"
+                )
+            return heads[0]
+    return None
 
 
 async def check_migration_readiness(session: AsyncSession) -> dict:  # type: ignore[type-arg]
