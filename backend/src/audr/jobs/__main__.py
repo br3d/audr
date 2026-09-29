@@ -9,9 +9,11 @@ import signal
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from audr.assets.catalog import import_catalog
 from audr.db import _get_session_factory
+from audr.jobs.canonicality import recheck_canonicality
 from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import JobKind
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
@@ -23,6 +25,8 @@ from audr.portfolio.discovery import (
     persist_discovery_candidates,
     save_discovery_checkpoint,
 )
+from audr.portfolio.history import materialize_history_point
+from audr.portfolio.snapshot import publish_valuation_snapshot
 from audr.providers.rpc_reader import RpcReader
 from audr.settings.integrations import get_integration
 from audr.wallets.service import list_wallets
@@ -141,6 +145,42 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     await session.commit()
 
 
+async def handle_valuation(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """Publish a valuation snapshot and materialize a history point."""
+    try:
+        result = await publish_valuation_snapshot(session)
+    except ValueError as exc:
+        logger.info("valuation skipped — %s run_id=%s", exc, run_id)
+        return
+    await materialize_history_point(session, snapshot_id=result.snapshot_id)
+    logger.info(
+        "valuation run_id=%s snapshot=%s quality=%s lines=%d",
+        run_id,
+        result.snapshot_id,
+        result.quality,
+        result.line_count,
+    )
+    await session.commit()
+
+
+async def _bootstrap_catalog(factory: async_sessionmaker[AsyncSession]) -> None:
+    """Import the pinned token catalog at startup (idempotent). Errors are non-fatal."""
+    try:
+        async with factory() as session:
+            version = await import_catalog(session)
+            await session.commit()
+            logger.info(
+                "catalog bootstrap commit=%s entries=%d",
+                version.commit_hash[:12],
+                version.entry_count,
+            )
+    except Exception:
+        logger.warning(
+            "catalog bootstrap failed — discovery will run without catalog candidates",
+            exc_info=True,
+        )
+
+
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     factory = _get_session_factory()
@@ -150,9 +190,16 @@ async def _main() -> None:
     loop.add_signal_handler(signal.SIGTERM, stop.set)
     loop.add_signal_handler(signal.SIGINT, stop.set)
 
+    await _bootstrap_catalog(factory)
+
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
+    # Valuation runs on-demand: enqueued by handle_quote_refresh after each
+    # successful quote refresh so snapshots are produced in step with price data.
+    valuation_worker = Worker(
+        factory, kind=JobKind.VALUATION, handler=handle_valuation, on_demand=True
+    )
     # On-demand validation workers — only run when a request is enqueued from
     # the Connections settings page (AUD-313).
     validate_rpc_worker = Worker(
@@ -171,8 +218,14 @@ async def _main() -> None:
             did_work = await discovery_worker.run_once()
             did_work |= await balance_worker.run_once()
             did_work |= await quote_worker.run_once()
+            did_work |= await valuation_worker.run_once()
             did_work |= await validate_rpc_worker.run_once()
             did_work |= await validate_quotes_worker.run_once()
+            # Lightweight canonicality sweep — catches any observations
+            # invalidated since the last snapshot was published.
+            async with factory() as session:
+                await recheck_canonicality(session)
+                await session.commit()
         except Exception:
             logger.exception("worker poll error")
             did_work = False

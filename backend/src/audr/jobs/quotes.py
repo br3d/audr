@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.jobs.store import JobKind, enqueue_job
 from audr.providers.coingecko_demo import CoinGeckoError, CoinGeckoProvider
 from audr.settings.quotes import get_coingecko_api_key
 
@@ -102,6 +103,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         )
 
     await _mark_quote_set(session, quote_set_id, "complete")
+    await enqueue_job(session, kind=JobKind.VALUATION)
     await session.flush()
 
     logger.info(
