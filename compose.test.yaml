@@ -82,7 +82,10 @@ services:
   frontend-tests:
     image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
     working_dir: /workspace
-    command: ["npm", "run", "test"]
+    # frontend_node_modules starts empty, so dependencies must be installed in
+    # the container before vitest exists on PATH. Without this the stage exits
+    # 127 ("vitest: not found") on every fresh volume — i.e. always in CI.
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run test"]
     volumes:
       # Not :ro — Docker must be able to create the /workspace/node_modules
       # mountpoint, which does not exist in a fresh checkout.
