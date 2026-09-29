@@ -1,5 +1,5 @@
 """Ethereum JSON-RPC reader: chain-ID validation, eth_getBalance, ERC-20 balanceOf,
-eth_getLogs (AUD-307).
+eth_getLogs (AUD-307, AUD-300).
 
 No signing methods are exposed — read-only operations only.
 """
@@ -21,6 +21,9 @@ _HEX_PREFIX = "0x"
 
 # Transfer(address,address,uint256) keccak256 topic
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+# Approval(address,address,uint256) keccak256 topic
+APPROVAL_TOPIC = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
 
 # Maximum block range per eth_getLogs call; avoids RPC timeout on large ranges
 LOG_CHUNK_SIZE = 2_000

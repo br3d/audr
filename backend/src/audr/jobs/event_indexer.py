@@ -1,14 +1,17 @@
-"""Event indexer job — incremental ERC-20 Transfer indexing per wallet (AUD-307).
+"""Event indexer job — incremental ERC-20 Transfer + Approval indexing per wallet
+(AUD-307, AUD-300).
 
 Algorithm per run:
   1. Load all active wallets.
   2. Load all tracked token addresses (from asset table).
   3. For each wallet, read its checkpoint (last_processed_block).
      If no checkpoint, start from current_block (no backfill).
-  4. For each wallet, fetch Transfer events from checkpoint+1 to current_block
-     in LOG_CHUNK_SIZE chunks, alternating direction filters:
-       - logs where wallet is Transfer sender (topics[1] = wallet)
-       - logs where wallet is Transfer receiver (topics[2] = wallet)
+  4. For each wallet, fetch events from checkpoint+1 to current_block in
+     LOG_CHUNK_SIZE chunks:
+       - Transfer logs where wallet is sender (topics[1] = wallet)
+       - Transfer logs where wallet is receiver (topics[2] = wallet)
+       - Approval logs where wallet is owner (topics[1] = wallet) — feeds the
+         allowance/security-signals view (GET /api/v1/allowances)
   5. Insert events into onchain_event (ON CONFLICT DO NOTHING).
   6. Advance checkpoint to current_block.
 """
@@ -23,6 +26,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.providers.rpc_reader import (
+    APPROVAL_TOPIC,
     LOG_CHUNK_SIZE,
     TRANSFER_TOPIC,
     LogEntry,
@@ -140,6 +144,13 @@ async def _index_wallet(
                 address=token_addresses,
                 topics=[TRANSFER_TOPIC, None, wallet_topic],
             )
+            # Approvals granted by the wallet, as owner — topic[1]
+            approval_logs = await reader.get_logs(
+                from_block=chunk_start,
+                to_block=chunk_end,
+                address=token_addresses,
+                topics=[APPROVAL_TOPIC, wallet_topic],
+            )
         except (RpcError, MalformedResponseError):
             logger.exception(
                 "event_indexer wallet=%s chunk %d-%d failed",
@@ -154,7 +165,7 @@ async def _index_wallet(
             return inserted
 
         seen: set[tuple[str, int]] = set()
-        for log in [*out_logs, *in_logs]:
+        for log in [*out_logs, *in_logs, *approval_logs]:
             key = (log.tx_hash.lower(), log.log_index)
             if key in seen:
                 continue
@@ -208,6 +219,7 @@ async def _insert_event(
         return 0
 
     try:
+        # Both Transfer and Approval encode a single uint256 in `data`.
         amount = decode_transfer_amount(log)
     except MalformedResponseError:
         logger.warning("event_indexer malformed amount tx=%s idx=%d", log.tx_hash, log.log_index)
@@ -217,7 +229,13 @@ async def _insert_event(
     to_addr = _topic_to_address(log.topics[2])
     wallet_norm = wallet_address.lower()
 
-    if from_addr == wallet_norm:
+    if log.topics[0] == APPROVAL_TOPIC:
+        # Approval(owner indexed, spender indexed, value) — from_addr=owner,
+        # to_addr=spender. Our topic filter only asks for owner == wallet.
+        if from_addr != wallet_norm:
+            return 0
+        event_type = "approval"
+    elif from_addr == wallet_norm:
         event_type = "transfer_out"
     elif to_addr == wallet_norm:
         event_type = "transfer_in"

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from audr.jobs.event_indexer import _insert_event
 from audr.providers.rpc_reader import (
+    APPROVAL_TOPIC,
     TRANSFER_TOPIC,
     LogEntry,
     _pad_address_topic,
@@ -66,9 +70,80 @@ class TestDecodeTransferAmount:
         assert decode_transfer_amount(log) == Decimal(0)
 
 
+@pytest.mark.unit
+class TestApprovalTopic:
+    def test_distinct_from_transfer_topic(self) -> None:
+        assert APPROVAL_TOPIC != TRANSFER_TOPIC
+
+    def test_topic_format(self) -> None:
+        assert APPROVAL_TOPIC.startswith("0x")
+        assert len(APPROVAL_TOPIC) == 66
+        assert APPROVAL_TOPIC == APPROVAL_TOPIC.lower()
+
+
+@pytest.mark.unit
+class TestInsertEventApprovalClassification:
+    """_insert_event must classify Approval logs as event_type='approval',
+    owner->from_address, spender->to_address, and skip logs where the wallet
+    is not the owner (AUD-300)."""
+
+    async def test_approval_owned_by_wallet_is_inserted(self) -> None:
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        spender = "0x" + "22" * 20
+        log = _make_log(
+            topics=[
+                APPROVAL_TOPIC,
+                _pad_address_topic(wallet_address),
+                _pad_address_topic(spender),
+            ],
+            data=hex(2**256 - 1),
+        )
+
+        n = await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        assert n == 1
+        params = session.execute.call_args.args[1]
+        assert params["event_type"] == "approval"
+        assert params["from_address"] == wallet_address
+        assert params["to_address"] == spender
+        assert params["raw_amount"] == str(2**256 - 1)
+
+    async def test_approval_not_owned_by_wallet_is_skipped(self) -> None:
+        """Defensive: if the RPC filter ever returns a log where the wallet is
+        not the owner, it must not be recorded as that wallet's approval."""
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        other_owner = "0x" + "33" * 20
+        spender = "0x" + "22" * 20
+        log = _make_log(
+            topics=[
+                APPROVAL_TOPIC,
+                _pad_address_topic(other_owner),
+                _pad_address_topic(spender),
+            ],
+            data=hex(1_000),
+        )
+
+        n = await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        assert n == 0
+        session.execute.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_WALLET_ID = uuid.uuid4()
+
+
+def _make_session_mock() -> AsyncMock:
+    session = AsyncMock()
+    result = MagicMock()
+    result.rowcount = 1
+    session.execute.return_value = result
+    return session
 
 
 def _make_log(**kwargs: str) -> LogEntry:

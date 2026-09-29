@@ -1,9 +1,16 @@
-"""FastAPI routes for on-chain events (AUD-307).
+"""FastAPI routes for on-chain events (AUD-307) and allowance security signals
+(AUD-300).
 
 GET /api/v1/events
   Returns a paginated list of indexed ERC-20 Transfer events.
   Filters: wallet_id, event_type, token_address.
   Ordered by block_number DESC, log_index DESC.
+
+GET /api/v1/allowances
+  Returns the current (latest observed) ERC-20 allowance per
+  (wallet, token, spender), derived from indexed Approval events.
+  Flags `is_unlimited` when the approved amount looks like an
+  effectively-infinite approval — a standard wallet-security signal.
 """
 
 from __future__ import annotations
@@ -11,6 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Literal
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel
@@ -24,6 +32,12 @@ router = APIRouter(prefix="/api/v1")
 
 _MAX_LIMIT = 200
 _DEFAULT_LIMIT = 50
+
+# Approvals at or above this threshold are flagged as "unlimited" — the
+# conventional heuristic for effectively-infinite ERC-20 allowances (wallets
+# and revocation tools commonly approve type(uint256).max; this threshold is
+# far above any realistic token balance regardless of decimals).
+_UNLIMITED_ALLOWANCE_THRESHOLD = 2**128
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +113,6 @@ async def get_events(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    import sqlalchemy as sa
-
     count_row = await db.execute(
         sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),
         params,
@@ -144,4 +156,121 @@ async def get_events(
         limit=limit,
         offset=offset,
         events=events,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Allowances (security signals)
+# ---------------------------------------------------------------------------
+
+
+class AllowanceResponse(BaseModel):
+    wallet_id: str
+    token_address: str
+    spender_address: str
+    # Raw uint256 as decimal string — never float
+    raw_amount: str
+    is_unlimited: bool
+    observed_at_block: int
+    tx_hash: str
+    indexed_at: str
+
+
+class AllowancesResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    allowances: list[AllowanceResponse]
+
+
+@router.get("/allowances", response_model=AllowancesResponse)
+async def get_allowances(
+    _session: Annotated[Session, Depends(_require_session)],
+    db: AsyncSession = Depends(get_db),
+    wallet_id: str | None = Query(default=None),
+    unlimited_only: bool = Query(default=False),
+    limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+) -> AllowancesResponse:
+    """Return the current ERC-20 allowance per (wallet, token, spender).
+
+    Derived from the latest indexed Approval event for each triple — this is
+    a read model over the append-only `onchain_event` log, not a separate
+    mutable table. `is_unlimited` flags allowances at or above
+    ``_UNLIMITED_ALLOWANCE_THRESHOLD``, the standard "infinite approval"
+    security signal.
+    """
+    wallet_uuid: uuid.UUID | None = None
+    if wallet_id is not None:
+        try:
+            wallet_uuid = uuid.UUID(wallet_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="wallet_id is not a valid UUID",
+            )
+
+    conditions = ["event_type = 'approval'"]
+    params: dict = {
+        "limit": limit,
+        "offset": offset,
+        "threshold": str(_UNLIMITED_ALLOWANCE_THRESHOLD),
+    }
+    if wallet_uuid is not None:
+        conditions.append("wallet_id = :wallet_id")
+        params["wallet_id"] = str(wallet_uuid)
+    where = "WHERE " + " AND ".join(conditions)
+
+    # Latest Approval per (wallet, token, spender); to_address holds the
+    # spender for approval-typed rows (see jobs/event_indexer.py).
+    latest_cte = f"""
+        SELECT DISTINCT ON (wallet_id, token_address, to_address)
+            wallet_id, token_address, to_address AS spender_address,
+            raw_amount, block_number, tx_hash, indexed_at
+        FROM onchain_event
+        {where}
+        ORDER BY wallet_id, token_address, to_address, block_number DESC, log_index DESC
+    """
+
+    having = "WHERE raw_amount >= :threshold" if unlimited_only else ""
+
+    count_row = await db.execute(
+        sa.text(f"SELECT COUNT(*) FROM ({latest_cte}) latest {having}"),
+        params,
+    )
+    total = count_row.scalar_one()
+
+    rows = await db.execute(
+        sa.text(
+            f"""
+            SELECT wallet_id, token_address, spender_address, raw_amount,
+                   block_number, tx_hash, indexed_at
+            FROM ({latest_cte}) latest
+            {having}
+            ORDER BY block_number DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        params,
+    )
+
+    allowances = [
+        AllowanceResponse(
+            wallet_id=str(row[0]),
+            token_address=str(row[1]),
+            spender_address=str(row[2]),
+            raw_amount=str(row[3]),
+            is_unlimited=int(row[3]) >= _UNLIMITED_ALLOWANCE_THRESHOLD,
+            observed_at_block=int(row[4]),
+            tx_hash=str(row[5]),
+            indexed_at=row[6].isoformat(),
+        )
+        for row in rows.fetchall()
+    ]
+
+    return AllowancesResponse(
+        total=total,
+        limit=limit,
+        offset=offset,
+        allowances=allowances,
     )
