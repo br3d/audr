@@ -34,9 +34,14 @@ export default function App() {
 
   // Register a global 401 handler so any API call that encounters an expired
   // session (not just the initial session query) redirects to sign-in.
+  // Guard: only reset when session is currently 'success'. If the session query
+  // itself 401s, its status is 'pending' (or already 'error'), so the guard
+  // blocks the callback and prevents an infinite reset/refetch loop.
   useEffect(() => {
     setUnauthorizedCallback(() => {
-      queryClient.resetQueries({ queryKey: ['session'] })
+      if (queryClient.getQueryState(['session'])?.status === 'success') {
+        queryClient.resetQueries({ queryKey: ['session'] })
+      }
     })
     return () => {
       clearUnauthorizedCallback()
