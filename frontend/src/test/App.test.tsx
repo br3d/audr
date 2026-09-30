@@ -84,6 +84,9 @@ describe('App routing and auth guard', () => {
   let root: Root
 
   beforeEach(() => {
+    // The active tab now lives in location.hash, which is shared jsdom state —
+    // reset it so one test's navigation does not leak into the next.
+    window.history.replaceState(null, '', '/')
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -174,6 +177,48 @@ describe('App routing and auth guard', () => {
     })
     expect(container.querySelector('[data-testid="wallets-page"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeNull()
+  })
+
+  // ---- Tab persistence across reload (AUD-350) ----
+
+  it('writes the active tab into the URL hash on tab click', async () => {
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    const walletsBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Wallets',
+    )!
+    await act(async () => {
+      walletsBtn.click()
+    })
+    expect(window.location.hash).toBe('#/wallets')
+  })
+
+  it('restores the tab from the URL hash on mount, as a reload would', () => {
+    window.history.replaceState(null, '', '#/holdings')
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    expect(container.querySelector('[data-testid="holdings-page"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeNull()
+  })
+
+  it('falls back to the dashboard for an unknown hash', () => {
+    window.history.replaceState(null, '', '#/not-a-page')
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
+    expect(window.location.hash).toBe('#/dashboard')
+  })
+
+  it('follows browser back/forward via hashchange', async () => {
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    await act(async () => {
+      window.location.hash = '#/assets'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(container.querySelector('[data-testid="assets-page"]')).toBeTruthy()
+
+    await act(async () => {
+      window.location.hash = '#/dashboard'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
   })
 
   it('transitions from SetupPage to SignInPage after setup completes', async () => {

@@ -31,17 +31,20 @@ export function useTheme() {
 
 // ---- Page types ----
 
-export type MainPage =
-  | 'dashboard'
-  | 'holdings'
-  | 'wallets'
-  | 'assets'
-  | 'connections'
-  | 'history'
-  | 'schedules'
-  | 'status'
-  | 'account'
-  | 'assistant'
+export const MAIN_PAGES = [
+  'dashboard',
+  'holdings',
+  'wallets',
+  'assets',
+  'connections',
+  'history',
+  'schedules',
+  'status',
+  'account',
+  'assistant',
+] as const
+
+export type MainPage = (typeof MAIN_PAGES)[number]
 
 // ---- Nav config ----
 

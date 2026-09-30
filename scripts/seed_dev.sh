@@ -11,6 +11,12 @@
 #   BASE_URL defaults to http://localhost
 #   (the app is served — SPA + /api + /health — by nginx on port 80)
 #
+# Demo wallet (AUDR_SEED_WALLET):
+#   auto (default) – create the Buterin wallet only if the instance tracks no
+#                    wallets yet, so seeding never pollutes a real instance
+#   force          – always create it
+#   skip           – never create it (use when you only want RPC configured)
+#
 # The password seeded is the canonical test password defined in
 # backend/tests/fixtures/seed.py (TEST_PASSWORD = "Rand0mP@ssw0rd").
 #
@@ -88,19 +94,38 @@ else
 fi
 
 # ── 2. Create Buterin wallet (idempotent: ignore 409 Conflict) ────────────────
+#
+# Guarded (AUD-350): the demo wallet is only created on an instance that has no
+# wallets yet.  Running this script against an instance that already tracks the
+# operator's own addresses used to silently add a second "Buterin" wallet next
+# to theirs, which is indistinguishable from a real one in the UI.  Set
+# AUDR_SEED_WALLET=force to add it anyway, or =skip to never add it.
 
-echo "  -> Registering wallet ${BUTERIN_ADDRESS} (${BUTERIN_LABEL})"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${API}/wallets" \
-  -H "Content-Type: application/json" \
-  -H "x-csrf-token: ${CSRF}" \
-  -b "${COOKIE_JAR}" \
-  -d "{\"address\": \"${BUTERIN_ADDRESS}\", \"label\": \"${BUTERIN_LABEL}\"}")
+SEED_WALLET_MODE="${AUDR_SEED_WALLET:-auto}"
+WALLET_SEEDED="skipped"
+WALLET_COUNT=$(curl -sf "${API}/wallets?limit=1" -b "${COOKIE_JAR}" \
+  | python3 -c "import sys,json; print(len(json.load(sys.stdin)['items']))")
 
-case "${HTTP_CODE}" in
-  201) echo "  -> Wallet created (201)" ;;
-  409) echo "  -> Wallet already registered (409), skipping" ;;
-  *)   echo "  -> ERROR: wallet creation returned HTTP ${HTTP_CODE}"; exit 1 ;;
-esac
+if [[ "${SEED_WALLET_MODE}" == "skip" ]]; then
+  echo "  -> AUDR_SEED_WALLET=skip — not creating the demo wallet"
+elif [[ "${SEED_WALLET_MODE}" != "force" && "${WALLET_COUNT}" != "0" ]]; then
+  echo "  -> Instance already tracks wallets — not adding the demo wallet"
+  echo "     (set AUDR_SEED_WALLET=force to add ${BUTERIN_ADDRESS} anyway)"
+else
+  echo "  -> Registering wallet ${BUTERIN_ADDRESS} (${BUTERIN_LABEL})"
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${API}/wallets" \
+    -H "Content-Type: application/json" \
+    -H "x-csrf-token: ${CSRF}" \
+    -b "${COOKIE_JAR}" \
+    -d "{\"address\": \"${BUTERIN_ADDRESS}\", \"label\": \"${BUTERIN_LABEL}\"}")
+
+  case "${HTTP_CODE}" in
+    201) echo "  -> Wallet created (201)"; WALLET_SEEDED="${BUTERIN_ADDRESS} (${BUTERIN_LABEL})" ;;
+    409) echo "  -> Wallet already registered (409), skipping"
+         WALLET_SEEDED="${BUTERIN_ADDRESS} (already present)" ;;
+    *)   echo "  -> ERROR: wallet creation returned HTTP ${HTTP_CODE}"; exit 1 ;;
+  esac
+fi
 
 # ── 3. Configure the RPC integration (skipped when no URL is available) ──────
 
@@ -158,5 +183,5 @@ echo ""
 echo "==> Seed complete."
 echo "    URL:      ${BASE_URL}"
 echo "    Password: ${PASSWORD}"
-echo "    Wallet:   ${BUTERIN_ADDRESS} (${BUTERIN_LABEL})"
+echo "    Wallet:   ${WALLET_SEEDED}"
 echo "    RPC:      ${RPC_SEEDED}"
