@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback, clearUnauthorizedCallback } from './api/client'
 import Layout from './components/Layout'
-import type { MainPage } from './components/Layout'
+import { useHashPage } from './routing'
 import SetupPage from './pages/SetupPage'
 import SignInPage from './pages/SignInPage'
 import DashboardPage from './pages/DashboardPage'
@@ -18,7 +18,7 @@ import AssistantPage from './pages/AssistantPage'
 
 export default function App() {
   const queryClient = useQueryClient()
-  const [page, setPage] = useState<MainPage>('dashboard')
+  const [page, setPage] = useHashPage()
 
   const setupQuery = useQuery({
     queryKey: ['setup-status'],
