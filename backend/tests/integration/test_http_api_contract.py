@@ -15,8 +15,10 @@ SPEC_DRIFT entries identified:
   SD-3: PUT /auth/password — spec mandates PUT; impl uses PATCH; PUT returns 405.
   SD-4: POST /jobs, POST /integrations/{kind}/validate, POST /jobs/{id}/cancel,
          POST /data/provider-purge — spec says 202; impl returns default 200.
-  SD-5: Error envelope — spec mandates {error:{code,message,field_errors,retryable},
-         request_id}; FastAPI HTTPExceptions return {"detail":"..."} flat string.
+  SD-5: Error envelope — RESOLVED in AUD-320. The app now registers handlers for
+         HTTPException and RequestValidationError that emit
+         {error:{code,message,field_errors,retryable},request_id}; the two shape
+         tests below are live assertions, no longer xfail.
 
 The SD-1 through SD-5 tests are written against the *spec*, so they currently FAIL.
 That is the intended enforcement mechanism: drift = red CI.
@@ -815,38 +817,56 @@ async def test_health_ready(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-5: error envelope shape diverges from spec; see AUD-335")
 async def test_error_envelope_shape_401(client: httpx.AsyncClient) -> None:
     """Unauthenticated request → error envelope {error:{code,message,field_errors,retryable},request_id}.
 
-    SPEC_DRIFT SD-5: spec mandates structured error object; FastAPI returns
-    {"detail":"Not authenticated"} flat string.
+    SD-5 resolved in AUD-320: HTTPException/validation handlers now emit the
+    contract envelope instead of FastAPI's flat {"detail": ...}.
     """
     r = await client.get(f"{_V1}/wallets")
     assert r.status_code == 401
     data = r.json()
     # Per spec: error must be an object with code, message, field_errors, retryable
-    assert "request_id" in data, "missing request_id in error envelope"  # SD-5 fails here
-    assert isinstance(data["error"], dict), "error must be an object, not a string"  # SD-5 fails here
-    assert "code" in data["error"]
-    assert "message" in data["error"]
+    assert "request_id" in data, "missing request_id in error envelope"
+    assert isinstance(data["error"], dict), "error must be an object, not a string"
+    assert data["error"]["code"] == "unauthenticated"
+    assert data["error"]["message"]
     assert "field_errors" in data["error"]
-    assert "retryable" in data["error"]
+    assert data["error"]["retryable"] is False
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-5: error envelope shape diverges from spec; see AUD-335")
 async def test_error_envelope_shape_404(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """Not-found request → error envelope {error:{code,message,...},request_id}.
 
-    SPEC_DRIFT SD-5: same divergence as 401 case.
+    SD-5 resolved in AUD-320, same as the 401 case.
     """
     c, _ = auth_client
     r = await c.get(f"{_V1}/wallets/{uuid.uuid4()}")
     assert r.status_code == 404
     data = r.json()
-    assert "request_id" in data, "missing request_id in error envelope"  # SD-5 fails here
-    assert isinstance(data.get("error"), dict), "error must be an object"  # SD-5 fails here
+    assert "request_id" in data, "missing request_id in error envelope"
+    assert isinstance(data.get("error"), dict), "error must be an object"
+    assert data["error"]["code"] == "not_found"
+
+
+@pytest.mark.integration
+async def test_error_envelope_validation_reports_field_errors(
+    auth_client: tuple[httpx.AsyncClient, str],
+) -> None:
+    """422 from request validation carries per-field messages (AUD-320)."""
+    c, csrf = auth_client
+    # Omit the required `address` field so FastAPI's own validation fires.
+    r = await c.post(
+        f"{_V1}/wallets",
+        json={},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 422
+    data = r.json()
+    assert data["error"]["code"] == "invalid_value"
+    assert data["error"]["field_errors"], "422 must name the offending field(s)"
+    assert "request_id" in data
 
 
 # ===========================================================================

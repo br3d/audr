@@ -7,11 +7,17 @@ import uuid
 from collections.abc import Callable
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from audr.api.assets import router as assets_router
 from audr.api.auth import router as auth_router
-from audr.api.errors import unhandled_exception_handler
+from audr.api.errors import (
+    http_exception_handler,
+    unhandled_exception_handler,
+    validation_exception_handler,
+)
 from audr.api.events import router as events_router
 from audr.api.health import router as health_router
 from audr.api.history import router as history_router
@@ -64,6 +70,11 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    # All three handlers emit the contract error envelope (AUD-320): without the
+    # HTTPException/validation handlers every 4xx fell through to FastAPI's
+    # {"detail": ...} default, which the SPA renders as a bare "HTTP nnn".
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
     app.include_router(health_router)
