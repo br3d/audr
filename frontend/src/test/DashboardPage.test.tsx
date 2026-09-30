@@ -23,6 +23,11 @@ vi.mock('../components/HistoryChart', () => ({
   default: () => null,
 }))
 
+vi.mock('../components/NewsFeed', () => ({
+  default: ({ items }: { items: { asset_id: string }[] }) =>
+    React.createElement('div', { 'aria-label': 'News feed stub' }, `${items.length} assets`),
+}))
+
 import DashboardPage from '../pages/DashboardPage'
 import { fetchPortfolio, fetchHistory } from '../api/client'
 
@@ -225,6 +230,30 @@ describe('DashboardPage', () => {
       expect(
         container.querySelector('[aria-label="Asset allocation pie chart"]'),
       ).toBeNull()
+      await unmount(container, root)
+    })
+  })
+
+  describe('news section', () => {
+    it('renders the News section wired to priced allocations', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+        allocations: [
+          { asset_id: 'eth', symbol: 'ETH', value_usd: '4000.00', percentage: '100.00' },
+        ],
+      })
+      expect(container.querySelector('[aria-label="Asset news"]')).toBeTruthy()
+      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe(
+        '1 assets',
+      )
+      await unmount(container, root)
+    })
+
+    it('does not render the News section when there are no priced allocations', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.querySelector('[aria-label="Asset news"]')).toBeNull()
       await unmount(container, root)
     })
   })

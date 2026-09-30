@@ -615,3 +615,35 @@ export function fetchHistory(period: HistoryPeriod, cursor?: string): Promise<Hi
   if (cursor) params.set('cursor', cursor)
   return get<HistoryResponse>(`/history?${params.toString()}`)
 }
+
+// --- Asset news types ---
+
+export interface AssetNewsItem {
+  id: string
+  source: string
+  title: string
+  url: string
+  news_site: string
+  thumbnail_url: string | null
+  published_at: string
+  fetched_at: string
+}
+
+export interface AssetNewsResponse {
+  asset_id: string
+  total: number
+  limit: number
+  offset: number
+  news: AssetNewsItem[]
+}
+
+// --- Asset news API ---
+
+export function fetchAssetNews(
+  assetId: string,
+  limit: number,
+  offset: number,
+): Promise<AssetNewsResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  return get<AssetNewsResponse>(`/assets/${assetId}/news?${params.toString()}`)
+}
