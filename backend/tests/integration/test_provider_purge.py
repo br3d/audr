@@ -739,3 +739,206 @@ async def test_quote_refresh_marks_empty_on_zero_observations(
     ).first()
     assert row is not None
     assert row[0] == "empty", f"expected 'empty' but got '{row[0]}'"
+
+
+# ---------------------------------------------------------------------------
+# Tests: provider failure must not be recorded as a successful run (AUD-318)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_quote_refresh_provider_error_raises_and_marks_quote_set_failed(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A CoinGecko provider error must propagate, not be swallowed.
+
+    Before AUD-318, handle_quote_refresh marked the quote_set 'failed' but
+    returned normally, so the worker recorded the job_run as 'completed' and
+    advanced schedule.last_run_at — a provider outage looked like success.
+    This test uses committed sessions (not the rollback-wrapped db_session
+    fixture) because the fix commits the 'failed' quote_set write before
+    raising, so the worker's separate fail_job() session can record the run
+    as failed without depending on this transaction.
+    """
+    import httpx
+    from unittest.mock import AsyncMock, patch
+
+    from audr.providers.coingecko_demo import CoinGeckoError
+
+    unique_addr = "0xdead" + "0" * 36
+    wallet_id: uuid.UUID
+    asset_id: uuid.UUID
+    run_id = uuid.uuid4()
+
+    async with db_session_factory() as s:
+        async with s.begin():
+            wallet_id = await _insert_wallet(s, unique_addr)
+            asset_id = await _insert_asset(
+                s, token_address="0x" + "d1" * 20, symbol="FAILPRICE"
+            )
+            await _insert_balance(s, wallet_id=wallet_id, asset_id=asset_id)
+            await s.execute(
+                text(
+                    "INSERT INTO job_run (id, kind, status, max_retries)"
+                    " VALUES (:id, 'quote_refresh', 'in_progress', 3)"
+                ),
+                {"id": str(run_id)},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO integration (kind, encrypted_blob)"
+                    " VALUES ('coingecko', :blob) ON CONFLICT (kind) DO NOTHING"
+                ),
+                {"blob": b"\x00"},
+            )
+
+    quote_set_id: uuid.UUID | None = None
+    try:
+        async with db_session_factory() as session:
+            with patch(
+                "audr.jobs.quotes.get_coingecko_api_key",
+                new=AsyncMock(return_value="fake-key-for-failure-test"),
+            ):
+                with respx.mock(assert_all_called=False) as mock_router:
+                    mock_router.get(url__regex=r"coingecko").mock(
+                        return_value=httpx.Response(500, json={"error": "boom"})
+                    )
+                    with pytest.raises(CoinGeckoError):
+                        await handle_quote_refresh(session, run_id)
+
+        async with db_session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT id, status FROM quote_set"
+                        " ORDER BY fetched_at DESC LIMIT 1"
+                    )
+                )
+            ).first()
+            assert row is not None
+            quote_set_id = row[0]
+            assert row[1] == "failed", (
+                "a provider error must leave the quote_set 'failed', "
+                f"not '{row[1]}'"
+            )
+    finally:
+        async with db_session_factory() as s:
+            async with s.begin():
+                await s.execute(
+                    text("DELETE FROM balance_observation WHERE wallet_id = :w"),
+                    {"w": str(wallet_id)},
+                )
+                await s.execute(
+                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
+                )
+                await s.execute(
+                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
+                )
+                await s.execute(
+                    text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
+                )
+                if quote_set_id is not None:
+                    await s.execute(
+                        text("DELETE FROM quote_set WHERE id = :id"),
+                        {"id": str(quote_set_id)},
+                    )
+
+
+@pytest.mark.integration
+async def test_quote_refresh_provider_error_worker_records_failed_run(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """End-to-end: Worker.run_once marks the job_run 'failed', not 'completed',
+    when the handler it dispatches raises on a provider error (AUD-318)."""
+    import httpx
+    from unittest.mock import AsyncMock, patch
+
+    from audr.jobs.store import get_job_run
+    from audr.jobs.worker import Worker
+
+    unique_addr = "0xbeef" + "0" * 36
+    wallet_id: uuid.UUID
+    asset_id: uuid.UUID
+
+    async with db_session_factory() as s:
+        async with s.begin():
+            wallet_id = await _insert_wallet(s, unique_addr)
+            asset_id = await _insert_asset(
+                s, token_address="0x" + "e2" * 20, symbol="WORKERFAIL"
+            )
+            await _insert_balance(s, wallet_id=wallet_id, asset_id=asset_id)
+            await s.execute(
+                text(
+                    "INSERT INTO integration (kind, encrypted_blob)"
+                    " VALUES ('coingecko', :blob) ON CONFLICT (kind) DO NOTHING"
+                ),
+                {"blob": b"\x00"},
+            )
+
+    run_id: uuid.UUID | None = None
+    quote_set_id: uuid.UUID | None = None
+    try:
+        worker = Worker(
+            db_session_factory,
+            kind=JobKind.QUOTE_REFRESH,
+            handler=handle_quote_refresh,
+        )
+        with patch(
+            "audr.jobs.quotes.get_coingecko_api_key",
+            new=AsyncMock(return_value="fake-key-for-worker-failure-test"),
+        ):
+            with respx.mock(assert_all_called=False) as mock_router:
+                mock_router.get(url__regex=r"coingecko").mock(
+                    return_value=httpx.Response(500, json={"error": "boom"})
+                )
+                did_work = await worker.run_once()
+        assert did_work is True
+
+        async with db_session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT id FROM job_run WHERE kind = 'quote_refresh'"
+                        " ORDER BY created_at DESC LIMIT 1"
+                    )
+                )
+            ).first()
+            assert row is not None
+            run_id = row[0]
+
+            run = await get_job_run(session, run_id=run_id)
+            assert run is not None
+            assert run.status == JobRunStatus.FAILED, (
+                "a provider error must record the run as failed, not completed"
+            )
+
+            qs_row = (
+                await session.execute(
+                    text(
+                        "SELECT id FROM quote_set ORDER BY fetched_at DESC LIMIT 1"
+                    )
+                )
+            ).first()
+            quote_set_id = qs_row[0] if qs_row else None
+    finally:
+        async with db_session_factory() as s:
+            async with s.begin():
+                await s.execute(
+                    text("DELETE FROM balance_observation WHERE wallet_id = :w"),
+                    {"w": str(wallet_id)},
+                )
+                await s.execute(
+                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
+                )
+                await s.execute(
+                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
+                )
+                if run_id is not None:
+                    await s.execute(
+                        text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
+                    )
+                if quote_set_id is not None:
+                    await s.execute(
+                        text("DELETE FROM quote_set WHERE id = :id"),
+                        {"id": str(quote_set_id)},
+                    )

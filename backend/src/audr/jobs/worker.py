@@ -53,15 +53,21 @@ class Worker:
         self._stop_event.set()
 
     async def run_once(self) -> bool:
-        """Claim and execute one job.  Returns True if a job was processed."""
+        """Claim and execute one job.  Returns True if a job was processed.
+
+        Always checks the on-demand queue first — an interactive "Run now"
+        trigger (AUD-318) enqueues a ``pending`` row via :func:`enqueue_job`
+        regardless of this worker's schedule, so it must be served even for
+        kinds that otherwise run on their own freshness schedule.  Only
+        schedule-driven kinds fall through to :func:`claim_job`.
+        """
         async with self._factory() as session:
-            if self._on_demand:
-                run_id = await claim_pending_job(
-                    session,
-                    kind=self._kind,
-                    worker_id=self._worker_id,
-                )
-            else:
+            run_id = await claim_pending_job(
+                session,
+                kind=self._kind,
+                worker_id=self._worker_id,
+            )
+            if run_id is None and not self._on_demand:
                 run_id = await claim_job(
                     session,
                     kind=self._kind,
