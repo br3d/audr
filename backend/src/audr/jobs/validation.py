@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.providers.coingecko_demo import CoinGeckoProvider
 from audr.providers.rpc_reader import RpcReader
-from audr.settings.integrations import get_integration
+from audr.providers.rpc_targets import get_validated_rpc_url
 from audr.settings.quotes import get_coingecko_api_key
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,12 @@ async def handle_validate_rpc(session: AsyncSession, run_id: uuid.UUID) -> None:
     Raises on any failure so the worker records a failed job with a
     human-readable error the UI can display.
     """
-    integration = await get_integration(session, kind="rpc", decrypt_fields=True)
-    if integration is None or not integration.url:
+    rpc_url = await get_validated_rpc_url(session)
+    if rpc_url is None:
         raise ValueError("No RPC endpoint configured.")
 
     async with RpcReader(
-        url=integration.url, expected_chain_id=_ETH_MAINNET_CHAIN_ID
+        url=rpc_url, expected_chain_id=_ETH_MAINNET_CHAIN_ID
     ) as rpc:
         await rpc.validate_chain()
         block_number = await rpc.get_block_number()

@@ -111,6 +111,34 @@ async def list_wallets(session: AsyncSession) -> list[Wallet]:
     return list(result.scalars())
 
 
+async def list_wallets_page(
+    session: AsyncSession,
+    *,
+    cursor: uuid.UUID | None = None,
+    limit: int = 20,
+) -> tuple[list[Wallet], uuid.UUID | None]:
+    """Return up to *limit* wallets, oldest first, with keyset pagination.
+
+    Returns (wallets, next_cursor). Pass next_cursor back in as *cursor* to
+    fetch the following page; None means the list is exhausted.
+    """
+    stmt = sa.select(Wallet).order_by(Wallet.created_at, Wallet.id).limit(limit + 1)
+    if cursor is not None:
+        cursor_wallet = await session.get(Wallet, cursor)
+        if cursor_wallet is not None:
+            stmt = stmt.where(
+                sa.tuple_(Wallet.created_at, Wallet.id)
+                > sa.tuple_(cursor_wallet.created_at, cursor_wallet.id)
+            )
+
+    result = await session.execute(stmt)
+    wallets = list(result.scalars())
+    has_more = len(wallets) > limit
+    wallets = wallets[:limit]
+    next_cursor = wallets[-1].id if has_more and wallets else None
+    return wallets, next_cursor
+
+
 async def get_wallet(
     session: AsyncSession,
     *,

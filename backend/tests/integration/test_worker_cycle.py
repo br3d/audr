@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.history_query import query_history
@@ -155,6 +155,7 @@ async def test_valuation_pipeline_populates_holdings_and_history(
     assert len(lines) >= 1, "portfolio/holdings should return at least one row"
     assert lines[0]["symbol"] == "WETH"
     assert Decimal(lines[0]["value_usd"]) == Decimal("4500")  # 1.5 * 3000
+    assert lines[0]["wallet_address"] == "0x" + "a1" * 20
 
     # history API backend returns non-empty entries
     page = await query_history(db_session, period="all")
@@ -227,3 +228,45 @@ async def test_handle_valuation_is_idempotent_on_same_snapshot(
 
     assert hp1.history_point_id == hp2.history_point_id
     assert hp2.created is False
+
+
+@pytest.mark.integration
+async def test_get_latest_snapshot_lines_issues_one_query_regardless_of_wallet_count(
+    db_session: AsyncSession,
+    db_engine: AsyncEngine,
+) -> None:
+    """No N+1: the wallet address is joined in, not fetched per line (AUD-322)."""
+    wallets = []
+    for i in range(3):
+        wallet_id = await _insert_wallet(db_session, "0x" + f"{i:02x}" * 20)
+        asset_id = await _insert_asset(
+            db_session,
+            token_address="0x" + f"{i:02x}c0" * 10,
+            symbol=f"TK{i}",
+            decimals=18,
+        )
+        await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
+        await _insert_complete_quote_set(
+            db_session, asset_id=asset_id, price_usd=Decimal("1")
+        )
+        wallets.append(wallet_id)
+    await db_session.flush()
+    await publish_valuation_snapshot(db_session)
+
+    query_count = 0
+
+    def _count(*_args: object, **_kwargs: object) -> None:
+        nonlocal query_count
+        query_count += 1
+
+    sa.event.listen(db_engine.sync_engine, "before_cursor_execute", _count)
+    try:
+        lines = await get_latest_snapshot_lines(db_session)
+    finally:
+        sa.event.remove(db_engine.sync_engine, "before_cursor_execute", _count)
+
+    assert len(lines) == 3
+    assert {line["wallet_address"] for line in lines} == {
+        "0x" + f"{i:02x}" * 20 for i in range(3)
+    }
+    assert query_count == 1, f"expected exactly 1 query, issued {query_count}"

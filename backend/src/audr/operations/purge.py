@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import anyio
 import sqlalchemy as sa
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -90,7 +91,7 @@ async def execute_purge(
         raise AuthenticationError("no owner configured")
 
     try:
-        _hasher.verify(row[0], password)
+        await anyio.to_thread.run_sync(_hasher.verify, row[0], password)
     except VerifyMismatchError:
         raise AuthenticationError("incorrect password") from None
 

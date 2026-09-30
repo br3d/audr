@@ -188,6 +188,72 @@ async def test_put_rpc_requires_csrf(http_client: httpx.AsyncClient) -> None:
     assert r.status_code == 403
 
 
+@pytest.mark.integration
+async def test_put_rpc_private_host_rejected_by_default(
+    http_client: httpx.AsyncClient,
+) -> None:
+    """AUD-322: a private/loopback RPC URL is rejected unless explicitly allowed."""
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.put(
+        f"{_INTEGRATIONS_URL}/rpc",
+        json={"revision": "0", "url": "http://127.0.0.1:8545/"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+async def test_put_rpc_allow_private_host_persists_for_worker_revalidation(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """AUD-322: allow_private_host is stored, not just used once at save time —
+    the worker re-validates the stored URL before every use and must honour
+    the same policy the owner explicitly opted into."""
+    from audr.providers.rpc_targets import get_validated_rpc_url
+
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.put(
+        f"{_INTEGRATIONS_URL}/rpc",
+        json={
+            "revision": "0",
+            "url": "http://127.0.0.1:8545/",
+            "allow_private_host": True,
+        },
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+
+    async with db_session_factory() as session:
+        revalidated = await get_validated_rpc_url(session)
+    assert revalidated == "http://127.0.0.1:8545"
+
+
+@pytest.mark.integration
+async def test_get_validated_rpc_url_rejects_stale_unallowed_private_url(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    test_secret_key: str,
+) -> None:
+    """AUD-322: re-validation at use time rejects a private URL that was never
+    explicitly allowed, even if it somehow ended up stored (e.g. DNS rebinding
+    after the integration was saved against a then-public hostname)."""
+    from audr.providers.rpc_targets import RpcUrlError, get_validated_rpc_url
+    from audr.settings.integrations import upsert_integration
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            await upsert_integration(
+                session,
+                kind="rpc",
+                url="http://127.0.0.1:8545/",
+                allow_private_host=False,
+            )
+
+    async with db_session_factory() as session:
+        with pytest.raises(RpcUrlError):
+            await get_validated_rpc_url(session)
+
+
 # ---------------------------------------------------------------------------
 # PUT /integrations/quotes
 # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.jobs.store import JobKind, enqueue_job
-from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url
+from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url_async
 from audr.settings.integrations import RevisionConflictError, get_integration, upsert_integration
 from audr.settings.quotes import save_coingecko_credentials
 
@@ -206,7 +206,7 @@ async def put_integration_rpc(
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationEntry:
     try:
-        validated_url = validate_rpc_url(
+        validated_url = await validate_rpc_url_async(
             body.url, allow_private_hosts=body.allow_private_host
         )
     except RpcUrlError as exc:
@@ -225,6 +225,7 @@ async def put_integration_rpc(
             db,
             kind="rpc",
             url=validated_url,
+            allow_private_host=body.allow_private_host,
             expected_revision=expected_rev,
         )
     except RevisionConflictError as exc:

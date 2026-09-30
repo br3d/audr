@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from audr.assets.catalog import import_catalog
 from audr.db import _get_session_factory
 from audr.jobs.canonicality import recheck_canonicality
+from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
 from audr.jobs.quotes import handle_quote_refresh
@@ -32,7 +33,7 @@ from audr.portfolio.discovery import (
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.snapshot import publish_valuation_snapshot
 from audr.providers.rpc_reader import RpcReader
-from audr.settings.integrations import get_integration
+from audr.providers.rpc_targets import RpcUrlError, get_validated_rpc_url
 from audr.wallets.service import list_wallets
 
 logger = logging.getLogger(__name__)
@@ -92,8 +93,12 @@ async def _discover_for_active_wallets(session: AsyncSession, *, run_id: uuid.UU
 
 async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Scan ETH and ERC-20 balances for all active wallets at the current block."""
-    integration = await get_integration(session, kind="rpc", decrypt_fields=True)
-    if integration is None or not integration.url:
+    try:
+        rpc_url = await get_validated_rpc_url(session)
+    except RpcUrlError:
+        logger.exception("balance_scan skipped — RPC URL failed validation run_id=%s", run_id)
+        return
+    if rpc_url is None:
         logger.warning("balance_scan skipped — no RPC integration configured run_id=%s", run_id)
         return
 
@@ -117,7 +122,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     for wallet_addr, token_addr in rows:
         monitored.setdefault(wallet_addr, []).append(token_addr)
 
-    async with RpcReader(url=integration.url, expected_chain_id=_ETH_MAINNET_CHAIN_ID) as rpc:
+    async with RpcReader(url=rpc_url, expected_chain_id=_ETH_MAINNET_CHAIN_ID) as rpc:
         await rpc.validate_chain()
         block_number = await rpc.get_block_number()
 
@@ -265,6 +270,13 @@ async def _main() -> None:
             async with factory() as session:
                 await recheck_canonicality(session)
                 await session.commit()
+            # Housekeeping: login_attempt/session rows are never pruned
+            # otherwise, so both tables grow without bound (AUD-322).
+            async with factory() as session:
+                deleted = await cleanup_expired_auth_rows(session)
+                await session.commit()
+                if deleted["login_attempt"] or deleted["session"]:
+                    logger.info("auth cleanup deleted=%s", deleted)
         except Exception:
             logger.exception("worker poll error")
             did_work = False

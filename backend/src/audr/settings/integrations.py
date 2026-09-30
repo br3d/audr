@@ -28,6 +28,7 @@ class IntegrationRead:
     # Plaintext fields exposed only to the authenticated owner (never logged).
     url: str | None = None
     api_key: str | None = None
+    allow_private_host: bool = False
 
 
 async def get_integration(
@@ -62,6 +63,7 @@ async def get_integration(
         payload = json.loads(decrypt(row[3], aad, key))
         read.url = payload.get("url")
         read.api_key = payload.get("api_key")
+        read.allow_private_host = bool(payload.get("allow_private_host", False))
 
     return read
 
@@ -72,6 +74,7 @@ async def upsert_integration(
     kind: str,
     url: str | None = None,
     api_key: str | None = None,
+    allow_private_host: bool = False,
     expected_revision: int | None = None,
 ) -> IntegrationRead:
     """Create or replace an integration.
@@ -93,7 +96,9 @@ async def upsert_integration(
                 f"revision mismatch: expected {expected_revision}, got {row[1]}"
             )
 
-    payload = json.dumps({"url": url, "api_key": api_key}).encode()
+    payload = json.dumps(
+        {"url": url, "api_key": api_key, "allow_private_host": allow_private_host}
+    ).encode()
 
     if row is None:
         int_id = uuid.uuid4()

@@ -74,21 +74,29 @@ async def readiness() -> ReadyResponse:
 
 
 async def _collect_status() -> SystemStatus:
+    import sqlalchemy as sa
+
     from audr.db import _get_session_factory
     from audr.jobs.store import get_worker_heartbeat
     from audr.operations.crypto import MissingKeyError
     from audr.operations.init_key import get_master_key
+    from audr.operations.migrations import check_migration_readiness
 
     system = SystemStatus()
 
     try:
         session_factory = _get_session_factory()
         async with session_factory() as session:
-            await session.execute(__import__("sqlalchemy").text("SELECT 1"))
+            await session.execute(sa.text("SELECT 1"))
+            readiness = await check_migration_readiness(session)
             system.migration = MigrationStatus(
-                current_revision=None,
-                up_to_date=True,
-                status=ComponentStatus.OK,
+                current_revision=readiness["current"],
+                up_to_date=readiness["up_to_date"],
+                status=(
+                    ComponentStatus.OK
+                    if readiness["up_to_date"]
+                    else ComponentStatus.DEGRADED
+                ),
             )
             try:
                 await get_master_key(session)
