@@ -243,6 +243,36 @@ async def heartbeat(session: AsyncSession, *, run_id: uuid.UUID) -> None:
     await session.flush()
 
 
+async def upsert_worker_status(
+    session: AsyncSession,
+    *,
+    worker_id: str,
+    status: str,
+    current_job_run_id: uuid.UUID | None = None,
+) -> None:
+    """Record a worker-process liveness heartbeat (AUD-318).
+
+    Nothing wrote `worker_status` before this, so `GET /api/v1/status` reported
+    the worker as "unknown" forever and the Status page could not distinguish a
+    healthy worker from a dead one. `status` must be one of idle/running/stopped
+    (enforced by ck_worker_status_ck_worker_status_status).
+    """
+    await session.execute(
+        sa.text(
+            """
+            INSERT INTO worker_status (worker_id, status, last_heartbeat_at, current_job_run_id)
+            VALUES (:worker_id, :status, now(), :run_id)
+            ON CONFLICT (worker_id) DO UPDATE
+            SET status = EXCLUDED.status,
+                last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                current_job_run_id = EXCLUDED.current_job_run_id
+            """
+        ),
+        {"worker_id": worker_id, "status": status, "run_id": current_job_run_id},
+    )
+    await session.flush()
+
+
 async def complete_job(session: AsyncSession, *, run_id: uuid.UUID) -> None:
     """Mark *run_id* as completed and advance the schedule's last_run_at."""
     await session.execute(

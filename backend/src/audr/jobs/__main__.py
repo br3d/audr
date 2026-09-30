@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import socket
 import uuid
 
 import sqlalchemy as sa
@@ -18,7 +19,7 @@ from audr.jobs.canonicality import recheck_canonicality
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
 from audr.jobs.quotes import handle_quote_refresh
-from audr.jobs.store import JobKind
+from audr.jobs.store import JobKind, upsert_worker_status
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
 from audr.portfolio.balances import record_balance
@@ -166,6 +167,19 @@ async def handle_valuation(session: AsyncSession, run_id: uuid.UUID) -> None:
     await session.commit()
 
 
+async def _record_worker_status(
+    factory: async_sessionmaker[AsyncSession], worker_id: str, status: str
+) -> None:
+    """Write the process liveness heartbeat. Never fatal — a DB blip must not
+    kill the worker loop, it only makes /status report a stale heartbeat."""
+    try:
+        async with factory() as session:
+            await upsert_worker_status(session, worker_id=worker_id, status=status)
+            await session.commit()
+    except Exception:
+        logger.warning("worker status heartbeat failed worker_id=%s", worker_id)
+
+
 async def _bootstrap_catalog(factory: async_sessionmaker[AsyncSession]) -> None:
     """Import the pinned token catalog at startup (idempotent). Errors are non-fatal."""
     try:
@@ -194,6 +208,12 @@ async def _main() -> None:
     loop.add_signal_handler(signal.SIGINT, stop.set)
 
     await _bootstrap_catalog(factory)
+
+    # Hostname, not pid: one worker container per host in this deployment, and a
+    # restart must reuse the same worker_status row instead of accumulating one
+    # row per process lifetime.
+    process_worker_id = socket.gethostname()
+    await _record_worker_status(factory, process_worker_id, "idle")
 
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
@@ -237,12 +257,19 @@ async def _main() -> None:
             logger.exception("worker poll error")
             did_work = False
 
+        # Liveness heartbeat: GET /api/v1/status reads the newest worker_status
+        # row and reports "unknown" when the table is empty (AUD-318).
+        await _record_worker_status(
+            factory, process_worker_id, "running" if did_work else "idle"
+        )
+
         if not did_work:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=_POLL_INTERVAL_S)
             except asyncio.TimeoutError:
                 pass
 
+    await _record_worker_status(factory, process_worker_id, "stopped")
     logger.info("worker stopped")
 
 
