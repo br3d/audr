@@ -14,6 +14,7 @@ import HistoryPage from './pages/HistoryPage'
 import SchedulesPage from './pages/SchedulesPage'
 import StatusPage from './pages/StatusPage'
 import AccountDataPage from './pages/AccountDataPage'
+import AssistantPage from './pages/AssistantPage'
 
 export default function App() {
   const queryClient = useQueryClient()
@@ -96,6 +97,7 @@ export default function App() {
       {page === 'schedules' && <SchedulesPage />}
       {page === 'status' && <StatusPage />}
       {page === 'account' && <AccountDataPage />}
+      {page === 'assistant' && <AssistantPage />}
     </Layout>
   )
 }
