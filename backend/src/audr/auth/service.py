@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import anyio
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from sqlalchemy import func, select, update
@@ -76,7 +77,7 @@ async def setup_owner(db: AsyncSession, password: str) -> tuple[UUID, str]:
     Returns (session_id, csrf_token).
     Raises AlreadySetupError if an owner already exists.
     """
-    hash_ = _hasher.hash(password)
+    hash_ = await anyio.to_thread.run_sync(_hasher.hash, password)
     now = _utcnow()
     owner = Owner(
         id=uuid.uuid4(),
@@ -132,25 +133,21 @@ async def login(db: AsyncSession, password: str) -> tuple[UUID, str]:
         raise NotSetupError
 
     try:
-        _hasher.verify(owner.argon2_hash, password)
+        await anyio.to_thread.run_sync(_hasher.verify, owner.argon2_hash, password)
     except VerifyMismatchError:
         await _record_attempt(db, success=False)
         await db.commit()
         raise AuthenticationError from None
 
     # Rehash if parameters changed.
-    if _hasher.check_needs_rehash(owner.argon2_hash):
-        owner.argon2_hash = _hasher.hash(password)
+    if await anyio.to_thread.run_sync(_hasher.check_needs_rehash, owner.argon2_hash):
+        owner.argon2_hash = await anyio.to_thread.run_sync(_hasher.hash, password)
         owner.updated_at = _utcnow()
 
     await _record_attempt(db, success=True)
     session = await _create_session(db)
     await db.commit()
     return session.id, session.csrf_token
-
-
-# Type alias used by audr.auth.dependencies — Session ORM row returned by get_session.
-SessionRow = Session
 
 
 async def get_session(db: AsyncSession, *, token: str) -> Session | None:
@@ -203,12 +200,12 @@ async def change_password(
         raise AuthenticationError
 
     try:
-        _hasher.verify(owner.argon2_hash, current_password)
+        await anyio.to_thread.run_sync(_hasher.verify, owner.argon2_hash, current_password)
     except VerifyMismatchError:
         raise AuthenticationError from None
 
     now = _utcnow()
-    owner.argon2_hash = _hasher.hash(new_password)
+    owner.argon2_hash = await anyio.to_thread.run_sync(_hasher.hash, new_password)
     owner.updated_at = now
     await db.flush()
 

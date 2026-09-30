@@ -107,18 +107,9 @@ async def get_portfolio_holdings(
             except Exception:
                 quantity_str = None
 
-        from audr.wallets.models import Wallet as _Wallet  # noqa: F401 local import
-        from sqlalchemy import select as _select
-
-        wallet_result = await db.execute(
-            _select(_Wallet.address).where(_Wallet.id == line["wallet_id"])
-        )
-        wallet_row = wallet_result.first()
-        wallet_address = wallet_row[0] if wallet_row else str(line["wallet_id"])
-
         response.append(
             HoldingResponse(
-                wallet_address=wallet_address,
+                wallet_address=str(line["wallet_address"]),
                 token_address=str(line["token_address"]),
                 symbol=str(line["symbol"]) if line["symbol"] else None,
                 decimals=decimals,

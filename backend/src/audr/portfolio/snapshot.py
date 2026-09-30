@@ -138,6 +138,7 @@ async def get_latest_snapshot_lines(
             """
             SELECT
                 vl.wallet_id,
+                w.address,
                 vl.asset_id,
                 a.token_address,
                 a.symbol,
@@ -150,6 +151,7 @@ async def get_latest_snapshot_lines(
             FROM valuation_line vl
             JOIN valuation_snapshot vs ON vs.id = vl.snapshot_id
             JOIN asset a ON a.id = vl.asset_id
+            JOIN wallet w ON w.id = vl.wallet_id
             WHERE vs.published_at = (
                 SELECT MAX(published_at) FROM valuation_snapshot
                 WHERE published_at IS NOT NULL
@@ -163,15 +165,16 @@ async def get_latest_snapshot_lines(
         rows.append(
             {
                 "wallet_id": row[0],
-                "asset_id": row[1],
-                "token_address": row[2],
-                "symbol": row[3],
-                "name": row[4],
-                "effective_decimals": row[5],
-                "raw_amount": row[6],
-                "block_number": row[7],
-                "price_usd": row[8],
-                "value_usd": row[9],
+                "wallet_address": row[1],
+                "asset_id": row[2],
+                "token_address": row[3],
+                "symbol": row[4],
+                "name": row[5],
+                "effective_decimals": row[6],
+                "raw_amount": row[7],
+                "block_number": row[8],
+                "price_usd": row[9],
+                "value_usd": row[10],
             }
         )
     return rows

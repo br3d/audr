@@ -37,7 +37,7 @@ from audr.providers.rpc_reader import (
     _topic_to_address,
     decode_transfer_amount,
 )
-from audr.settings.integrations import get_integration
+from audr.providers.rpc_targets import RpcUrlError, get_validated_rpc_url
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +46,14 @@ _MAINNET_CHAIN_ID = 1
 
 async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Index ERC-20 Transfer events for all active wallets."""
-    integration = await get_integration(session, kind="rpc", decrypt_fields=True)
-    if integration is None or not integration.url:
+    try:
+        rpc_url = await get_validated_rpc_url(session)
+    except RpcUrlError:
+        logger.exception("event_indexer skipped — RPC URL failed validation run_id=%s", run_id)
+        return
+    if rpc_url is None:
         logger.warning("event_indexer skipped — no RPC URL configured run_id=%s", run_id)
         return
-    rpc_url = integration.url
 
     token_addresses = await _get_tracked_token_addresses(session)
     if not token_addresses:

@@ -29,6 +29,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -855,6 +856,33 @@ async def test_health_ready_worker_reflects_live_heartbeat(
                 {"wid": worker_id},
             )
             await session.commit()
+
+
+@pytest.mark.integration
+async def test_health_ready_reflects_real_migration_status(
+    client: httpx.AsyncClient,
+) -> None:
+    """/health/ready is fully migrated in the test DB → 200 with a real revision.
+
+    AUD-322: previously this always reported migration="ok" with no revision,
+    even against an unmigrated DB. It now surfaces the real alembic revision.
+    """
+    r = await client.get("/health/ready")
+    assert r.status_code == 200
+    assert r.json()["migration"] == "ok"
+
+
+@pytest.mark.integration
+async def test_health_ready_503_when_migration_is_stale(
+    client: httpx.AsyncClient,
+) -> None:
+    """/health/ready → 503 with migration="degraded" when the DB lags alembic head."""
+    with patch(
+        "audr.operations.migrations._get_head_revision", return_value="0_nonexistent"
+    ):
+        r = await client.get("/health/ready")
+    assert r.status_code == 503
+    assert r.json()["error"]["migration"] == "degraded"
 
 
 # ===========================================================================

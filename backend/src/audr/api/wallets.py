@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ from audr.wallets.service import (
     WalletNotFoundError,
     add_wallet,
     get_wallet,
-    list_wallets,
+    list_wallets_page,
     reactivate_wallet,
     set_label,
     stop_wallet,
@@ -96,12 +96,24 @@ def _wallet_to_out(wallet: Wallet) -> WalletOut:
 async def get_wallets(
     _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
 ) -> WalletsListOut:
-    wallets = await list_wallets(db)
+    cursor_uuid: uuid.UUID | None = None
+    if cursor is not None:
+        try:
+            cursor_uuid = uuid.UUID(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="cursor is not a valid UUID",
+            )
+
+    wallets, next_cursor = await list_wallets_page(db, cursor=cursor_uuid, limit=limit)
     now = datetime.now(tz=UTC)
     return WalletsListOut(
         items=[_wallet_to_out(w) for w in wallets],
-        next_cursor=None,
+        next_cursor=str(next_cursor) if next_cursor is not None else None,
         request_id=str(uuid.uuid4()),
         generated_at=now.isoformat(),
     )

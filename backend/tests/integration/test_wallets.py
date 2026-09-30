@@ -174,6 +174,47 @@ async def test_list_wallets_returns_added_wallets(http_client: httpx.AsyncClient
     assert _ADDR_B in addresses
 
 
+@pytest.mark.integration
+async def test_list_wallets_paginates_with_cursor(http_client: httpx.AsyncClient) -> None:
+    """AUD-322: cursor is honoured and next_cursor advances until exhausted."""
+    csrf = await _setup_and_get_csrf(http_client)
+    addr_c = "0x" + "c" * 40
+    await _add_wallet(http_client, csrf, address=_ADDR_A, label="A")
+    await _add_wallet(http_client, csrf, address=_ADDR_B, label="B")
+    await _add_wallet(http_client, csrf, address=addr_c, label="C")
+
+    r1 = await http_client.get(
+        _WALLETS_URL, params={"limit": 2}, headers={"x-csrf-token": csrf}
+    )
+    assert r1.status_code == 200
+    page1 = r1.json()
+    assert [w["address"] for w in page1["items"]] == [_ADDR_A, _ADDR_B]
+    assert page1["next_cursor"] is not None
+
+    r2 = await http_client.get(
+        _WALLETS_URL,
+        params={"limit": 2, "cursor": page1["next_cursor"]},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r2.status_code == 200
+    page2 = r2.json()
+    assert [w["address"] for w in page2["items"]] == [addr_c]
+    assert page2["next_cursor"] is None
+
+
+@pytest.mark.integration
+async def test_list_wallets_invalid_cursor_returns_400(
+    http_client: httpx.AsyncClient,
+) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.get(
+        _WALLETS_URL,
+        params={"cursor": "not-a-uuid"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # GET /wallets/{id} tests
 # ---------------------------------------------------------------------------

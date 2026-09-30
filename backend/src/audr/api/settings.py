@@ -476,35 +476,56 @@ async def list_jobs(
     cursor: str | None = None,
     limit: int = 20,
 ) -> JobsListResponse:
-    """Return job run history, newest first (cursor pagination)."""
+    """Return job run history, newest first (keyset cursor pagination)."""
     limit = min(limit, 100)
 
-    kind_filter = ""
-    params: dict[str, Any] = {"limit": limit}
+    conditions: list[str] = []
+    params: dict[str, Any] = {"limit": limit + 1}
 
     # Map frontend kind name to DB kind if provided.
     if kind is not None:
         kind_db = _FE_TO_DB.get(kind, kind)
-        kind_filter = "WHERE kind = :kind"
+        conditions.append("kind = :kind")
         params["kind"] = kind_db
+
+    if cursor is not None:
+        try:
+            cursor_uuid = uuid.UUID(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="cursor is not a valid UUID",
+            )
+        # Keyset pagination: strictly-older-than the cursor row, tie-broken by
+        # id since bulk-enqueued jobs can share the same created_at value.
+        conditions.append(
+            "(created_at, id) < (SELECT created_at, id FROM job_run WHERE id = :cursor)"
+        )
+        params["cursor"] = cursor_uuid
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     rows_result = await db.execute(
         sa.text(
             f"""
             SELECT id, kind, status, retry_count, error,
                    claimed_at, completed_at, created_at
-            FROM job_run {kind_filter}
-            ORDER BY created_at DESC
+            FROM job_run {where_clause}
+            ORDER BY created_at DESC, id DESC
             LIMIT :limit
             """  # noqa: S608
         ),
         params,
     )
-    items = [_map_job_row(row) for row in rows_result.fetchall()]
+    rows = rows_result.fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = [_map_job_row(row) for row in rows]
+    next_cursor = str(rows[-1][0]) if has_more and rows else None
     now = datetime.now(tz=UTC)
     return JobsListResponse(
         items=items,
-        next_cursor=None,
+        next_cursor=next_cursor,
         request_id=str(uuid.uuid4()),
         generated_at=now.isoformat(),
     )
