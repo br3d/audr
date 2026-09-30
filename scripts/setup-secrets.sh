@@ -30,6 +30,21 @@ else
     echo "master_key.hex already exists — skipping"
 fi
 
+# Ethereum RPC URL used by scripts/seed_dev.sh (AUD-349).  The URL embeds a
+# provider API key, so it lives only here — never in git.  Supply it once via
+# AUDR_SEED_RPC_URL; ask infraLead for the shared value if you do not have it.
+if [ ! -f "$SECRETS_DIR/rpc_url.txt" ]; then
+    if [ -n "${AUDR_SEED_RPC_URL:-}" ]; then
+        printf '%s' "$AUDR_SEED_RPC_URL" > "$SECRETS_DIR/rpc_url.txt"
+        chmod 600 "$SECRETS_DIR/rpc_url.txt"
+        echo "Wrote rpc_url.txt from AUDR_SEED_RPC_URL"
+    else
+        echo "rpc_url.txt not set — re-run with AUDR_SEED_RPC_URL=... to seed the RPC integration"
+    fi
+else
+    echo "rpc_url.txt already exists — skipping"
+fi
+
 ENV_FILE="$(dirname "$0")/../.env"
 if [ ! -f "$ENV_FILE" ]; then
     DB_PASSWORD="$(cat "$SECRETS_DIR/db_password.txt")"

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Seed a running audr instance with canonical dev/test fixtures (AUD-286).
 #
-# Creates the owner account with the test password and registers the Buterin
-# wallet.  Safe to run multiple times — skips steps that are already done.
+# Creates the owner account with the test password, registers the Buterin
+# wallet, and — when an RPC URL is available out of band — configures the RPC
+# integration (AUD-349).  Safe to run multiple times — skips steps that are
+# already done.
 #
 # Usage:
 #   ./scripts/seed_dev.sh [BASE_URL]
@@ -11,8 +13,17 @@
 #
 # The password seeded is the canonical test password defined in
 # backend/tests/fixtures/seed.py (TEST_PASSWORD = "Rand0mP@ssw0rd").
+#
+# RPC URL (never committed — the URL embeds a provider API key):
+#   resolved from the first source that is set, in this order
+#     1. AUDR_SEED_RPC_URL environment variable
+#     2. ./secrets/rpc_url.txt          (secrets/ is git-ignored)
+#     3. AUDR_SEED_RPC_URL=... in ./.env (.env is git-ignored)
+#   If none is present the RPC step is skipped with a note — seeding still
+#   succeeds, and the URL can be entered later through Settings → Integrations.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost}}"
 API="${BASE_URL}/api/v1"
 PASSWORD="Rand0mP@ssw0rd"
@@ -24,6 +35,31 @@ trap 'rm -f "${COOKIE_JAR}"' EXIT
 _json_field() {
   # _json_field <field> <json_string>
   python3 -c "import sys,json; print(json.loads(sys.argv[2])[sys.argv[1]])" "$1" "$2"
+}
+
+_resolve_rpc_url() {
+  # Echo the seed RPC URL from the first available out-of-git source, or
+  # nothing when none is configured.  Never echo it to the console — callers
+  # capture it into a variable and only ever print the hostname.
+  if [[ -n "${AUDR_SEED_RPC_URL:-}" ]]; then
+    printf '%s' "${AUDR_SEED_RPC_URL}"
+    return
+  fi
+  if [[ -r "${ROOT}/secrets/rpc_url.txt" ]]; then
+    tr -d '[:space:]' < "${ROOT}/secrets/rpc_url.txt"
+    return
+  fi
+  if [[ -r "${ROOT}/.env" ]]; then
+    # Last matching assignment wins; strip optional surrounding quotes.
+    sed -n 's/^[[:space:]]*AUDR_SEED_RPC_URL=//p' "${ROOT}/.env" \
+      | tail -n 1 \
+      | tr -d '[:space:]' \
+      | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+  fi
+}
+
+_url_host() {
+  python3 -c "import sys,urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or '?')" "$1"
 }
 
 echo "==> Seeding ${BASE_URL}"
@@ -66,7 +102,52 @@ case "${HTTP_CODE}" in
   *)   echo "  -> ERROR: wallet creation returned HTTP ${HTTP_CODE}"; exit 1 ;;
 esac
 
-# ── 3. Logout (clean up session) ─────────────────────────────────────────────
+# ── 3. Configure the RPC integration (skipped when no URL is available) ──────
+
+RPC_URL="$(_resolve_rpc_url)"
+RPC_SEEDED="skipped"
+
+if [[ -z "${RPC_URL}" ]]; then
+  echo "  -> No RPC URL configured (AUDR_SEED_RPC_URL / secrets/rpc_url.txt / .env) — skipping RPC step"
+else
+  RPC_HOST="$(_url_host "${RPC_URL}")"
+  echo "  -> Configuring RPC integration (host ${RPC_HOST})"
+
+  INTEGRATIONS_JSON=$(curl -sf "${API}/integrations" -b "${COOKIE_JAR}")
+  RPC_REVISION=$(python3 -c "
+import sys, json
+items = json.loads(sys.argv[1])['items']
+print(next((i['revision'] for i in items if i['kind'] == 'rpc'), '0'))
+" "${INTEGRATIONS_JSON}")
+
+  RPC_BODY=$(python3 -c "
+import json, sys
+print(json.dumps({'revision': sys.argv[1], 'url': sys.argv[2]}))
+" "${RPC_REVISION}" "${RPC_URL}")
+
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${API}/integrations/rpc" \
+    -H "Content-Type: application/json" \
+    -H "x-csrf-token: ${CSRF}" \
+    -b "${COOKIE_JAR}" \
+    -d "${RPC_BODY}")
+
+  if [[ "${HTTP_CODE}" == "200" ]]; then
+    echo "  -> RPC integration saved (revision ${RPC_REVISION} -> next)"
+    RPC_SEEDED="${RPC_HOST}"
+    # Kick off a validation run so the UI shows real health instead of
+    # "unvalidated"; a failure here is not fatal for seeding.
+    curl -sf -X POST "${API}/integrations/rpc/validate" \
+      -H "x-csrf-token: ${CSRF}" \
+      -b "${COOKIE_JAR}" \
+      -o /dev/null && echo "  -> RPC validation job enqueued" \
+      || echo "  -> WARNING: could not enqueue RPC validation job"
+  else
+    echo "  -> ERROR: RPC configuration returned HTTP ${HTTP_CODE}"
+    exit 1
+  fi
+fi
+
+# ── 4. Logout (clean up session) ─────────────────────────────────────────────
 
 curl -sf -X POST "${API}/auth/logout" \
   -H "x-csrf-token: ${CSRF}" \
@@ -78,3 +159,4 @@ echo "==> Seed complete."
 echo "    URL:      ${BASE_URL}"
 echo "    Password: ${PASSWORD}"
 echo "    Wallet:   ${BUTERIN_ADDRESS} (${BUTERIN_LABEL})"
+echo "    RPC:      ${RPC_SEEDED}"

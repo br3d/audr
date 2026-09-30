@@ -22,15 +22,37 @@ curl -s http://localhost/health/live
 # {"status":"ok"}
 ```
 
-`setup-secrets.sh` writes three files if they do not already exist:
+`setup-secrets.sh` writes these files if they do not already exist:
 
 | File | Purpose |
 |---|---|
 | `secrets/db_password.txt` | PostgreSQL password (mounted as Docker secret) |
 | `secrets/master_key.hex` | 64-char hex master key-encryption-key |
+| `secrets/rpc_url.txt` | Ethereum RPC URL used by `scripts/seed_dev.sh` (only written when `AUDR_SEED_RPC_URL` is set) |
 | `.env` | `DB_PASSWORD` and `SECRET_KEY` for Compose |
 
 **Never commit `.env` or `secrets/`.** Both are in `.gitignore`.
+
+### Seeding the RPC integration (AUD-349)
+
+The dev RPC URL embeds a provider API key, so it must never reach git.
+`scripts/seed_dev.sh` resolves it at run time from the first source that is set:
+
+1. the `AUDR_SEED_RPC_URL` environment variable,
+2. `secrets/rpc_url.txt` (git-ignored, mode `600`),
+3. an `AUDR_SEED_RPC_URL=...` line in `.env` (git-ignored).
+
+```bash
+# one-off: store the URL locally, then seed
+AUDR_SEED_RPC_URL='https://mainnet.example/v3/<key>' bash scripts/setup-secrets.sh
+./scripts/seed_dev.sh                     # or: ./scripts/seed_dev.sh http://192.168.1.228
+```
+
+The script saves the URL through `PUT /api/v1/integrations/rpc` (encrypted at
+rest with the master key) and enqueues a validation run. It prints only the
+hostname, never the full URL. When no URL is available the step is skipped with
+a note and the rest of the seed still succeeds — the URL can then be entered
+manually in Settings → Integrations. Ask infraLead for the shared value.
 
 ### Subsequent starts
 
