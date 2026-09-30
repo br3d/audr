@@ -45,23 +45,36 @@ _ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Build ERC-20 discovery candidate lists for all active wallets."""
+    await _discover_for_active_wallets(session, run_id=run_id)
+    await session.commit()
+
+
+async def _discover_for_active_wallets(session: AsyncSession, *, run_id: uuid.UUID) -> None:
+    """Run discovery for every active wallet, keyed per-wallet within the run's checkpoint.
+
+    The run's checkpoint is a single job_run.checkpoint JSON blob shared by all
+    wallets in this run, so it must be sub-keyed by wallet address — otherwise
+    the "processed" set left behind by wallet N is read back as wallet N+1's
+    checkpoint and makes it skip every catalog address already seen.
+    """
     wallets = await list_wallets(session)
+    run_checkpoint = await get_discovery_checkpoint(session, run_id=run_id) or {}
     for wallet in wallets:
         if wallet.status != "active":
             continue
-        checkpoint = await get_discovery_checkpoint(session, run_id=run_id)
         result = await discover_tokens(
             session,
             wallet_address=wallet.address,
             use_catalog=True,
             manual_addresses=[],
-            checkpoint=checkpoint,
+            checkpoint=run_checkpoint.get(wallet.address),
         )
         if result.checkpoint is not None:
+            run_checkpoint[wallet.address] = result.checkpoint
             await save_discovery_checkpoint(
                 session,
                 run_id=run_id,
-                checkpoint=result.checkpoint,
+                checkpoint=run_checkpoint,
             )
         new_pairs = await persist_discovery_candidates(
             session,
@@ -75,7 +88,6 @@ async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
             len(result.candidates),
             new_pairs,
         )
-    await session.commit()
 
 
 async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:

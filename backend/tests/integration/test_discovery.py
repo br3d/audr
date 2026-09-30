@@ -30,6 +30,7 @@ from audr.jobs.store import (
     JobKind,  # noqa: F401
     claim_job,  # noqa: F401
 )
+from audr.jobs.__main__ import _discover_for_active_wallets
 
 
 @pytest.mark.integration
@@ -248,3 +249,67 @@ async def test_discover_persist_scan_shows_holdings(
     )
     assert match is not None
     assert match.raw_amount == 500_000_000_000_000_000
+
+
+# ---------------------------------------------------------------------------
+# Multi-wallet checkpoint isolation (AUD-319)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_catalog(session: AsyncSession, token_addresses: list[str]) -> None:
+    version_id = uuid.uuid4()
+    await session.execute(
+        sa.text(
+            "INSERT INTO catalog_version (id, commit_hash, chain_id, entry_count) "
+            "VALUES (:id, :hash, 1, :count)"
+        ),
+        {"id": str(version_id), "hash": f"test-{version_id}", "count": len(token_addresses)},
+    )
+    for addr in token_addresses:
+        await session.execute(
+            sa.text(
+                "INSERT INTO catalog_entry (id, version_id, token_address, symbol, name, decimals) "
+                "VALUES (:id, :version_id, :addr, 'TST', 'Test Token', 18)"
+            ),
+            {"id": str(uuid.uuid4()), "version_id": str(version_id), "addr": addr.lower()},
+        )
+    await session.flush()
+
+
+@pytest.mark.integration
+async def test_discovery_gives_full_catalog_coverage_to_every_wallet(
+    db_session: AsyncSession,
+) -> None:
+    """A run-scoped checkpoint must not leak between wallets in the same run.
+
+    Regression for AUD-319: the checkpoint written after wallet 1 was keyed
+    only by run_id, so wallet 2 read it back and skipped every catalog
+    address already "processed" — silently dropping its coverage.
+    """
+    wallet_a = "0x" + "a1" * 20
+    wallet_b = "0x" + "b2" * 20
+    await _insert_wallet(db_session, wallet_a)
+    await _insert_wallet(db_session, wallet_b)
+
+    catalog_tokens = ["0x" + f"{i:02x}" * 20 for i in range(1, 4)]
+    await _seed_catalog(db_session, catalog_tokens)
+
+    run_id = await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=3)
+    assert run_id is not None
+
+    await _discover_for_active_wallets(db_session, run_id=run_id)
+
+    for wallet_addr in (wallet_a, wallet_b):
+        count = (
+            await db_session.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM monitored_pair mp "
+                    "JOIN wallet w ON w.id = mp.wallet_id "
+                    "WHERE w.address = :addr"
+                ),
+                {"addr": wallet_addr.lower()},
+            )
+        ).scalar()
+        assert count == len(catalog_tokens), (
+            f"wallet {wallet_addr} got {count}/{len(catalog_tokens)} catalog pairs"
+        )
