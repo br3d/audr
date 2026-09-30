@@ -89,3 +89,55 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost/
 `GET /health/ready` is the only trustworthy public signal: nginx proxies just
 `^/(api|health)/` and serves `index.html` for everything else, so a bare `/`
 returns 200 from the SPA fallback even when the API is dead.
+
+## Registry tag retention
+
+The registry at `192.168.1.90:8085` is a plain CNCF `distribution` registry
+behind nginx — **not Harbor**, despite the name used in older notes. It exposes
+only the `/v2` API (`/api/v2.0/systeminfo` 404s), so there is no retention
+feature to switch on: retention is enforced from outside by
+`scripts/registry-prune.py`, which needs nothing but HTTP.
+
+```bash
+python3 scripts/registry-prune.py                 # dry run; prints keep/prune per tag
+python3 scripts/registry-prune.py --apply         # delete
+python3 scripts/registry-prune.py --keep 12 --protect b57f2d107ecc
+python3 scripts/test_registry_prune.py            # retention-rule unit tests, no deps
+```
+
+A tag survives if it is `latest`/`rollback`, looks like a release tag (`v0.1.0`),
+is the tag pinned in `~/audr/.env`, is among the `--keep` newest by image
+creation time, or shares a manifest digest with anything protected by those
+rules. Three of those deserve explaining, because each one is load-bearing:
+
+- **Deletion is by digest, and a digest delete removes every tag pointing at
+  it.** Pruning a stale sha tag that happens to share `latest`'s or
+  `rollback`'s digest would destroy the rollback path, so digests shared with a
+  protected tag are excluded. (`f4c1636` survives today purely because it is
+  `v0.1.0`'s digest.)
+- **The live and previous sha tags are not history.** `deploy.yaml`'s
+  `rollback()` restores the previous release by `docker pull`ing the immutable
+  `audr-backend:<prev-sha>` from this registry, falling back to `:rollback`. A
+  host prune or rebuild is exactly when that pull matters.
+- **A sha must be kept in both repositories or neither.** A deploy pins
+  `BACKEND_TAG` and `FRONTEND_TAG` to the same sha, so keeping it on one side
+  gives a rollback that half-succeeds. Per-repo age ranking does not deliver
+  that by itself: many tags here share an identical image `created` timestamp
+  (a rebuild of unchanged layers reuses the date) and the resulting ties break
+  differently per repository. The script therefore unions each repository's
+  newest-N and applies that union everywhere.
+
+The script refuses any repository not named `audr-*`: this registry is shared
+with an unrelated project (`svetu-backend`, `svetu-frontend`, 91 tags each).
+
+**Deleting tags does not free disk.** A manifest delete only unlinks; the blobs
+are reclaimed solely by
+
+```bash
+registry garbage-collect -c /etc/docker/registry/config.yml   # on 192.168.1.90
+```
+
+which must run as a process on the registry host. We have no shell on
+`192.168.1.90`, so that half stays open and is tracked separately — until it
+runs, pruning buys catalog clarity, not bytes. The same gap is why
+`library/aud-pushtest` still appears in `/v2/_catalog` with `tags: null`.
