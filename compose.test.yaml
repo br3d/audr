@@ -22,12 +22,18 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
 
-  # Controlled HTTP provider: mocks Ethereum RPC and CoinGecko endpoints
+  # Controlled HTTP provider: mocks Ethereum RPC and CoinGecko endpoints.
+  #
+  # Deliberately NOT bind-mounting ./tests/fixtures/wiremock into /home/wiremock.
+  # Nothing is tracked under tests/fixtures — the suite registers its stubs over
+  # WireMock's admin API at runtime, so the mount supplied no fixtures. What it
+  # DID do was make the container create `mappings/` and `__files/` in the
+  # checkout as root, which the Gitea act runner then cannot delete: every CI
+  # run ended with "unlinkat .../tests/fixtures/wiremock/mappings: permission
+  # denied" and leaked an undeletable checkout under ~/.cache/act. See AUD-333.
   provider-mock:
     image: wiremock/wiremock:3.13.0
     command: ["--port", "8080", "--verbose"]
-    volumes:
-      - ./tests/fixtures/wiremock:/home/wiremock
     networks:
       - test-net
     healthcheck:
