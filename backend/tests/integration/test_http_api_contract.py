@@ -60,25 +60,40 @@ def _make_override(factory: async_sessionmaker[AsyncSession]):
     return _override
 
 
-@pytest.fixture(autouse=True)
-async def _clean_tables(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
-    """Truncate all state tables before every test so runs are independent."""
+_CLEAN_ORDER = (
+    "valuation_line",
+    "valuation_snapshot",
+    "monitored_pair",
+    "balance_observation",
+    "asset_metadata_revision",
+    "asset",
+    "wallet",
+    "job_run",
+    "login_attempt",
+    "session",
+    "owner",
+)
+
+
+async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
-            for tbl in (
-                "valuation_line",
-                "valuation_snapshot",
-                "monitored_pair",
-                "balance_observation",
-                "asset_metadata_revision",
-                "asset",
-                "wallet",
-                "job_run",
-                "login_attempt",
-                "session",
-                "owner",
-            ):
+            for tbl in _CLEAN_ORDER:
                 await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608
+
+
+@pytest.fixture(autouse=True)
+async def _clean_tables(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[None]:
+    """Truncate all state tables before *and* after every test.
+
+    The asset routes commit, so rows left behind by the last test in this module
+    would otherwise outlive it and break later suites that DELETE FROM wallet.
+    """
+    await _wipe(db_session_factory)
+    yield
+    await _wipe(db_session_factory)
 
 
 @pytest.fixture()
@@ -444,7 +459,6 @@ async def test_wallets_patch_404_unknown(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: GET /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_list_200_collection_shape(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
@@ -456,7 +470,6 @@ async def test_assets_list_200_collection_shape(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: GET /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_list_401_unauthenticated(client: httpx.AsyncClient) -> None:
     """GET /assets → 401 when unauthenticated."""
     r = await client.get(f"{_V1}/assets")
@@ -464,7 +477,6 @@ async def test_assets_list_401_unauthenticated(client: httpx.AsyncClient) -> Non
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: POST /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_manual_post_201(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
@@ -482,7 +494,6 @@ async def test_assets_manual_post_201(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: POST /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_manual_post_409_duplicate(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
@@ -499,7 +510,6 @@ async def test_assets_manual_post_409_duplicate(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: PATCH /assets/{id} not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_patch_200(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """PATCH /assets/{id} → 200 with updated asset."""
     c, csrf = auth_client
@@ -632,7 +642,6 @@ async def test_jobs_cancel_202(auth_client: tuple[httpx.AsyncClient, str]) -> No
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-7: GET /portfolio not implemented (AUD-317 blocked); see AUD-335")
 async def test_portfolio_get_200(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """GET /portfolio → 200 portfolio envelope."""
     c, _ = auth_client
@@ -650,7 +659,6 @@ async def test_portfolio_get_200(auth_client: tuple[httpx.AsyncClient, str]) -> 
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-7: GET /portfolio not implemented (AUD-317 blocked); see AUD-335")
 async def test_portfolio_401_unauthenticated(client: httpx.AsyncClient) -> None:
     """GET /portfolio → 401 when unauthenticated."""
     r = await client.get(f"{_V1}/portfolio")
@@ -859,7 +867,6 @@ async def test_wallets_pagination_cursor_is_none_or_string(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: GET /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_pagination_cursor_is_none_or_string(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
@@ -897,7 +904,6 @@ async def test_wallets_post_requires_csrf(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-6: POST /assets not implemented (AUD-317 blocked); see AUD-335")
 async def test_assets_manual_post_requires_csrf(client: httpx.AsyncClient) -> None:
     """POST /assets/manual without CSRF → 401 or 403."""
     await client.post(f"{_V1}/setup", json={"password": _PASSWORD})

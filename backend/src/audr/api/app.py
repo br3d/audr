@@ -9,6 +9,7 @@ from collections.abc import Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from audr.api.assets import router as assets_router
 from audr.api.auth import router as auth_router
 from audr.api.errors import unhandled_exception_handler
 from audr.api.events import router as events_router
@@ -17,6 +18,7 @@ from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
 from audr.api.integrations import router as integrations_router
 from audr.api.news import router as news_router
+from audr.api.portfolio import router as portfolio_router
 from audr.api.settings import router as settings_router
 from audr.api.wallets import router as wallets_router
 
@@ -68,6 +70,8 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(wallets_router)
     app.include_router(holdings_router)
+    app.include_router(portfolio_router)
+    app.include_router(assets_router)
     app.include_router(history_router)
     app.include_router(integrations_router)
     app.include_router(settings_router)
