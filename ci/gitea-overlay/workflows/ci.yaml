@@ -1,0 +1,66 @@
+name: CI
+
+# Runs the project test suite on pushes to main and on pull requests.
+# Executes on the self-hosted `host` runner (deploy host 192.168.1.228) so that
+# docker compose bind-mounts in compose.test.yaml resolve against the checkout.
+#
+# The push trigger is filtered to `main` on purpose. This file reaches Gitea
+# only through the mirror's overlay, and the overlay is applied to main alone —
+# every other branch is pushed verbatim from GitHub, where no .gitea/ directory
+# exists — so a bare `on: push` could only ever fire for main anyway. Stating
+# the filter keeps that from becoming accidental: if .gitea/workflows is ever
+# committed upstream, the mirror would start replaying the full suite on every
+# long-stale branch it syncs. Pre-merge coverage comes from `pull_request`.
+# See AUD-333.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: host
+    env:
+      # compose.test.yaml declares the fixed project name `audr-test`, so every
+      # `docker compose -f compose.test.yaml` invocation on this host shares the
+      # same containers, volumes and `audr-test_test-net` network. A concurrent
+      # local run — or a second CI job, now that the runner is at capacity 2 —
+      # therefore collides, and either side's `down -v --remove-orphans`
+      # destroys the other's database mid-run. That is what produced CI run #51
+      # (migrate-test exit 255, teardown logging "Network audr-test_test-net
+      # Resource is still in use") on a sha that was green on the next run with
+      # no code change. Namespace the stack per run so runs cannot see each
+      # other. See AUD-310.
+      COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backend unit + integration tests (compose)
+        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build backend-tests
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml down -v --remove-orphans
+          # Per-run project names mean a killed runner leaks a network, and the
+          # default Docker address pool only holds a few dozen bridges. Reap
+          # leftovers from earlier runs: `docker network rm` refuses a network
+          # that still has a container attached, so a live concurrent run is
+          # never disturbed.
+          for net in $(docker network ls --filter 'name=^audr-test-' --format '{{.Name}}'); do
+            docker network rm "$net" >/dev/null 2>&1 || true
+          done
+
+  frontend-tests:
+    # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match
+    # the project's build toolchain (native rolldown/vite bindings need Node 22).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Frontend tests (vitest)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run test

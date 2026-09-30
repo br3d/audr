@@ -1,0 +1,46 @@
+name: Build & Push Images
+
+# DISABLED auto-trigger (AUD-294 incident 2026-09-28): the deployed code on
+# 192.168.1.228 (~/audr @ 9ae03b6, migration 008) is NOT committed to this repo's
+# main (stops at 007), so builds from main produce STALE images that break the DB
+# schema on deploy. Manual dispatch only until the deployed code is reconciled
+# into git. Harbor is anonymous (no login).
+on:
+  workflow_dispatch:
+
+# Shares deploy.yaml's group: this workflow moves Harbor :latest, so a manual
+# dispatch must not overlap a guarded deploy that is snapshotting/advancing the
+# same tag. See AUD-310.
+concurrency:
+  group: audr-deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: 192.168.1.90:8085
+
+jobs:
+  build-push:
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute tags
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "version=latest" >> "$GITHUB_OUTPUT"
+      - name: Build backend image
+        run: |
+          docker build --target runtime \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}" \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}" .
+      - name: Build frontend image
+        run: |
+          docker build --target frontend-server \
+            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}" \
+            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}" .
+      - name: Push images
+        run: |
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}"
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}"
+          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}"
+          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}"
