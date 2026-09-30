@@ -860,29 +860,47 @@ async def test_health_ready_worker_reflects_live_heartbeat(
 
 @pytest.mark.integration
 async def test_health_ready_reflects_real_migration_status(
-    client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """/health/ready is fully migrated in the test DB → 200 with a real revision.
+    """_collect_status() reports the real alembic revision, not a hardcoded
+    up_to_date=True.
 
     AUD-322: previously this always reported migration="ok" with no revision,
     even against an unmigrated DB. It now surfaces the real alembic revision.
+
+    Calls _collect_status() directly (patching audr.db._get_session_factory)
+    rather than going through GET /health/ready — see
+    test_health_ready_worker_reflects_live_heartbeat above for why the route
+    itself can't be exercised in this test environment (missing SECRET_KEY).
     """
-    r = await client.get("/health/ready")
-    assert r.status_code == 200
-    assert r.json()["migration"] == "ok"
+    from audr.api.health import _collect_status
+
+    with patch("audr.db._get_session_factory", return_value=db_session_factory):
+        system = await _collect_status()
+
+    assert system.migration.status.value == "ok"
+    assert system.migration.up_to_date is True
+    assert system.migration.current_revision is not None
 
 
 @pytest.mark.integration
 async def test_health_ready_503_when_migration_is_stale(
-    client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """/health/ready → 503 with migration="degraded" when the DB lags alembic head."""
-    with patch(
-        "audr.operations.migrations._get_head_revision", return_value="0_nonexistent"
+    """_collect_status() reports migration="degraded" when the DB lags alembic head."""
+    from audr.api.health import _collect_status
+
+    with (
+        patch(
+            "audr.operations.migrations._get_head_revision", return_value="0_nonexistent"
+        ),
+        patch("audr.db._get_session_factory", return_value=db_session_factory),
     ):
-        r = await client.get("/health/ready")
-    assert r.status_code == 503
-    assert r.json()["error"]["migration"] == "degraded"
+        system = await _collect_status()
+
+    assert system.migration.status.value == "degraded"
+    assert system.migration.up_to_date is False
+    assert system.ready is False
 
 
 # ===========================================================================
