@@ -236,7 +236,9 @@ async def test_add_manual_asset_duplicate_returns_409(
     )
     assert r.status_code == 409
     body = r.json()
-    assert "existing_id" in body.get("detail", {})
+    # Contract error envelope (AUD-320): route diagnostics ride inside `error`.
+    assert body["error"]["code"] == "asset_already_exists"
+    assert "existing_id" in body["error"]
 
 
 # ---------------------------------------------------------------------------
