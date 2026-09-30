@@ -11,7 +11,7 @@ Covers:
 """
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.jobs.store import (
     JobKind,
@@ -194,3 +194,57 @@ async def test_upsert_worker_status_inserts_then_updates_same_row(
     assert len(rows) == 1, "a restart or poll must not accumulate rows"
     assert rows[0][0] == "running"
     assert rows[0][1] == run_id
+
+
+# ---------------------------------------------------------------------------
+# On-demand trigger dispatch for schedule-driven kinds (AUD-318)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_worker_serves_enqueued_pending_run_before_schedule_claim(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A "Run now" request (enqueue_job) must be dispatched by the very next poll.
+
+    Before AUD-318, POST /jobs called claim_job directly from the API process,
+    inserting an in_progress row no worker would ever claim — it sat as a
+    zombie until the 5-minute stale-lease expiry, then a fresh schedule-driven
+    run started instead of the one the user asked for. The fix enqueues a
+    pending row and relies on the worker to claim and run it: Worker.run_once
+    must check the pending queue even for a kind that also runs on its own
+    schedule (DISCOVERY here), not only for on_demand=True workers.
+    """
+    from audr.jobs.store import JobRunStatus, enqueue_job, get_job_run
+    from audr.jobs.worker import Worker
+
+    async with db_session_factory() as session:
+        run_id = await enqueue_job(session, kind=JobKind.DISCOVERY)
+        await session.commit()
+
+    executed_run_ids: list = []
+
+    async def handler(_session: AsyncSession, run_id: object) -> None:
+        executed_run_ids.append(run_id)
+
+    try:
+        worker = Worker(db_session_factory, kind=JobKind.DISCOVERY, handler=handler)
+        did_work = await worker.run_once()
+        assert did_work is True
+        assert executed_run_ids == [run_id], (
+            "the worker must dispatch the enqueued run on its very next poll, "
+            "not leave it pending until claim_job's schedule-driven path fires"
+        )
+
+        async with db_session_factory() as session:
+            run = await get_job_run(session, run_id=run_id)
+        assert run is not None
+        assert run.status == JobRunStatus.COMPLETED
+    finally:
+        async with db_session_factory() as session:
+            import sqlalchemy as sa
+
+            await session.execute(
+                sa.text("DELETE FROM job_run WHERE id = :id"), {"id": run_id}
+            )
+            await session.commit()

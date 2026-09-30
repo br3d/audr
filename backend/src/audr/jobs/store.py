@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -18,6 +18,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _LEASE_TIMEOUT_INTERVAL = "5 minutes"
+_WORKER_STALE_MINUTES = 10
 
 
 class JobKind(StrEnum):
@@ -271,6 +272,39 @@ async def upsert_worker_status(
         {"worker_id": worker_id, "status": status, "run_id": current_job_run_id},
     )
     await session.flush()
+
+
+async def get_worker_heartbeat(session: AsyncSession) -> tuple[str, datetime | None]:
+    """Return (status, last_heartbeat_at) from the most recent worker heartbeat.
+
+    Shared by ``GET /api/v1/status`` and ``GET /health/ready`` so both routes
+    agree on one vocabulary (idle/running/stopped/unknown) and one staleness
+    threshold. A heartbeat older than ``_WORKER_STALE_MINUTES`` is reported as
+    "stopped" even if the row's own ``status`` still says idle/running — a
+    worker process that died mid-poll never got to write "stopped" itself.
+    No row at all (nothing has ever written a heartbeat) is "unknown".
+    """
+    row = (
+        await session.execute(
+            sa.text(
+                "SELECT status, last_heartbeat_at FROM worker_status"
+                " ORDER BY last_heartbeat_at DESC LIMIT 1"
+            )
+        )
+    ).first()
+    if row is None:
+        return "unknown", None
+
+    status, heartbeat = row
+    stale = (
+        heartbeat is None
+        or datetime.now(tz=UTC) - heartbeat > timedelta(minutes=_WORKER_STALE_MINUTES)
+    )
+    if stale:
+        return "stopped", heartbeat
+    if status in ("idle", "running"):
+        return "running", heartbeat
+    return status, heartbeat
 
 
 async def complete_job(session: AsyncSession, *, run_id: uuid.UUID) -> None:

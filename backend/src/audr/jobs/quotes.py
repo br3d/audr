@@ -6,8 +6,9 @@ that are excluded are skipped.
 
 The job inserts a quote_set row, populates quote_observation rows for each
 successfully priced asset, and marks the set complete.  On any provider
-error the set is marked failed but the job itself does not raise so the
-worker can continue to the next run.
+error the set is marked failed and the job re-raises (AUD-318) so the worker
+records the run itself as failed — a swallowed error here would report a
+provider outage as a successful run.
 """
 
 from __future__ import annotations
@@ -56,8 +57,12 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
             exc,
         )
         await _mark_quote_set(session, quote_set_id, "failed")
-        await session.flush()
-        return
+        await session.commit()
+        # Re-raise so the worker records this run as failed instead of
+        # completed (AUD-318) — a silently "successful" run would advance
+        # schedule.last_run_at and mask the provider outage from retry budget
+        # and history.
+        raise
 
     # Fencing: re-check run status and integration existence after the external
     # API call.  The purge may have cancelled the run and deleted the integration

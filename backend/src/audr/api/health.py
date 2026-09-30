@@ -17,6 +17,7 @@ from audr.operations.status import (
     KeyStatus,
     MigrationStatus,
     SystemStatus,
+    WorkerStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,19 +62,20 @@ async def readiness() -> ReadyResponse:
                 "status": "not_ready",
                 "migration": system.migration.status.value,
                 "key": system.key.status.value,
-                "worker": system.worker.status.value,
+                "worker": system.worker.status,
             },
         )
     return ReadyResponse(
         status="ok",
         migration=system.migration.status.value,
         key=system.key.status.value,
-        worker=system.worker.status.value,
+        worker=system.worker.status,
     )
 
 
 async def _collect_status() -> SystemStatus:
     from audr.db import _get_session_factory
+    from audr.jobs.store import get_worker_heartbeat
     from audr.operations.crypto import MissingKeyError
     from audr.operations.init_key import get_master_key
 
@@ -93,6 +95,11 @@ async def _collect_status() -> SystemStatus:
                 system.key = KeyStatus(initialized=True, status=ComponentStatus.OK)
             except MissingKeyError:
                 system.key = KeyStatus(initialized=False, status=ComponentStatus.DEGRADED)
+            # Worker: same heartbeat query and staleness rule as GET /api/v1/status
+            # (AUD-318) — before this, nothing ever populated system.worker, so
+            # readiness always reported the dataclass default "unknown".
+            ws_status, _ws_heartbeat = await get_worker_heartbeat(session)
+            system.worker = WorkerStatus(status=ws_status)
     except Exception:
         logger.exception("health check DB error")
         system.migration = MigrationStatus(status=ComponentStatus.DEGRADED)

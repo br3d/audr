@@ -27,8 +27,11 @@ class KeyStatus:
 
 @dataclass
 class WorkerStatus:
-    active_workers: int = 0
-    status: ComponentStatus = ComponentStatus.UNKNOWN
+    # idle | running | stopped | unknown — the worker-process heartbeat
+    # vocabulary (see audr.jobs.store.get_worker_heartbeat), not a
+    # ComponentStatus: a "stopped" worker is a known, reportable fact, not an
+    # UNKNOWN one, and readiness never gated on worker liveness anyway.
+    status: str = "unknown"
 
 
 @dataclass

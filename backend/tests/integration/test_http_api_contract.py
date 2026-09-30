@@ -811,6 +811,52 @@ async def test_health_ready(client: httpx.AsyncClient) -> None:
     assert r.status_code in (200, 503)
 
 
+@pytest.mark.integration
+async def test_health_ready_worker_reflects_live_heartbeat(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """_collect_status() must report a live heartbeat, not the "unknown" default.
+
+    Before AUD-318, _collect_status() never queried worker_status at all, so
+    this field was permanently stuck at the WorkerStatus dataclass default —
+    production returned {"...", "worker":"unknown"} even with a healthy
+    worker running.
+
+    Calls _collect_status() directly (patching audr.db._get_session_factory)
+    rather than going through GET /health/ready: that route reads settings via
+    _get_session_factory() -> get_settings(), bypassing the test app's DI
+    override, and the backend-tests container does not set SECRET_KEY — see
+    test_health_ready above, which already tolerates the resulting 503.  That
+    is an unrelated, pre-existing test-environment gap; this test isolates
+    the actual AUD-318 behaviour instead of depending on it.
+    """
+    from unittest.mock import patch
+
+    from audr.api.health import _collect_status
+    from audr.jobs.store import upsert_worker_status
+
+    worker_id = "test-health-ready-worker-aud-318"
+    try:
+        async with db_session_factory() as session:
+            await upsert_worker_status(session, worker_id=worker_id, status="idle")
+            await session.commit()
+
+        with patch("audr.db._get_session_factory", return_value=db_session_factory):
+            system = await _collect_status()
+
+        assert system.worker.status != "unknown", (
+            "a live heartbeat must not report as 'unknown'"
+        )
+        assert system.worker.status == "running"
+    finally:
+        async with db_session_factory() as session:
+            await session.execute(
+                text("DELETE FROM worker_status WHERE worker_id = :wid"),
+                {"wid": worker_id},
+            )
+            await session.commit()
+
+
 # ===========================================================================
 # 16. Error envelope shape  (SD-5)
 # ===========================================================================

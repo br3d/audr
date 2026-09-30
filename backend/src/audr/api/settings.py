@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import sqlalchemy as sa
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.api.auth import _require_csrf, _require_session
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
-from audr.jobs.store import JobKind, claim_job
+from audr.jobs.store import JobKind, enqueue_job, get_worker_heartbeat
 from audr.operations.exports import (
     export_current_portfolio,
     export_full_history,
@@ -45,8 +45,6 @@ _DB_TO_FE: dict[str, str] = {
     "valuation": "valuation",
 }
 _FE_TO_DB: dict[str, str] = {v: k for k, v in _DB_TO_FE.items()}
-
-_WORKER_STALE_MINUTES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +427,14 @@ async def trigger_job(
     _session: Annotated[Any, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> JobRef:
-    """Queue an immediate job run, coalescing if one is already active."""
+    """Queue an immediate job run, coalescing if one is already queued or active.
+
+    Enqueues a ``pending`` row (AUD-313/AUD-318 pattern) instead of inserting an
+    ``in_progress`` row directly — a run only starts once the worker actually
+    claims and dispatches it via :func:`claim_pending_job`, so the ID returned
+    here is always a real, eventually-executed run rather than a zombie the
+    worker will never pick up.
+    """
     kind_db = _FE_TO_DB.get(body.kind)
     if kind_db is None:
         raise HTTPException(
@@ -444,33 +449,21 @@ async def trigger_job(
             detail=f"unsupported kind: {body.kind!r}",
         ) from None
 
-    # Check for already-active run first so we can return its ID.
-    active_result = await db.execute(
-        sa.text("SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"),
+    # Coalesce if a run is already queued or running — the worker will pick up
+    # the existing request; no need to stack another.
+    existing = await db.execute(
+        sa.text(
+            "SELECT id FROM job_run WHERE kind = :kind"
+            " AND status IN ('pending', 'in_progress')"
+            " ORDER BY created_at DESC LIMIT 1"
+        ),
         {"kind": kind_db},
     )
-    active_row = active_result.first()
-    if active_row is not None:
-        return JobRef(run_id=str(active_row[0]), coalesced=True)
+    existing_row = existing.first()
+    if existing_row is not None:
+        return JobRef(run_id=str(existing_row[0]), coalesced=True)
 
-    run_id = await claim_job(db, kind=job_kind)
-    if run_id is None:
-        # claim_job returns None for several reasons: concurrent claim, retry
-        # budget exhausted, schedule gate, or missing integration.  Try to
-        # return the in-progress run if one exists; otherwise 409 so the
-        # client doesn't poll a fabricated ID indefinitely.
-        existing = await db.execute(
-            sa.text("SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"),
-            {"kind": kind_db},
-        )
-        ex_row = existing.first()
-        if ex_row is not None:
-            return JobRef(run_id=str(ex_row[0]), coalesced=True)
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail=f"cannot claim job kind={body.kind!r}: retry budget exhausted, schedule gate, or missing integration",
-        )
-
+    run_id = await enqueue_job(db, kind=job_kind)
     await db.commit()
     return JobRef(run_id=str(run_id), coalesced=False)
 
@@ -589,34 +582,11 @@ async def get_status(
     db_status = DbStatus(status="ok")
 
     # Worker: query worker_status for the most recent heartbeat.
-    worker_row = (
-        await db.execute(
-            sa.text(
-                "SELECT status, last_heartbeat_at FROM worker_status "
-                "ORDER BY last_heartbeat_at DESC LIMIT 1"
-            )
-        )
-    ).first()
-    if worker_row:
-        ws_status: str = worker_row[0]
-        ws_heartbeat: datetime | None = worker_row[1]
-        # Treat a stale heartbeat as stopped.
-        stale = (
-            ws_heartbeat is None
-            or datetime.now(tz=UTC) - ws_heartbeat > timedelta(minutes=_WORKER_STALE_MINUTES)
-        )
-        if stale:
-            fe_status = "stopped"
-        elif ws_status in ("idle", "running"):
-            fe_status = "running"
-        else:
-            fe_status = ws_status
-        worker_status = WorkerStatus(
-            status=fe_status,
-            last_heartbeat_at=ws_heartbeat.isoformat() if ws_heartbeat else None,
-        )
-    else:
-        worker_status = WorkerStatus(status="unknown", last_heartbeat_at=None)
+    ws_status, ws_heartbeat = await get_worker_heartbeat(db)
+    worker_status = WorkerStatus(
+        status=ws_status,
+        last_heartbeat_at=ws_heartbeat.isoformat() if ws_heartbeat else None,
+    )
 
     # Recovery: not yet implemented — always inactive.
     recovery = RecoveryStatus(active=False, reason=None)
