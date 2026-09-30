@@ -1,11 +1,19 @@
 # Deploy runbook (audr stack on 192.168.1.228)
 
 The deploy pipeline is a single guarded Gitea Actions job, `.gitea/workflows/deploy.yaml`.
-That file lives **only in the Gitea mirror overlay** on the deploy host
-(`~/.config/audr-mirror/overlay/.gitea/workflows/`), not in this repository —
+The copy that actually **runs** lives in the Gitea mirror overlay on the deploy
+host (`~/.config/audr-mirror/overlay/.gitea/workflows/`);
 `~/bin/audr-github-mirror.sh` bakes it into the Gitea `main` commit each time
 GitHub `main` moves. Editing the overlay therefore has no effect until the next
 push to GitHub `main`.
+
+The **versioned source of record** for those files is `ci/gitea-overlay/` in this
+repository. They are deliberately not tracked at `.gitea/workflows/`, because the
+mirror pushes every non-`main` branch verbatim and Gitea would then replay the
+suite for every stale branch it syncs (see `ci/gitea-overlay/README.md`). Keep the
+two copies in agreement with `scripts/sync-ci-overlay.sh`; `--check` diffs without
+writing and exits 1 on drift, which is the first thing to run when the pipeline
+misbehaves after a workflow was edited on the host.
 
 ## Invariants the pipeline depends on
 
