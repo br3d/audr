@@ -59,7 +59,7 @@ services:
       pytest
       --tb=short
       -q
-      -m "unit or (integration and not slow)"
+      -m "unit or (integration and not slow) or contract"
     environment:
       DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
       RPC_MOCK_URL: http://provider-mock:8080/rpc
