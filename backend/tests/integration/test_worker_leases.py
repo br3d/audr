@@ -142,3 +142,55 @@ async def test_release_lease_allows_immediate_reclaim(db_session: AsyncSession) 
 
     new_run_id = await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=3)
     assert new_run_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Worker liveness heartbeat (AUD-318)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_upsert_worker_status_inserts_then_updates_same_row(
+    db_session: AsyncSession,
+) -> None:
+    """The worker heartbeat keeps one row per worker_id and advances it in place.
+
+    Nothing wrote worker_status before AUD-318, so GET /api/v1/status reported
+    the worker as "unknown" forever.
+    """
+    import sqlalchemy as sa
+
+    from audr.jobs.store import upsert_worker_status
+
+    worker_id = "test-worker-aud-318"
+    await upsert_worker_status(db_session, worker_id=worker_id, status="idle")
+
+    first = (
+        await db_session.execute(
+            sa.text(
+                "SELECT status, last_heartbeat_at FROM worker_status"
+                " WHERE worker_id = :wid"
+            ),
+            {"wid": worker_id},
+        )
+    ).one()
+    assert first[0] == "idle"
+    assert first[1] is not None
+
+    run_id = await claim_job(db_session, kind=JobKind.BALANCE_SCAN, max_retries=3)
+    await upsert_worker_status(
+        db_session, worker_id=worker_id, status="running", current_job_run_id=run_id
+    )
+
+    rows = (
+        await db_session.execute(
+            sa.text(
+                "SELECT status, current_job_run_id FROM worker_status"
+                " WHERE worker_id = :wid"
+            ),
+            {"wid": worker_id},
+        )
+    ).all()
+    assert len(rows) == 1, "a restart or poll must not accumulate rows"
+    assert rows[0][0] == "running"
+    assert rows[0][1] == run_id
