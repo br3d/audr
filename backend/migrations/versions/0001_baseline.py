@@ -200,7 +200,7 @@ CREATE TABLE public.quote_set (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     provider text NOT NULL,
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
-    status text DEFAULT '''pending'''::text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_quote_set_ck_quote_set_provider CHECK ((provider = 'coingecko'::text)),
     CONSTRAINT ck_quote_set_ck_quote_set_status CHECK ((status = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))
@@ -255,8 +255,8 @@ CREATE TABLE public.valuation_snapshot (
 CREATE TABLE public.wallet (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     address text NOT NULL,
-    label text DEFAULT ''''''::text NOT NULL,
-    status text DEFAULT '''active'''::text NOT NULL,
+    label text DEFAULT ''::text NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_wallet_ck_wallet_address_lower CHECK ((address = lower(address))),
