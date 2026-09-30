@@ -5,6 +5,7 @@ import MoneyValue from '../components/MoneyValue'
 import AllocationTable from '../components/AllocationTable'
 import AllocationChart from '../components/AllocationChart'
 import HistoryChart from '../components/HistoryChart'
+import NewsFeed from '../components/NewsFeed'
 
 function QualityNotices({ quality }: { quality: PortfolioQuality }) {
   const notices: string[] = []
@@ -165,6 +166,14 @@ export default function DashboardPage() {
         )
       )}
 
+      {/* News */}
+      {hasPricedAllocations && (
+        <section aria-label="Asset news" className="mb-20">
+          <div className="section-heading">News</div>
+          <NewsFeed items={data.allocations} />
+        </section>
+      )}
+
       {/* Placeholder stubs */}
       <div className="placeholder-grid">
         <div className="placeholder-card">
@@ -172,13 +181,6 @@ export default function DashboardPage() {
           <span className="placeholder-card-badge">Coming soon</span>
           <div className="placeholder-card-desc">
             On-chain activity, transfers, and contract interactions.
-          </div>
-        </div>
-        <div className="placeholder-card">
-          <div className="placeholder-card-title">News</div>
-          <span className="placeholder-card-badge">Coming soon</span>
-          <div className="placeholder-card-desc">
-            Curated crypto news relevant to your holdings.
           </div>
         </div>
         <div className="placeholder-card">

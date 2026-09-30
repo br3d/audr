@@ -838,6 +838,43 @@ body {
 }
 
 /* ----------------------------------------------------------------
+   News feed
+   ---------------------------------------------------------------- */
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.news-item {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.news-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.news-item-title {
+  color: var(--text-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.news-item-title:hover {
+  text-decoration: underline;
+}
+
+.news-item-meta {
+  font-size: var(--text-xs);
+  margin-top: 2px;
+}
+
+/* ----------------------------------------------------------------
    Search bar
    ---------------------------------------------------------------- */
 .search-bar {
