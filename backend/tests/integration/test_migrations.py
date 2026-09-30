@@ -115,6 +115,62 @@ async def test_no_alembic_version_returns_unknown(db_session: AsyncSession) -> N
 
 
 # ---------------------------------------------------------------------------
+# Tests: server defaults (AUD-321)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "expected"),
+    [
+        ("quote_set", "status", "'pending'::text"),
+        ("wallet", "label", "''::text"),
+        ("wallet", "status", "'active'::text"),
+    ],
+)
+async def test_string_defaults_are_not_double_quoted(
+    db_session: AsyncSession, table: str, column: str, expected: str
+) -> None:
+    """The 0001 baseline double-escaped these defaults, so they stored the quote
+    characters and violated their own CHECK constraints. 0007 repairs them."""
+    row = await db_session.execute(
+        text(
+            "SELECT column_default FROM information_schema.columns"
+            " WHERE table_name = :table AND column_name = :column"
+        ),
+        {"table": table, "column": column},
+    )
+    assert row.scalar() == expected
+
+
+async def test_defaulted_insert_satisfies_check_constraints(
+    db_session: AsyncSession,
+) -> None:
+    """Inserting while relying on the server defaults must not trip a CHECK."""
+    await db_session.execute(
+        text("INSERT INTO quote_set (provider) VALUES ('coingecko')")
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO wallet (address) VALUES"
+            " ('0x000000000000000000000000000000000000dead')"
+        )
+    )
+
+    quote_status = await db_session.execute(
+        text("SELECT status FROM quote_set ORDER BY created_at DESC LIMIT 1")
+    )
+    assert quote_status.scalar() == "pending"
+
+    wallet_row = await db_session.execute(
+        text(
+            "SELECT label, status FROM wallet"
+            " WHERE address = '0x000000000000000000000000000000000000dead'"
+        )
+    )
+    assert wallet_row.one() == ("", "active")
+
+
+# ---------------------------------------------------------------------------
 # Tests: reset_password
 # ---------------------------------------------------------------------------
 
