@@ -5,8 +5,8 @@ Covers:
   - Authentication: execute_purge rejects wrong passwords with AuthenticationError.
   - Monetary data removal: quote_observation rows for the purged provider are deleted.
   - On-chain data preservation: balance_observation and wallet rows are never touched.
-  - Job fencing: QUOTE_REFRESH claims return None after the coingecko integration
-    is purged.
+  - Job fencing: QUOTE_REFRESH stays claimable after the coingecko integration
+    is purged (AUD-358 default CoinMarketCap fallback).
   - Integration removal: get_integration returns None after purge.
   - Count accuracy: preview_purge reports the exact number of seeded observations.
 
@@ -310,17 +310,26 @@ async def test_purge_preserves_wallets(
 # ---------------------------------------------------------------------------
 
 
-async def test_purge_job_fencing_prevents_new_jobs(
+async def test_purge_job_fencing_still_allows_claim_via_cmc_fallback(
     db_session: AsyncSession,
     owner_password: str,
 ) -> None:
-    """QUOTE_REFRESH claims return None after the coingecko integration is purged."""
+    """QUOTE_REFRESH stays claimable after the coingecko integration is purged.
+
+    Before AUD-358, QUOTE_REFRESH hard-required a live coingecko integration
+    to be claimable at all, which is exactly why a fresh install (zero
+    integrations configured) could never price anything out of the box.
+    Purging the coingecko key now just falls back to the keyless
+    CoinMarketCap default inside handle_quote_refresh — it must not also
+    block the job from being claimed in the first place.
+    """
     await execute_purge(db_session, kind="coingecko", password=owner_password)
     await db_session.flush()
 
     run_id = await claim_job(db_session, kind=JobKind.QUOTE_REFRESH, max_retries=3)
-    assert run_id is None, (
-        "QUOTE_REFRESH must not be claimable after the coingecko integration is purged"
+    assert run_id is not None, (
+        "QUOTE_REFRESH must remain claimable via the CoinMarketCap fallback "
+        "after the coingecko integration is purged"
     )
 
 

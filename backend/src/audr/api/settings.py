@@ -17,6 +17,7 @@ from audr.api.auth import _require_csrf, _require_session
 from audr.assets.catalog import get_catalog_status
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
+from audr.jobs.quotes import get_quote_status
 from audr.jobs.store import JobKind, enqueue_job, get_worker_heartbeat
 from audr.operations.exports import (
     export_current_portfolio,
@@ -135,11 +136,18 @@ class CatalogStatusModel(BaseModel):
     entry_count: int
 
 
+class QuoteStatusModel(BaseModel):
+    status: str
+    provider: str
+    unpriced_count: int
+
+
 class StatusResponse(BaseModel):
     db: DbStatus
     worker: WorkerStatus
     recovery: RecoveryStatus
     catalog: CatalogStatusModel
+    quotes: QuoteStatusModel
     schedules: dict[str, ScheduleConfig]
     version: str | None = None
 
@@ -623,6 +631,10 @@ async def get_status(
     # must stay visible here rather than only as a worker-log WARNING.
     catalog = await get_catalog_status(db)
 
+    # Quotes: which provider is pricing holdings, and whether anything is
+    # still unpriced (AUD-358) — same visibility rationale as catalog above.
+    quotes = await get_quote_status(db)
+
     # Schedules: same structure as GET /settings.
     settings = await _query_settings_response(db)
 
@@ -631,6 +643,11 @@ async def get_status(
         worker=worker_status,
         recovery=recovery,
         catalog=CatalogStatusModel(status=catalog.status.value, entry_count=catalog.entry_count),
+        quotes=QuoteStatusModel(
+            status=quotes.status.value,
+            provider=quotes.provider,
+            unpriced_count=quotes.unpriced_count,
+        ),
         schedules=settings.schedules,
         version=None,
     )

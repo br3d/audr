@@ -44,11 +44,25 @@ class CatalogStatus:
 
 
 @dataclass
+class QuoteStatus:
+    # Which provider quote_refresh is currently using: "coingecko" (owner
+    # saved a key) or "coinmarketcap" (keyless default). DEGRADED means held
+    # assets exist but none of them have a price yet — surfaced here instead
+    # of only showing up as a null total_usd on the portfolio page (AUD-358:
+    # the previous silent "no key configured" no-op taught us not to let a
+    # pricing outage go invisible again).
+    provider: str = "coinmarketcap"
+    unpriced_count: int = 0
+    status: ComponentStatus = ComponentStatus.UNKNOWN
+
+
+@dataclass
 class SystemStatus:
     migration: MigrationStatus = field(default_factory=MigrationStatus)
     key: KeyStatus = field(default_factory=KeyStatus)
     worker: WorkerStatus = field(default_factory=WorkerStatus)
     catalog: CatalogStatus = field(default_factory=CatalogStatus)
+    quotes: QuoteStatus = field(default_factory=QuoteStatus)
 
     @property
     def healthy(self) -> bool:

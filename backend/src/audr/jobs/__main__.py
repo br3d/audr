@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.assets.catalog import import_catalog
+from audr.assets.cmc_catalog import import_cmc_map
 from audr.db import _get_session_factory
 from audr.jobs.canonicality import recheck_canonicality
 from audr.operations.cleanup import cleanup_expired_auth_rows
@@ -221,6 +222,29 @@ async def _bootstrap_catalog(factory: async_sessionmaker[AsyncSession]) -> None:
         )
 
 
+async def _bootstrap_cmc_map(factory: async_sessionmaker[AsyncSession]) -> None:
+    """Import the vendored CoinMarketCap address/symbol map at startup (idempotent).
+
+    Not fatal to the worker process, but a failure here means quote_refresh's
+    keyless CoinMarketCap fallback (AUD-358) will only have pinned majors to
+    price with — no address or symbol resolution for the rest of the catalog.
+    """
+    try:
+        async with factory() as session:
+            version = await import_cmc_map(session)
+            await session.commit()
+            logger.info(
+                "cmc map bootstrap version=%s entries=%d",
+                version.source_hash,
+                version.entry_count,
+            )
+    except Exception:
+        logger.error(
+            "cmc map bootstrap failed — CoinMarketCap pricing will rely on pins only",
+            exc_info=True,
+        )
+
+
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     factory = _get_session_factory()
@@ -231,6 +255,7 @@ async def _main() -> None:
     loop.add_signal_handler(signal.SIGINT, stop.set)
 
     await _bootstrap_catalog(factory)
+    await _bootstrap_cmc_map(factory)
 
     # Hostname, not pid: one worker container per host in this deployment, and a
     # restart must reuse the same worker_status row instead of accumulating one
