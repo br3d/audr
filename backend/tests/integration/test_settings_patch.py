@@ -32,17 +32,35 @@ pytestmark = pytest.mark.integration
 async def _clean_tables(
     db_session_factory: async_sessionmaker[AsyncSession],
     test_secret_key: str,
-) -> None:
+) -> AsyncGenerator[None]:
+    """Reset the committed state this module writes, before AND after each test.
+
+    These tests use ``db_session_factory`` (real COMMITs), not the rolled-back
+    ``db_session`` fixture. Cleaning only on setup left the final test's
+    ``schedule`` rows in the database, so a second suite run against the same
+    database failed in ``test_schedules.py`` with
+    ``duplicate key value violates unique constraint "uq_schedule_kind"``.
+    Tearing down as well keeps the suite re-runnable without
+    ``docker compose down -v``.
+    """
+    await _delete_committed_state(db_session_factory)
     async with db_session_factory() as session:
+        async with session.begin():
+            await init_key(session)
+    yield
+    await _delete_committed_state(db_session_factory)
+
+
+async def _delete_committed_state(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
         async with session.begin():
             await session.execute(text("DELETE FROM schedule"))
             await session.execute(text("DELETE FROM key_state"))
             await session.execute(text("DELETE FROM login_attempt"))
             await session.execute(text("DELETE FROM session"))
             await session.execute(text("DELETE FROM owner"))
-    async with db_session_factory() as session:
-        async with session.begin():
-            await init_key(session)
 
 
 def _make_override(factory: async_sessionmaker[AsyncSession]):
