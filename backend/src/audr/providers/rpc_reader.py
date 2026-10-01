@@ -6,12 +6,15 @@ No signing methods are exposed — read-only operations only.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 import httpx
+
+from audr.jobs.policy import RateLimiter, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,8 @@ class RpcReader:
         url: str,
         expected_chain_id: int,
         timeout: float = 10.0,
+        rate_limiter: RateLimiter | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._url = url
         self._expected_chain_id = expected_chain_id
@@ -73,6 +78,12 @@ class RpcReader:
             timeout=httpx.Timeout(timeout),
             follow_redirects=False,  # never follow redirects — DNS rebinding risk
         )
+        # Shared across job handlers when the caller passes the process-wide
+        # limiter (see audr.jobs.policy.get_shared_rpc_rate_limiter); None
+        # here means "no rate limiting" so unit/contract tests that construct
+        # a reader directly are unaffected.
+        self._rate_limiter = rate_limiter
+        self._retry_policy = retry_policy or RetryPolicy()
 
     async def validate_chain(self) -> None:
         """Confirm the node is on the expected chain.  Raises ChainMismatchError."""
@@ -150,15 +161,37 @@ class RpcReader:
         return [_parse_log_entry(item) for item in raw]
 
     async def _call_raw(self, method: str, params: list) -> Any:  # type: ignore[type-arg]
-        """Like _call but returns the parsed Python value instead of str."""
-        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        try:
-            resp = await self._client.post(self._url, json=payload)
-        except httpx.HTTPError as exc:
-            raise RpcError(f"HTTP error calling {method}") from exc
+        """POST a JSON-RPC request and return the parsed ``result`` value.
 
-        if resp.status_code != 200:
-            raise RpcError(f"HTTP {resp.status_code} from RPC endpoint")
+        Every attempt (including retries) goes through the shared rate
+        limiter first. A 429 response is retried with backoff — honoring
+        ``Retry-After`` when the provider sends one — instead of failing the
+        whole call on the first throttle (AUD-362); any other HTTP/JSON-RPC
+        error still raises immediately.
+        """
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        attempt = 0
+        while True:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire()
+
+            try:
+                resp = await self._client.post(self._url, json=payload)
+            except httpx.HTTPError as exc:
+                raise RpcError(f"HTTP error calling {method}") from exc
+
+            if resp.status_code == 429:
+                if not self._retry_policy.is_retryable(attempt):
+                    raise RpcError(
+                        f"HTTP 429 from RPC endpoint (retries exhausted calling {method})"
+                    )
+                await asyncio.sleep(_retry_after_seconds(resp, self._retry_policy, attempt))
+                attempt += 1
+                continue
+
+            if resp.status_code != 200:
+                raise RpcError(f"HTTP {resp.status_code} from RPC endpoint")
+            break
 
         try:
             body = resp.json()
@@ -175,34 +208,24 @@ class RpcReader:
         return result
 
     async def _call(self, method: str, params: list) -> str:  # type: ignore[type-arg]
-        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        try:
-            resp = await self._client.post(self._url, json=payload)
-        except httpx.HTTPError as exc:
-            raise RpcError(f"HTTP error calling {method}") from exc
-
-        if resp.status_code != 200:
-            raise RpcError(f"HTTP {resp.status_code} from RPC endpoint")
-
-        try:
-            body = resp.json()
-        except Exception as exc:
-            raise MalformedResponseError("RPC response is not valid JSON") from exc
-
-        if "error" in body:
-            err = body["error"]
-            raise RpcError(f"RPC error {err.get('code')}: {err.get('message')}")
-
-        result = body.get("result")
-        if result is None:
-            raise MalformedResponseError("RPC response has no 'result' field")
-        return str(result)
+        return str(await self._call_raw(method, params))
 
     async def __aenter__(self) -> RpcReader:
         return self
 
     async def __aexit__(self, *args: object) -> None:
         await self._client.aclose()
+
+
+def _retry_after_seconds(resp: httpx.Response, policy: RetryPolicy, attempt: int) -> float:
+    """Honor a provider's Retry-After header; fall back to the retry policy's backoff."""
+    header = resp.headers.get("Retry-After")
+    if header is not None:
+        try:
+            return max(0.0, float(header))
+        except ValueError:
+            pass
+    return policy.delay_for(attempt)
 
 
 def _parse_hex_int(value: str) -> int:

@@ -14,6 +14,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.providers.coingecko_demo import CoinGeckoProvider
 from audr.providers.rpc_reader import RpcReader
 from audr.providers.rpc_targets import get_validated_rpc_url
@@ -35,7 +36,9 @@ async def handle_validate_rpc(session: AsyncSession, run_id: uuid.UUID) -> None:
         raise ValueError("No RPC endpoint configured.")
 
     async with RpcReader(
-        url=rpc_url, expected_chain_id=_ETH_MAINNET_CHAIN_ID
+        url=rpc_url,
+        expected_chain_id=_ETH_MAINNET_CHAIN_ID,
+        rate_limiter=get_shared_rpc_rate_limiter(),
     ) as rpc:
         await rpc.validate_chain()
         block_number = await rpc.get_block_number()

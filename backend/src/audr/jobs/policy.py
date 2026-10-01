@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,24 @@ class RateLimiter:
         await asyncio.sleep(wait)
         async with self._lock:
             self._tokens = max(0.0, self._tokens - 1.0)
+
+
+@lru_cache
+def get_shared_rpc_rate_limiter() -> RateLimiter:
+    """Process-wide RPC rate limiter (AUD-362).
+
+    One instance per worker process, shared by every RpcReader the job
+    handlers construct — balance_scan, discovery, and event_indexer all draw
+    from the same configured budget instead of each racing the RPC provider
+    independently.
+    """
+    from audr.config import get_settings
+
+    settings = get_settings()
+    return RateLimiter(
+        calls_per_second=settings.rpc_rate_limit_per_second,
+        burst=settings.rpc_rate_limit_burst,
+    )
 
 
 class CancellationCheckpoint:
