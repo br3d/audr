@@ -4,12 +4,13 @@ import {
   fetchWallets,
   addWallet,
   patchWallet,
+  deleteWallet,
   triggerJob,
   ApiError,
 } from '../api/client'
 import type { WalletItem } from '../api/client'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
-import { IconPlus, IconX, IconRefresh } from '../components/Icons'
+import { IconPlus, IconX, IconRefresh, IconTrash } from '../components/Icons'
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
@@ -141,17 +142,115 @@ function AddWalletModal({
   )
 }
 
+function DeleteWalletModal({
+  wallet,
+  onDeleted,
+  onClose,
+}: {
+  wallet: WalletItem
+  onDeleted: (summary: string) => void
+  onClose: () => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  async function handleDelete() {
+    setError(null)
+    setDeleting(true)
+    try {
+      const result = await deleteWallet(wallet.id)
+      const rows = Object.values(result.deleted).reduce((a, b) => a + b, 0)
+      onDeleted(
+        `Removed ${wallet.label || wallet.address} and ${rows} related record${
+          rows === 1 ? '' : 's'
+        }.`,
+      )
+      onClose()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete address.')
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Delete tracked address"
+    >
+      <div className="modal-box">
+        <div className="modal-header">
+          <div className="modal-title">Delete Tracked Address</div>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={deleting}
+          >
+            <IconX width={16} height={16} />
+          </button>
+        </div>
+
+        <p>
+          <strong>{wallet.label || '(no label)'}</strong>
+          <br />
+          <span className="wallet-address">{wallet.address}</span>
+        </p>
+        <p className="muted-text mt-8">
+          This permanently removes the address and everything derived from it —
+          balance observations, discovered token coverage, indexed on-chain events
+          and its share of valuation history. It cannot be undone.
+        </p>
+        <p className="muted-text mt-8">
+          If you only want to pause scanning and keep the history, use{' '}
+          <strong>Stop tracking</strong> instead.
+        </p>
+
+        {error !== null && (
+          <p role="alert" className="alert alert-danger mt-12">
+            {error}
+          </p>
+        )}
+
+        <div className="modal-footer">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClose}
+            disabled={deleting}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={() => void handleDelete()}
+            disabled={deleting}
+          >
+            {deleting ? 'Deleting…' : 'Delete permanently'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function WalletCard({
   wallet,
   onChanged,
+  onDeleted,
 }: {
   wallet: WalletItem
   onChanged: () => void
+  onDeleted: (summary: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(wallet.label ?? '')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   async function handleSaveLabel(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -262,6 +361,17 @@ function WalletCard({
         >
           {wallet.tracking_active ? 'Stop tracking' : 'Resume tracking'}
         </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          onClick={() => setConfirmingDelete(true)}
+          disabled={saving}
+          aria-label={`Delete ${wallet.address} permanently`}
+          title="Permanently delete this address and its records"
+        >
+          <IconTrash width={14} height={14} />
+          Delete
+        </button>
       </div>
 
       {!wallet.tracking_active && (
@@ -275,6 +385,14 @@ function WalletCard({
         <p role="alert" className="alert alert-danger mt-8">
           {error}
         </p>
+      )}
+
+      {confirmingDelete && (
+        <DeleteWalletModal
+          wallet={wallet}
+          onDeleted={onDeleted}
+          onClose={() => setConfirmingDelete(false)}
+        />
       )}
     </li>
   )
@@ -394,7 +512,16 @@ export default function WalletsPage() {
         <>
           <ul className="wallet-grid" aria-label="Tracked addresses">
             {wallets.map((w) => (
-              <WalletCard key={w.id} wallet={w} onChanged={invalidate} />
+              <WalletCard
+                key={w.id}
+                wallet={w}
+                onChanged={invalidate}
+                onDeleted={(summary) => {
+                  setJobError(null)
+                  setJobMsg(summary)
+                  invalidate()
+                }}
+              />
             ))}
           </ul>
           {hasNextPage && (

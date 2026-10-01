@@ -48,6 +48,7 @@ implementation, checked against this document in contract tests.
 | GET /wallets | cursor,limit | Active/inactive wallets with labels and coverage summary |
 | POST /wallets | {address,label?,chain_id:1} | 201 wallet, queues ETH/manual refresh and catalog discovery; duplicate returns 409 and existing ID |
 | PATCH /wallets/{id} | {label?,tracking_active?} | Updated wallet, membership revision and queued recomputation |
+| DELETE /wallets/{id} | CSRF | Permanently removes the wallet and its derived records (observations, coverage, monitored pairs, on-chain events, valuation lines, emptied snapshots/history points); returns per-table deleted counts; unknown id returns 404 |
 | GET /assets | cursor,limit,excluded? | Native/catalog/manual/discovered assets, metadata/provenance |
 | POST /assets/manual | {contract_address,decimals_override?,symbol_override?} | 201 or existing asset, metadata check; merge duplicate identity |
 | PATCH /assets/{id} | {excluded?,decimals_override?,confirm_metadata_override?} | Exclusion/metadata revision; old snapshots unchanged |

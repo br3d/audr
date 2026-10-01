@@ -19,6 +19,7 @@ from audr.wallets.service import (
     WalletAlreadyExistsError,
     WalletNotFoundError,
     add_wallet,
+    delete_wallet,
     get_wallet,
     list_wallets_page,
     reactivate_wallet,
@@ -61,6 +62,12 @@ class WalletOut(BaseModel):
     tracking_active: bool
     coverage: WalletCoverageOut | None
     created_at: str
+
+
+class DeleteWalletOut(BaseModel):
+    wallet_id: str
+    # table name -> rows removed, so the UI can say what was actually purged
+    deleted: dict[str, int]
 
 
 class WalletsListOut(BaseModel):
@@ -185,6 +192,26 @@ async def patch_wallet(
             status_code=http_status.HTTP_404_NOT_FOUND, detail="Wallet not found"
         ) from exc
     return _wallet_to_out(wallet)
+
+
+@router.delete("/wallets/{wallet_id}", response_model=DeleteWalletOut)
+async def delete_wallet_by_id(
+    wallet_id: uuid.UUID,
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: AsyncSession = Depends(get_db),
+) -> DeleteWalletOut:
+    """Permanently remove a wallet and everything derived from it (AUD-367).
+
+    This is distinct from ``POST /wallets/{id}/stop``, which only pauses
+    scanning and keeps the address and its history.
+    """
+    try:
+        deleted = await delete_wallet(db, wallet_id=wallet_id)
+    except WalletNotFoundError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND, detail="Wallet not found"
+        ) from exc
+    return DeleteWalletOut(wallet_id=str(wallet_id), deleted=deleted)
 
 
 @router.post("/wallets/{wallet_id}/stop", response_model=WalletOut)
