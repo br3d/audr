@@ -105,6 +105,40 @@ describe('MoneyValue', () => {
     })
   })
 
+  describe('emphasizeInteger', () => {
+    it('keeps a single flat string by default (no emphasis markup)', async () => {
+      const { container, root } = render(<MoneyValue value="1234.56" />)
+      expect(container.querySelector('.money-integer')).toBeNull()
+      expect(container.querySelector('.money-fraction')).toBeNull()
+      expect(container.textContent).toBe('$1,234.56')
+      await unmount(container, root)
+    })
+
+    it('splits integer and fractional parts into separate spans when enabled', async () => {
+      const { container, root } = render(<MoneyValue value="1234.56" emphasizeInteger />)
+      const intEl = container.querySelector('.money-integer')
+      const fracEl = container.querySelector('.money-fraction')
+      expect(intEl?.textContent).toBe('$1,234')
+      expect(fracEl?.textContent).toBe('.56')
+      expect(container.textContent).toBe('$1,234.56')
+      await unmount(container, root)
+    })
+
+    it('keeps the leading minus sign with the integer span for negative values', async () => {
+      const { container, root } = render(<MoneyValue value="-99.95" emphasizeInteger />)
+      expect(container.querySelector('.money-integer')?.textContent).toBe('-$99')
+      expect(container.querySelector('.money-fraction')?.textContent).toBe('.95')
+      await unmount(container, root)
+    })
+
+    it('still sets the full-value aria-label when emphasizing the integer', async () => {
+      const { container, root } = render(<MoneyValue value="1234.56" emphasizeInteger />)
+      const span = container.querySelector('[data-testid="money-value"]')!
+      expect(span.getAttribute('aria-label')).toBe('USD amount: $1,234.56')
+      await unmount(container, root)
+    })
+  })
+
   describe('accessibility', () => {
     it('sets aria-label with "USD amount:" prefix for a non-null value', async () => {
       const { container, root } = render(<MoneyValue value="1234.00" />)

@@ -4,11 +4,12 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { PortfolioResponse } from '../api/client'
+import type { PortfolioResponse, HistoryPoint, HistoryResponse } from '../api/client'
 
 vi.mock('../api/client', () => ({
   fetchPortfolio: vi.fn(),
   fetchHistory: vi.fn(),
+  fetchEvents: vi.fn(),
   ApiError: class ApiError extends Error {
     status = 500
     body = undefined
@@ -29,10 +30,11 @@ vi.mock('../components/NewsFeed', () => ({
 }))
 
 import DashboardPage from '../pages/DashboardPage'
-import { fetchPortfolio, fetchHistory } from '../api/client'
+import { fetchPortfolio, fetchHistory, fetchEvents } from '../api/client'
 
 const mockFetchPortfolio = vi.mocked(fetchPortfolio)
 const mockFetchHistory = vi.mocked(fetchHistory)
+const mockFetchEvents = vi.mocked(fetchEvents)
 
 function makeQuality(overrides: Partial<PortfolioResponse['quality']> = {}): PortfolioResponse['quality'] {
   return {
@@ -87,11 +89,19 @@ function mountWithData(portfolio: PortfolioResponse): {
       React.createElement(
         QueryClientProvider,
         { client: qc },
-        React.createElement(DashboardPage),
+        React.createElement(DashboardPage, { setPage: vi.fn() }),
       ),
     )
   })
   return { container, root, qc }
+}
+
+// Flush the microtask queue so pending React Query fetches (mocked as
+// resolved promises) settle and their re-render lands before assertions run.
+async function flush() {
+  for (let i = 0; i < 10; i++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  }
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
@@ -100,11 +110,37 @@ async function unmount(container: HTMLDivElement, root: Root) {
 }
 
 const EMPTY_HISTORY = { period: '30d' as const, entries: [], next_cursor: null }
+const EMPTY_EVENTS = { total: 0, limit: 7, offset: 0, events: [] }
+
+function historyPoint(overrides: Partial<HistoryPoint> = {}): HistoryPoint {
+  return {
+    snapshot_id: 'snap',
+    snapshotted_at: '2026-01-01T00:00:00Z',
+    total_value_usd: null,
+    quality: 'ok',
+    included_wallet_count: 1,
+    included_asset_count: 1,
+    has_gap: false,
+    is_canonical: true,
+    is_gap_marker: false,
+    ...overrides,
+  }
+}
+
+function mockHistoryByPeriod(entries24h: HistoryPoint[]) {
+  mockFetchHistory.mockImplementation((period): Promise<HistoryResponse> => {
+    if (period === '24h') {
+      return Promise.resolve({ period: '24h', entries: entries24h, next_cursor: null })
+    }
+    return Promise.resolve(EMPTY_HISTORY)
+  })
+}
 
 describe('DashboardPage', () => {
   beforeEach(() => {
     mockFetchPortfolio.mockResolvedValue(EMPTY_PORTFOLIO)
     mockFetchHistory.mockResolvedValue(EMPTY_HISTORY)
+    mockFetchEvents.mockResolvedValue(EMPTY_EVENTS)
   })
 
   afterEach(() => {
@@ -151,6 +187,263 @@ describe('DashboardPage', () => {
       })
       expect(container.textContent).toMatch(/stale/i)
       expect(container.textContent).toContain('$100.00')
+      await unmount(container, root)
+    })
+  })
+
+  describe('24h change', () => {
+    it('renders no change row when fewer than two priced points exist in the 24h window', async () => {
+      mockHistoryByPeriod([historyPoint({ total_value_usd: '100.00' })])
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '100.00',
+        priced_subtotal_usd: '100.00',
+      })
+      expect(container.querySelector('.metric-change-positive')).toBeNull()
+      expect(container.querySelector('.metric-change-negative')).toBeNull()
+      expect(container.textContent).not.toMatch(/24h/)
+      await unmount(container, root)
+    })
+
+    it('does not count gap points with a null value as one of the two required points', async () => {
+      mockHistoryByPeriod([
+        historyPoint({ snapshotted_at: '2026-01-01T00:00:00Z', total_value_usd: '100.00' }),
+        historyPoint({ snapshotted_at: '2026-01-01T06:00:00Z', total_value_usd: null, has_gap: true }),
+      ])
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '100.00',
+        priced_subtotal_usd: '100.00',
+      })
+      expect(container.textContent).not.toMatch(/24h/)
+      await unmount(container, root)
+    })
+
+    it('shows a positive change with sign, percent, and the success color class', async () => {
+      mockHistoryByPeriod([
+        historyPoint({ snapshotted_at: '2026-01-01T00:00:00Z', total_value_usd: '100.00' }),
+        historyPoint({ snapshotted_at: '2026-01-01T12:00:00Z', total_value_usd: '110.00' }),
+      ])
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '110.00',
+        priced_subtotal_usd: '110.00',
+      })
+      await flush()
+      const changeEl = container.querySelector('.metric-change-positive')
+      expect(changeEl).toBeTruthy()
+      expect(changeEl?.textContent).toContain('+$10.00')
+      expect(changeEl?.textContent).toContain('+10.00%')
+      expect(container.querySelector('.metric-change-negative')).toBeNull()
+      await unmount(container, root)
+    })
+
+    it('shows a negative change with sign, percent, and the danger color class', async () => {
+      mockHistoryByPeriod([
+        historyPoint({ snapshotted_at: '2026-01-01T00:00:00Z', total_value_usd: '200.00' }),
+        historyPoint({ snapshotted_at: '2026-01-01T12:00:00Z', total_value_usd: '150.00' }),
+      ])
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '150.00',
+        priced_subtotal_usd: '150.00',
+      })
+      await flush()
+      const changeEl = container.querySelector('.metric-change-negative')
+      expect(changeEl).toBeTruthy()
+      expect(changeEl?.textContent).toContain('-$50.00')
+      expect(changeEl?.textContent).toContain('-25.00%')
+      expect(container.querySelector('.metric-change-positive')).toBeNull()
+      await unmount(container, root)
+    })
+  })
+
+  describe('metric card notes', () => {
+    it('always shows a tracked-holdings note, even with zero holdings', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.textContent).toMatch(/no wallets tracked yet/i)
+      await unmount(container, root)
+    })
+
+    it('shows a priced-count note when some but not all holdings are priced', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        holdings: [
+          {
+            wallet_id: 'w1',
+            asset_id: 'eth',
+            contract_address: null,
+            is_native: true,
+            raw_balance: '1000000000000000000',
+            decimals: 18,
+            quantity: '1.0',
+            price_usd: null,
+            value_usd: null,
+            included: true,
+            metadata_source: 'chain',
+            read_status: 'ok',
+            block_time: null,
+            observed_at: null,
+            last_success_at: null,
+          },
+          {
+            wallet_id: 'w1',
+            asset_id: 'usdc',
+            contract_address: '0xabc',
+            is_native: false,
+            raw_balance: '1000000',
+            decimals: 6,
+            quantity: '1.0',
+            price_usd: '1.00',
+            value_usd: '1.00',
+            included: true,
+            metadata_source: 'chain',
+            read_status: 'ok',
+            block_time: null,
+            observed_at: null,
+            last_success_at: null,
+          },
+        ],
+      })
+      expect(container.textContent).toMatch(/1 of 2 priced/i)
+      await unmount(container, root)
+    })
+
+    it('always shows a priced-assets note, falling back to "no balance snapshot" when unset', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.textContent).toMatch(/no balance snapshot yet/i)
+      await unmount(container, root)
+    })
+
+    it('shows an "as of" date note for priced assets when balance_block_time is set', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        balance_block_time: '2026-03-15T10:00:00Z',
+      })
+      expect(container.textContent).toMatch(/as of Mar 15/i)
+      await unmount(container, root)
+    })
+  })
+
+  describe('page header', () => {
+    it('renders a breadcrumb, the page title, and a data-freshness subtitle', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        balance_block_time: '2026-03-15T10:00:00Z',
+        balance_observed_at: '2026-03-15T10:05:00Z',
+      })
+      expect(container.textContent).toContain('Dashboard')
+      expect(container.querySelector('h2')?.textContent).toBe('Overview')
+      expect(container.textContent).toMatch(/balances as of/i)
+      await unmount(container, root)
+    })
+
+    it('shows a fallback subtitle when no balance snapshot exists yet', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.textContent).toMatch(/no balance snapshot yet/i)
+      await unmount(container, root)
+    })
+
+    it('never renders a raw ISO timestamp on the page', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        balance_block_time: '2026-03-15T10:00:00Z',
+        balance_observed_at: '2026-03-15T10:05:00Z',
+      })
+      expect(container.textContent).not.toMatch(/2026-03-15T10:00:00/)
+      expect(container.textContent).not.toMatch(/2026-03-15T10:05:00/)
+      await unmount(container, root)
+    })
+
+    it('calls setPage("wallets") when the + Add Wallet button is clicked', async () => {
+      const setPage = vi.fn()
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const qc = makeQueryClient()
+      qc.setQueryData(['portfolio'], EMPTY_PORTFOLIO)
+      act(() => {
+        root.render(
+          React.createElement(
+            QueryClientProvider,
+            { client: qc },
+            React.createElement(DashboardPage, { setPage }),
+          ),
+        )
+      })
+      const button = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent === '+ Add Wallet',
+      )!
+      act(() => { button.click() })
+      expect(setPage).toHaveBeenCalledWith('wallets')
+      await unmount(container, root)
+    })
+  })
+
+  describe('recent events', () => {
+    it('shows an honest empty state when there are no events', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.textContent).toMatch(/no on-chain events indexed yet/i)
+      expect(container.textContent).not.toMatch(/coming soon/i)
+      await unmount(container, root)
+    })
+
+    it('renders real events when present', async () => {
+      mockFetchEvents.mockResolvedValue({
+        total: 1,
+        limit: 7,
+        offset: 0,
+        events: [
+          {
+            id: 'ev1',
+            wallet_id: 'w1',
+            tx_hash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            block_number: 100,
+            log_index: 0,
+            event_type: 'transfer_in',
+            token_address: '0x1234567890abcdef1234567890abcdef12345678',
+            from_address: '0xaaaa',
+            to_address: '0xbbbb',
+            raw_amount: '1000000',
+            indexed_at: '2026-01-01T00:00:00Z',
+          },
+        ],
+      })
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      await flush()
+      expect(container.textContent).not.toMatch(/no on-chain events indexed yet/i)
+      expect(container.textContent).not.toMatch(/coming soon/i)
+      expect(container.textContent).toContain('in')
+      await unmount(container, root)
+    })
+
+    it('has no "AI Focus" placeholder on the page', async () => {
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      expect(container.textContent).not.toMatch(/AI Focus/i)
+      await unmount(container, root)
+    })
+
+    it('calls setPage("events") when "View all" is clicked', async () => {
+      const setPage = vi.fn()
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const qc = makeQueryClient()
+      qc.setQueryData(['portfolio'], EMPTY_PORTFOLIO)
+      act(() => {
+        root.render(
+          React.createElement(
+            QueryClientProvider,
+            { client: qc },
+            React.createElement(DashboardPage, { setPage }),
+          ),
+        )
+      })
+      const button = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent === 'View all',
+      )!
+      act(() => { button.click() })
+      expect(setPage).toHaveBeenCalledWith('events')
       await unmount(container, root)
     })
   })
@@ -300,7 +593,7 @@ describe('DashboardPage', () => {
           React.createElement(
             QueryClientProvider,
             { client: qc },
-            React.createElement(DashboardPage),
+            React.createElement(DashboardPage, { setPage: vi.fn() }),
           ),
         )
       })

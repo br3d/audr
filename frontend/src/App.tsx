@@ -89,7 +89,7 @@ export default function App() {
 
   return (
     <Layout page={page} setPage={setPage} onSignOut={handleSignOut}>
-      {page === 'dashboard' && <DashboardPage />}
+      {page === 'dashboard' && <DashboardPage setPage={setPage} />}
       {page === 'holdings' && <HoldingsPage />}
       {page === 'wallets' && <WalletsPage />}
       {page === 'assets' && <AssetsPage />}
