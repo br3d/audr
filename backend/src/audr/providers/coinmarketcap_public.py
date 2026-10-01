@@ -10,9 +10,14 @@ addresses to ids first — see `audr.assets.cmc_catalog.resolve_cmc_ids`.
 `get_prices` takes a *resolver* callable to do that, so this provider has
 no direct DB dependency and stays unit-testable like CoinGeckoProvider.
 
-Anonymous rate limits are real (observed HTTP 429 on back-to-back calls) —
-callers must not retry in a tight loop; the job worker's retry backoff
-(AUD-356) is what paces re-attempts after a RateLimitError.
+Anonymous rate limits are real (observed HTTP 429 on back-to-back calls).
+Callers pass the process-wide `get_shared_cmc_rate_limiter()` token bucket
+to pace every request before it's sent, and a 429 that still gets through
+is retried in-place with exponential backoff + jitter (AUD-370) — mirroring
+the RPC reader's RateLimiter/RetryPolicy pattern from AUD-362. Only once
+those in-place retries are exhausted does RateLimitError propagate, at
+which point the job worker's own retry backoff (AUD-356) decides when to
+re-attempt the whole job.
 
 Never logs or exposes request/response bodies beyond what's needed for
 debugging HTTP failures (there's no secret here, but keep the habit).
@@ -30,6 +35,7 @@ from typing import Any
 import httpx
 
 from audr.assets.constants import NATIVE_ETH_ADDRESS, is_native_eth
+from audr.jobs.policy import RateLimiter, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +48,6 @@ _TIMEOUT = 15.0
 # (AUD-359). A real portfolio resolves to a few hundred ids, so requests must be
 # chunked — sending them all at once failed every quote_refresh on staging.
 _MAX_IDS_PER_REQUEST = 50
-# Anonymous calls are rate limited aggressively, so chunks are paced rather than
-# fired back to back. A chunk that still trips the limit is retried once after a
-# longer pause; if it trips again the RateLimitError propagates and the worker's
-# retry backoff (AUD-356) decides when to re-attempt the whole job.
-_INTER_BATCH_DELAY_S = 1.5
-_RATE_LIMIT_RETRY_DELAY_S = 8.0
 
 # AddressResolver maps a list of lowercase ERC-20 contract addresses to
 # {address: cmc_id} for whichever addresses it can resolve. Addresses it
@@ -80,6 +80,8 @@ class CoinMarketCapProvider:
         resolver: AddressResolver,
         http_client: httpx.AsyncClient | None = None,
         base_url: str = _BASE_URL,
+        rate_limiter: RateLimiter | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._resolver = resolver
         self._base = base_url.rstrip("/")
@@ -88,6 +90,14 @@ class CoinMarketCapProvider:
             timeout=httpx.Timeout(_TIMEOUT),
             follow_redirects=False,
         )
+        # Shared across job handlers when the caller passes the process-wide
+        # limiter (see audr.jobs.policy.get_shared_cmc_rate_limiter); None
+        # here means "no rate limiting" so unit/contract tests that construct
+        # a provider directly are unaffected.
+        self._rate_limiter = rate_limiter
+        # Anonymous 429s need a longer backoff than the RPC default — base
+        # delay is deliberately higher than RetryPolicy()'s 1.0s.
+        self._retry_policy = retry_policy or RetryPolicy(base_delay_s=4.0, max_delay_s=60.0)
 
     async def __aenter__(self) -> "CoinMarketCapProvider":
         return self
@@ -126,25 +136,35 @@ class CoinMarketCapProvider:
         result: dict[int, Decimal] = {}
         for position in range(0, len(unique_ids), _MAX_IDS_PER_REQUEST):
             chunk = unique_ids[position : position + _MAX_IDS_PER_REQUEST]
-            if position:
-                await asyncio.sleep(_INTER_BATCH_DELAY_S)
             data = await self._get_price_chunk(chunk)
             self._collect_prices(data, result)
         return result
 
     async def _get_price_chunk(self, chunk: list[int]) -> dict[str, Any]:
-        """Fetch one chunk of ids, retrying once if the rate limit trips."""
+        """Fetch one chunk of ids, retrying with exponential backoff on 429 (AUD-370).
+
+        Every attempt (including retries) goes through the rate limiter
+        first via `_get`. Only once the retry policy is exhausted does
+        RateLimitError propagate to the caller.
+        """
         params = {"ids": ",".join(str(i) for i in chunk), "convert": "USD"}
-        try:
-            return await self._get("/public-api/v1/simple/price", params=params)
-        except RateLimitError:
-            logger.info(
-                "coinmarketcap: rate limited on a chunk of %d ids, retrying once in %.1fs",
-                len(chunk),
-                _RATE_LIMIT_RETRY_DELAY_S,
-            )
-            await asyncio.sleep(_RATE_LIMIT_RETRY_DELAY_S)
-            return await self._get("/public-api/v1/simple/price", params=params)
+        attempt = 0
+        while True:
+            try:
+                return await self._get("/public-api/v1/simple/price", params=params)
+            except RateLimitError:
+                if not self._retry_policy.is_retryable(attempt):
+                    raise
+                delay = self._retry_policy.delay_for(attempt)
+                logger.info(
+                    "coinmarketcap: rate limited on a chunk of %d ids (attempt %d), "
+                    "backing off %.1fs",
+                    len(chunk),
+                    attempt + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
 
     @staticmethod
     def _collect_prices(data: dict[str, Any], into: dict[int, Decimal]) -> None:
@@ -220,6 +240,8 @@ class CoinMarketCapProvider:
     # ------------------------------------------------------------------
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire()
         url = f"{self._base}{path}"
         response = await self._client.get(url, params=params)
         _check_response(response)

@@ -86,6 +86,26 @@ def get_shared_rpc_rate_limiter() -> RateLimiter:
     )
 
 
+@lru_cache
+def get_shared_cmc_rate_limiter() -> RateLimiter:
+    """Process-wide CoinMarketCap anonymous rate limiter (AUD-370).
+
+    CoinMarketCap's keyless endpoint enforces its own (unpublished) anonymous
+    quota, tighter than the RPC budget above — quote_refresh kept tripping
+    HTTP 429 even at one run per hour once a portfolio's chunked id requests
+    outran the ad-hoc inter-batch sleep that preceded this. One instance per
+    worker process is shared by every CoinMarketCapProvider the quote_refresh
+    handler constructs.
+    """
+    from audr.config import get_settings
+
+    settings = get_settings()
+    return RateLimiter(
+        calls_per_second=settings.cmc_rate_limit_per_second,
+        burst=settings.cmc_rate_limit_burst,
+    )
+
+
 class CancellationCheckpoint:
     """Async context manager that raises asyncio.CancelledError at safe points."""
 

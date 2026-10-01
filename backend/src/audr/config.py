@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # (AUD-362) so one run can't balloon into an unbounded RPC burst.
     event_indexer_max_chunks_per_run: int = 50
 
+    # Anonymous CoinMarketCap rate-limit budget for the worker process
+    # (AUD-370). The keyless public API's unpublished per-IP quota is far
+    # tighter than any RPC provider's — quote_refresh kept tripping HTTP 429
+    # even at one run per hour once a portfolio's chunked id requests outran
+    # the ad-hoc inter-batch sleep that preceded this setting.
+    cmc_rate_limit_per_second: float = 0.5
+    cmc_rate_limit_burst: int = 1
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
