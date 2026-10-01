@@ -154,6 +154,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
     asset_id_map = await _get_asset_id_map(session, token_addresses)
 
     obs_count = 0
+    resolved_addresses: set[str] = set()
     for address, price_usd in prices.items():
         asset_id = asset_id_map.get(address.lower())
         if asset_id is None:
@@ -173,6 +174,9 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
             },
         )
         obs_count += 1
+        resolved_addresses.add(address.lower())
+
+    await _update_price_availability(session, token_addresses, resolved_addresses)
 
     # Mark 'empty' (not 'complete') when no observations were inserted so that
     # _get_latest_prices never shadows an earlier set that carried real prices.
@@ -245,3 +249,34 @@ async def _get_asset_id_map(
         {"addrs": token_addresses},
     )
     return {row[1]: uuid.UUID(str(row[0])) for row in result}
+
+
+async def _update_price_availability(
+    session: AsyncSession, requested: list[str], resolved: set[str]
+) -> None:
+    """Record which requested assets the provider confirmed it cannot price (AUD-361).
+
+    An address the provider didn't return a price for gets
+    ``price_unavailable_since`` set — this is the signal that distinguishes a
+    holding the provider genuinely doesn't know (never blocks total_usd) from
+    one that simply hasn't been asked about yet (does). An address that
+    resolves again after previously missing has the flag cleared.
+    """
+    now = datetime.now(tz=UTC)
+    unresolved = [addr for addr in requested if addr.lower() not in resolved]
+    if resolved:
+        await session.execute(
+            sa.text(
+                "UPDATE asset SET price_unavailable_since = NULL"
+                " WHERE token_address = ANY(:addrs) AND price_unavailable_since IS NOT NULL"
+            ),
+            {"addrs": list(resolved)},
+        )
+    if unresolved:
+        await session.execute(
+            sa.text(
+                "UPDATE asset SET price_unavailable_since = :now"
+                " WHERE token_address = ANY(:addrs)"
+            ),
+            {"addrs": unresolved, "now": now},
+        )

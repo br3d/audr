@@ -40,6 +40,10 @@ class HoldingRow:
     raw_amount: int
     block_number: int
     decimals: int
+    # True when the asset's most recent quote_refresh attempt asked the
+    # provider about it and the provider didn't know it (AUD-361) — as
+    # opposed to the asset simply never having been asked about.
+    price_unavailable: bool = False
 
 
 @dataclass
@@ -197,7 +201,8 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
                 bo.raw_amount::numeric,
                 bo.block_number,
                 COALESCE(a.decimals_override, a.decimals) AS effective_decimals,
-                bo.id  AS observation_id
+                bo.id  AS observation_id,
+                a.price_unavailable_since IS NOT NULL AS price_unavailable
             FROM balance_observation bo
             JOIN wallet w ON w.id = bo.wallet_id
             JOIN asset  a ON a.id = bo.asset_id
@@ -221,6 +226,7 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
             raw_amount=int(row[3]),
             block_number=int(row[4]),
             decimals=int(row[5]),
+            price_unavailable=bool(row[7]),
         )
         for row in result
     ]
@@ -259,7 +265,12 @@ def _compute_quality(
     Quality:
       unknown  — no holdings
       stale    — holdings exist but no prices available at all
-      partial  — some holdings have prices, some do not
+      partial  — some holdings have prices, but at least one has never been
+                 asked about (AUD-361) — blocks total_usd, since that holding
+                 could turn out to be priceable on the very next refresh
+      gaps     — every unpriced holding has been asked about and the provider
+                 confirmed it doesn't know it (AUD-361) — total_usd is still
+                 computable from the holdings that do have a price
       complete — every holding has a price
     """
     if not holdings:
@@ -269,6 +280,10 @@ def _compute_quality(
 
     if priced == 0:
         return "stale", 0
-    if priced < len(holdings):
-        return "partial", priced
-    return "complete", priced
+    if priced == len(holdings):
+        return "complete", priced
+
+    never_asked = any(
+        h.asset_id not in prices and not h.price_unavailable for h in holdings
+    )
+    return ("partial" if never_asked else "gaps"), priced

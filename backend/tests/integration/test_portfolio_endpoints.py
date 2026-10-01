@@ -298,6 +298,78 @@ async def test_portfolio_total_usd_null_when_missing_price(
 
 
 @pytest.mark.integration
+async def test_portfolio_gaps_quality_yields_total_from_priced_holdings(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """quality='gaps' (AUD-361): total_usd sums what's priced, unavailable asset is counted.
+
+    This is the AUD-361 regression: a portfolio with a handful of dust/exotic
+    holdings the price provider will never resolve must still report a real
+    total_usd, not a permanent null — but the excluded asset is still surfaced
+    via unpriced_asset_count rather than silently dropped.
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    priced_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40)
+    dust_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="DUST")
+    await _seed_snapshot(
+        db_session_factory,
+        quality="gaps",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": priced_asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            },
+            {
+                "wallet_id": wallet_id,
+                "asset_id": dust_asset_id,
+                "price_usd": None,
+                "value_usd": None,
+            },
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_usd"] == "100.000000000000000000"
+    assert data["unpriced_asset_count"] == 1
+    quality = data["quality"]
+    assert quality["incomplete"] is False
+    assert quality["stale_prices"] is False
+
+
+@pytest.mark.integration
+async def test_portfolio_stale_quality_sets_stale_prices_flag(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """quality='stale' (zero holdings priced at all) is the only state reporting stale_prices.
+
+    'partial'/'gaps' are coverage gaps, not price staleness (AUD-361) — only
+    a snapshot where nothing at all got priced should set this flag.
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_snapshot(
+        db_session_factory,
+        quality="stale",
+        holdings=[
+            {"wallet_id": wallet_id, "asset_id": asset_id, "price_usd": None, "value_usd": None}
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    quality = r.json()["quality"]
+    assert quality["stale_prices"] is True
+
+
+@pytest.mark.integration
 async def test_portfolio_wallet_id_filter(
     http_client: httpx.AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
