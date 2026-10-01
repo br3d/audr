@@ -78,6 +78,37 @@ class CatalogEntry(Base):
     decimals: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
 
+class CmcMapVersion(Base):
+    """A pinned snapshot of CoinMarketCap's keyless `/cryptocurrency/map` catalog."""
+
+    __tablename__ = "cmc_map_version"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    entry_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CmcMapEntry(Base):
+    """Single CoinMarketCap id within a map version, keyed for address/symbol lookup."""
+
+    __tablename__ = "cmc_map_entry"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("cmc_map_version.id"), nullable=False
+    )
+    cmc_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    # The token's address on Ethereum mainnet (platform.id == 1 in the CMC
+    # response), lowercased. NULL when the coin isn't a known Ethereum ERC-20
+    # (e.g. it's native to another chain, or CMC simply has no platform entry
+    # for it) — such coins are only reachable via symbol match.
+    eth_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class MonitoredPair(Base):
     """Wallet × asset pairs explicitly tracked for balance scanning."""
 

@@ -123,14 +123,6 @@ async def claim_job(
             if elapsed < freshness_s:
                 return None
 
-    # Job fencing: QUOTE_REFRESH requires a live coingecko integration.
-    if kind == JobKind.QUOTE_REFRESH:
-        guard = await session.execute(
-            sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
-        )
-        if guard.first() is None:
-            return None
-
     # Insert a new in_progress run.
     run_id = uuid.uuid4()
     now = datetime.now(tz=UTC)

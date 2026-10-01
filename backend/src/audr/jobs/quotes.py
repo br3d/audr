@@ -4,6 +4,13 @@ Only assets with at least one non-zero balance observation are priced
 (held-asset-only).  Assets with no recent observation, zero balance, or
 that are excluded are skipped.
 
+Provider selection (AUD-358): CoinGecko Demo requires an API key that a
+fresh install never has, so it used to be the only provider and
+quote_refresh was a permanent no-op out of the box. CoinMarketCap's public
+`/public-api/v1/*` endpoints work without a key, so that's now the default;
+CoinGecko is used instead whenever the owner has saved a key for it, since
+its address-based `/simple/token_price` endpoint covers more tokens.
+
 The job inserts a quote_set row, populates quote_observation rows for each
 successfully priced asset, and marks the set complete.  On any provider
 error the set is marked failed and the job re-raises (AUD-318) so the worker
@@ -13,6 +20,7 @@ provider outage as a successful run.
 
 from __future__ import annotations
 
+import functools
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -20,40 +28,93 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.assets.cmc_catalog import resolve_cmc_ids
 from audr.jobs.store import JobKind, enqueue_job
+from audr.operations.status import ComponentStatus, QuoteStatus
 from audr.providers.coingecko_demo import CoinGeckoError, CoinGeckoProvider
+from audr.providers.coinmarketcap_public import CoinMarketCapError, CoinMarketCapProvider
 from audr.settings.quotes import get_coingecko_api_key
 
 logger = logging.getLogger(__name__)
 
 _ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
+_PROVIDER_ERRORS = (CoinGeckoError, CoinMarketCapError)
+
+
+async def get_active_quote_provider(session: AsyncSession) -> str:
+    """Return the provider quote_refresh will use: 'coingecko' or 'coinmarketcap'.
+
+    CoinMarketCap's keyless endpoint is always available, so this never
+    returns "none" — CoinGecko is only used once the owner opts in with a key.
+    """
+    api_key = await get_coingecko_api_key(session)
+    return "coingecko" if api_key else "coinmarketcap"
+
+
+async def get_quote_status(session: AsyncSession) -> QuoteStatus:
+    """Report the active quote provider and how many held assets lack a price.
+
+    Reads the most recent valuation snapshot rather than re-deriving
+    "held assets" here, so this always matches what /holdings would show.
+    No snapshot yet (fresh install, worker hasn't run valuation once) reports
+    zero holdings and zero unpriced — not a false DEGRADED before the first
+    run has had a chance to complete.
+    """
+    provider = await get_active_quote_provider(session)
+    result = await session.execute(
+        sa.text(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE vl.price_usd IS NULL) AS unpriced,
+                COUNT(*) AS total
+            FROM valuation_line vl
+            WHERE vl.snapshot_id = (
+                SELECT id FROM valuation_snapshot
+                ORDER BY snapshotted_at DESC LIMIT 1
+            )
+            """
+        )
+    )
+    row = result.first()
+    unpriced_count = int(row[0]) if row and row[0] is not None else 0
+    total_count = int(row[1]) if row and row[1] is not None else 0
+
+    status = (
+        ComponentStatus.DEGRADED
+        if total_count > 0 and unpriced_count == total_count
+        else ComponentStatus.OK
+    )
+    return QuoteStatus(provider=provider, unpriced_count=unpriced_count, status=status)
+
 
 async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Fetch and store price quotes for all currently held assets."""
-    api_key = await get_coingecko_api_key(session)
-    if not api_key:
-        logger.warning(
-            "quote_refresh skipped — no CoinGecko API key configured run_id=%s", run_id
-        )
-        return
-
     token_addresses = await _get_held_asset_addresses(session)
     if not token_addresses:
         logger.info("quote_refresh skipped — no held assets run_id=%s", run_id)
         return
 
-    quote_set_id = await _insert_quote_set(session, provider="coingecko")
+    provider_name = await get_active_quote_provider(session)
+    quote_set_id = await _insert_quote_set(session, provider=provider_name)
     await session.flush()
 
     try:
-        async with CoinGeckoProvider(api_key=api_key) as provider:
-            prices = await provider.get_prices(token_addresses)
-    except CoinGeckoError as exc:
+        if provider_name == "coingecko":
+            api_key = await get_coingecko_api_key(session)
+            assert api_key is not None  # get_active_quote_provider already checked
+            async with CoinGeckoProvider(api_key=api_key) as provider:
+                prices = await provider.get_prices(token_addresses)
+        else:
+            resolver = functools.partial(resolve_cmc_ids, session)
+            async with CoinMarketCapProvider(resolver=resolver) as cmc_provider:
+                prices = await cmc_provider.get_prices(token_addresses)
+    except _PROVIDER_ERRORS as exc:
         logger.warning(
-            "quote_refresh provider error run_id=%s quote_set=%s: %s",
+            "quote_refresh provider error run_id=%s quote_set=%s provider=%s: %s",
             run_id,
             quote_set_id,
+            provider_name,
             exc,
         )
         await _mark_quote_set(session, quote_set_id, "failed")
@@ -64,17 +125,22 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         # and history.
         raise
 
-    # Fencing: re-check run status and integration existence after the external
-    # API call.  The purge may have cancelled the run and deleted the integration
-    # while we were waiting for the provider response.
+    # Fencing: re-check run status after the external API call — the purge may
+    # have cancelled the run while we were waiting for the provider response.
+    # The coingecko integration itself is only fenced for the coingecko
+    # provider: CoinMarketCap is keyless and has no integration row to purge,
+    # so there's nothing to re-check for it beyond run liveness.
     run_active = await session.execute(
         sa.text("SELECT 1 FROM job_run WHERE id = :id AND status = 'in_progress'"),
         {"id": str(run_id)},
     )
-    integration_alive = await session.execute(
-        sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
-    )
-    if run_active.first() is None or integration_alive.first() is None:
+    fenced = run_active.first() is None
+    if not fenced and provider_name == "coingecko":
+        integration_alive = await session.execute(
+            sa.text("SELECT 1 FROM integration WHERE kind = 'coingecko' LIMIT 1"),
+        )
+        fenced = integration_alive.first() is None
+    if fenced:
         logger.info(
             "quote_refresh fenced: run cancelled or integration removed run_id=%s",
             run_id,
