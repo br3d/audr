@@ -581,6 +581,68 @@ describe('DashboardPage', () => {
     })
   })
 
+  describe('portfolio value history range switcher', () => {
+    const HISTORY_WITH_ENTRIES = {
+      period: '30d' as const,
+      entries: [
+        {
+          snapshot_id: 'h1',
+          snapshotted_at: '2026-01-15T00:00:00Z',
+          total_value_usd: '191000.00',
+          quality: 'ok' as const,
+          included_wallet_count: 1,
+          included_asset_count: 1,
+          has_gap: false,
+          is_canonical: true,
+          is_gap_marker: false,
+        },
+      ],
+      next_cursor: null,
+    }
+
+    it('renders four range segments defaulting to 1M', async () => {
+      mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+      })
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10))
+      })
+      const buttons = Array.from(
+        container.querySelectorAll('.range-switcher-btn'),
+      ) as HTMLButtonElement[]
+      expect(buttons.map((b) => b.textContent)).toEqual(['1D', '1W', '1M', 'All'])
+      const active = buttons.find((b) => b.getAttribute('aria-pressed') === 'true')
+      expect(active?.textContent).toBe('1M')
+      expect(mockFetchHistory).toHaveBeenCalledWith('30d')
+      await unmount(container, root)
+    })
+
+    it('switching range requests the matching period from the API', async () => {
+      mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+      })
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10))
+      })
+      const buttons = Array.from(
+        container.querySelectorAll('.range-switcher-btn'),
+      ) as HTMLButtonElement[]
+      const dayButton = buttons.find((b) => b.textContent === '1D')!
+      await act(async () => {
+        dayButton.click()
+      })
+      expect(mockFetchHistory).toHaveBeenCalledWith('24h')
+      expect(dayButton.getAttribute('aria-pressed')).toBe('true')
+      await unmount(container, root)
+    })
+  })
+
   describe('loading and error states', () => {
     it('shows loading indicator while portfolio is pending', async () => {
       mockFetchPortfolio.mockReturnValue(new Promise(() => {}))
