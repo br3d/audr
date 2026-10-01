@@ -20,6 +20,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _LEASE_TIMEOUT_INTERVAL = "5 minutes"
 _WORKER_STALE_MINUTES = 10
 
+# Retry backoff (AUD-356): a consecutive-failure streak delays the next claim
+# instead of blocking it forever. Delay doubles per failure beyond the first,
+# capped at _RETRY_BACKOFF_MAX_S so a broken provider is hammered less often
+# but a job kind always eventually retries on its own — no DB intervention.
+_RETRY_BACKOFF_BASE_S = 30
+_RETRY_BACKOFF_MAX_S = 900  # 15 minutes
+# Bounds how far back the consecutive-failure streak is counted from. Not the
+# backoff mechanism itself (the cap above already guarantees self-healing) —
+# just keeps the COUNT query cheap and lets a streak from a day-old incident
+# stop influencing today's backoff.
+_RETRY_STREAK_LOOKBACK_INTERVAL = "24 hours"
+
+# Fallback cadence (AUD-356) for a kind with no `schedule` row. The old
+# behaviour ("no row = always due") is what hot-looped the worker into ~2
+# claims/sec once the schedule table turned out to be empty for every kind.
+# Keyed defaults mirror the frontend's SchedulesPage fallback display values;
+# _DEFAULT_FRESHNESS_FALLBACK_S covers any kind not listed (e.g. a new job
+# kind added before its schedule row is seeded).
+_DEFAULT_FRESHNESS_S: dict[str, int] = {
+    "balance_scan": 300,
+    "discovery": 3600,
+    "quote_refresh": 300,
+    "event_indexer": 300,
+    "news_refresh": 900,
+}
+_DEFAULT_FRESHNESS_FALLBACK_S = 300
+
 
 class JobKind(StrEnum):
     BALANCE_SCAN = "balance_scan"
@@ -80,27 +107,41 @@ async def claim_job(
     if active.first() is not None:
         return None
 
-    # Check retry budget: count consecutive failures since the last success.
-    # This prevents transient failures from permanently blocking a job kind.
-    exhausted = await session.execute(
-        sa.text(
-            """
-            SELECT COUNT(*) FROM job_run
-            WHERE kind = :kind AND status = 'failed'
-              AND created_at > COALESCE(
-                (SELECT MAX(created_at) FROM job_run
-                  WHERE kind = :kind AND status = 'completed'),
-                '-infinity'::timestamptz
-              )
-            """
-        ),
-        {"kind": kind.value},
-    )
-    if (exhausted.scalar() or 0) >= max_retries:
-        return None
+    # Retry backoff: a streak of consecutive failures since the last success
+    # delays the next claim with exponential backoff instead of blocking the
+    # kind forever (AUD-356). _RETRY_STREAK_LOOKBACK_INTERVAL just bounds the
+    # query; the backoff cap below is what guarantees self-healing.
+    streak_row = (
+        await session.execute(
+            sa.text(
+                f"""
+                SELECT COUNT(*), MAX(completed_at) FROM job_run
+                WHERE kind = :kind AND status = 'failed'
+                  AND created_at > COALESCE(
+                    (SELECT MAX(created_at) FROM job_run
+                      WHERE kind = :kind AND status = 'completed'),
+                    '-infinity'::timestamptz
+                  )
+                  AND created_at > now() - interval '{_RETRY_STREAK_LOOKBACK_INTERVAL}'
+                """  # noqa: S608 — _RETRY_STREAK_LOOKBACK_INTERVAL is a module constant
+            ),
+            {"kind": kind.value},
+        )
+    ).one()
+    streak, last_failed_at = streak_row
+    if streak and last_failed_at is not None:
+        backoff_s = min(
+            _RETRY_BACKOFF_BASE_S * (2 ** min(streak - 1, max_retries)),
+            _RETRY_BACKOFF_MAX_S,
+        )
+        if (datetime.now(tz=UTC) - last_failed_at).total_seconds() < backoff_s:
+            return None
 
     # Schedule gate: if a schedule row exists, honour its enabled/paused/freshness
-    # and next_run_at fields.  A missing schedule row means "always allowed".
+    # and next_run_at fields. A missing schedule row falls back to a conservative
+    # in-code default interval, gated against this kind's most recent run — an
+    # unconditional "always allowed" is what let the schedule table being empty
+    # turn into a ~2-claims/sec hot loop (AUD-356).
     sched = await session.execute(
         sa.text(
             """
@@ -111,16 +152,34 @@ async def claim_job(
         {"kind": kind.value},
     )
     sched_row = sched.first()
+    now_ts = datetime.now(tz=UTC)
     if sched_row is not None:
         enabled, paused_at, freshness_s, last_run_at, next_run_at = sched_row
         if not enabled or paused_at is not None:
             return None
-        now_ts = datetime.now(tz=UTC)
         if next_run_at is not None and next_run_at > now_ts:
             return None
         if freshness_s is not None and last_run_at is not None:
             elapsed = int((now_ts - last_run_at).total_seconds())
             if elapsed < freshness_s:
+                return None
+    else:
+        default_freshness_s = _DEFAULT_FRESHNESS_S.get(
+            kind.value, _DEFAULT_FRESHNESS_FALLBACK_S
+        )
+        last_run = await session.execute(
+            sa.text(
+                """
+                SELECT MAX(COALESCE(completed_at, created_at)) FROM job_run
+                WHERE kind = :kind AND status IN ('completed', 'failed')
+                """
+            ),
+            {"kind": kind.value},
+        )
+        last_run_at = last_run.scalar()
+        if last_run_at is not None:
+            elapsed = int((now_ts - last_run_at).total_seconds())
+            if elapsed < default_freshness_s:
                 return None
 
     # Insert a new in_progress run.

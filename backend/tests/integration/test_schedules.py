@@ -46,7 +46,13 @@ async def _insert_schedule(
     budget_calls_per_day: int | None = None,
     last_run_at: datetime | None = None,
 ) -> None:
-    """Insert a schedule row with the post-migration-0002 schema (no cron_expr)."""
+    """Insert or overwrite a schedule row (post-migration-0002 schema, no cron_expr).
+
+    Migration 0008 (AUD-356) now seeds a default row for balance_scan,
+    discovery, quote_refresh, event_indexer, and news_refresh, so a plain
+    INSERT for those kinds would hit ``uq_schedule_kind``. ON CONFLICT DO
+    UPDATE keeps this helper working for both pre-seeded and ad-hoc kinds.
+    """
     await session.execute(
         text(
             """
@@ -56,6 +62,13 @@ async def _insert_schedule(
             VALUES
               (:id, :kind, :enabled, :revision,
                :freshness_s, :budget, :last_run_at)
+            ON CONFLICT (kind) DO UPDATE SET
+              enabled              = EXCLUDED.enabled,
+              revision             = EXCLUDED.revision,
+              freshness_s          = EXCLUDED.freshness_s,
+              budget_calls_per_day = EXCLUDED.budget_calls_per_day,
+              last_run_at          = EXCLUDED.last_run_at,
+              paused_at            = NULL
             """
         ),
         {
