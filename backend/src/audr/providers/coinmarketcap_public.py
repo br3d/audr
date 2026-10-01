@@ -20,6 +20,7 @@ debugging HTTP failures (there's no secret here, but keep the habit).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,18 @@ _BASE_URL = "https://pro-api.coinmarketcap.com"
 _ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 _ETH_CMC_ID = 1027
 _TIMEOUT = 15.0
+
+# The keyless endpoint caps `ids` at 50 values per request and answers a larger
+# list with HTTP 400 "'ids' parameter is currently restricted to 50 values"
+# (AUD-359). A real portfolio resolves to a few hundred ids, so requests must be
+# chunked — sending them all at once failed every quote_refresh on staging.
+_MAX_IDS_PER_REQUEST = 50
+# Anonymous calls are rate limited aggressively, so chunks are paced rather than
+# fired back to back. A chunk that still trips the limit is retried once after a
+# longer pause; if it trips again the RateLimitError propagates and the worker's
+# retry backoff (AUD-356) decides when to re-attempt the whole job.
+_INTER_BATCH_DELAY_S = 1.5
+_RATE_LIMIT_RETRY_DELAY_S = 8.0
 
 # AddressResolver maps a list of lowercase ERC-20 contract addresses to
 # {address: cmc_id} for whichever addresses it can resolve. Addresses it
@@ -98,22 +111,42 @@ class CoinMarketCapProvider:
         return price
 
     async def get_prices_by_ids(self, cmc_ids: list[int]) -> dict[int, Decimal]:
-        """Return {cmc_id: price_usd} for recognised ids, batched into one request.
+        """Return {cmc_id: price_usd} for recognised ids.
 
-        Ids not found in the response are silently omitted — callers must
-        treat an absent id as unknown, never zero.
+        Ids are requested in chunks of at most ``_MAX_IDS_PER_REQUEST`` because
+        the endpoint rejects longer lists outright (AUD-359), and chunks are
+        paced to stay under the anonymous rate limit. Ids not found in the
+        response are silently omitted — callers must treat an absent id as
+        unknown, never zero.
         """
         if not cmc_ids:
             return {}
         unique_ids = sorted(set(cmc_ids))
-        data = await self._get(
-            "/public-api/v1/simple/price",
-            params={
-                "ids": ",".join(str(i) for i in unique_ids),
-                "convert": "USD",
-            },
-        )
         result: dict[int, Decimal] = {}
+        for position in range(0, len(unique_ids), _MAX_IDS_PER_REQUEST):
+            chunk = unique_ids[position : position + _MAX_IDS_PER_REQUEST]
+            if position:
+                await asyncio.sleep(_INTER_BATCH_DELAY_S)
+            data = await self._get_price_chunk(chunk)
+            self._collect_prices(data, result)
+        return result
+
+    async def _get_price_chunk(self, chunk: list[int]) -> dict[str, Any]:
+        """Fetch one chunk of ids, retrying once if the rate limit trips."""
+        params = {"ids": ",".join(str(i) for i in chunk), "convert": "USD"}
+        try:
+            return await self._get("/public-api/v1/simple/price", params=params)
+        except RateLimitError:
+            logger.info(
+                "coinmarketcap: rate limited on a chunk of %d ids, retrying once in %.1fs",
+                len(chunk),
+                _RATE_LIMIT_RETRY_DELAY_S,
+            )
+            await asyncio.sleep(_RATE_LIMIT_RETRY_DELAY_S)
+            return await self._get("/public-api/v1/simple/price", params=params)
+
+    @staticmethod
+    def _collect_prices(data: dict[str, Any], into: dict[int, Decimal]) -> None:
         for entry in data.get("data", []):
             if not isinstance(entry, dict):
                 continue
@@ -122,10 +155,9 @@ class CoinMarketCapProvider:
             if cmc_id is None or price is None:
                 continue
             try:
-                result[int(cmc_id)] = Decimal(str(price))
+                into[int(cmc_id)] = Decimal(str(price))
             except Exception:
                 logger.warning("coinmarketcap: unparseable price for id %r: %r", cmc_id, price)
-        return result
 
     async def get_prices(
         self,
@@ -136,7 +168,7 @@ class CoinMarketCapProvider:
         """Convenience: fetch prices for an arbitrary mix of tokens and ETH.
 
         Resolves ERC-20 addresses to CoinMarketCap ids via the injected
-        resolver, fetches every id in a single batched request, and maps
+        resolver, fetches every id in chunked requests, and maps
         prices back onto the original lowercase addresses. An address that
         the resolver cannot map (no pin, no address match, ambiguous
         symbol) is simply absent from the result, matching

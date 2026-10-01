@@ -218,3 +218,90 @@ async def test_context_manager_closes_client() -> None:
             price = await provider.get_eth_price()
 
     assert price == Decimal("2000.0")
+
+
+@pytest.mark.contract
+async def test_get_prices_by_ids_chunks_at_fifty_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """More than 50 ids are split across requests (AUD-359).
+
+    The keyless endpoint answers any `ids` list longer than 50 with HTTP 400
+    ("'ids' parameter is currently restricted to 50 values"), which failed every
+    quote_refresh on staging once the portfolio resolved past 50 assets. Each
+    chunk must therefore carry at most 50 ids, and prices from every chunk must
+    be merged into one result.
+    """
+    monkeypatch.setattr(
+        "audr.providers.coinmarketcap_public._INTER_BATCH_DELAY_S", 0, raising=True
+    )
+    requested_ids: list[list[str]] = []
+    all_ids = list(range(1, 121))  # 120 ids -> 3 chunks of 50/50/20
+
+    def _respond(request: Any) -> Response:
+        ids = request.url.params["ids"].split(",")
+        requested_ids.append(ids)
+        return _simple_price_response_for(ids)
+
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(side_effect=_respond)
+        async with CoinMarketCapProvider(resolver=_resolver_for({})) as provider:
+            prices = await provider.get_prices_by_ids(all_ids)
+
+    assert [len(chunk) for chunk in requested_ids] == [50, 50, 20]
+    assert all(len(chunk) <= 50 for chunk in requested_ids)
+    # Every id was asked for exactly once, and every price made it back.
+    assert sorted(int(i) for chunk in requested_ids for i in chunk) == all_ids
+    assert len(prices) == len(all_ids)
+    assert prices[1] == Decimal("1.5")
+    assert prices[120] == Decimal("180.0")
+
+
+def _simple_price_response_for(ids: list[str]) -> Response:
+    return Response(
+        200,
+        json={
+            "data": [{"id": int(i), "price": float(int(i) * 1.5)} for i in ids],
+            "status": {"error_code": "0"},
+        },
+    )
+
+
+@pytest.mark.contract
+async def test_get_prices_by_ids_retries_once_on_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chunk that trips the anonymous rate limit is retried once, then succeeds."""
+    monkeypatch.setattr(
+        "audr.providers.coinmarketcap_public._RATE_LIMIT_RETRY_DELAY_S", 0, raising=True
+    )
+    attempts = {"n": 0}
+
+    def _respond(request: Any) -> Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return Response(429, json={"status": {"error_code": "1008"}})
+        return Response(200, json=_simple_price_response([(1027, 2690.18)]))
+
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(side_effect=_respond)
+        async with CoinMarketCapProvider(resolver=_resolver_for({})) as provider:
+            prices = await provider.get_prices_by_ids([1027])
+
+    assert attempts["n"] == 2
+    assert prices[1027] == Decimal("2690.18")
+
+
+@pytest.mark.contract
+async def test_get_prices_by_ids_raises_if_rate_limit_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two consecutive 429s propagate, leaving pacing to the worker's backoff."""
+    monkeypatch.setattr(
+        "audr.providers.coinmarketcap_public._RATE_LIMIT_RETRY_DELAY_S", 0, raising=True
+    )
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(
+            return_value=Response(429, json={"status": {"error_code": "1008"}})
+        )
+        async with CoinMarketCapProvider(resolver=_resolver_for({})) as provider:
+            with pytest.raises(RateLimitError):
+                await provider.get_prices_by_ids([1027])
