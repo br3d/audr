@@ -38,10 +38,12 @@ _RETRY_STREAK_LOOKBACK_INTERVAL = "24 hours"
 # Keyed defaults mirror the frontend's SchedulesPage fallback display values;
 # _DEFAULT_FRESHNESS_FALLBACK_S covers any kind not listed (e.g. a new job
 # kind added before its schedule row is seeded).
+# discovery and quote_refresh were raised from 1h/5min to 24h/1h (AUD-366) to
+# cut down how fast a single configured RPC/quote provider's quota gets burned.
 _DEFAULT_FRESHNESS_S: dict[str, int] = {
     "balance_scan": 300,
-    "discovery": 3600,
-    "quote_refresh": 300,
+    "discovery": 86400,
+    "quote_refresh": 3600,
     "event_indexer": 300,
     "news_refresh": 900,
 }

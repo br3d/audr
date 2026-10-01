@@ -120,6 +120,10 @@ function patch<T>(path: string, body?: unknown): Promise<T> {
   return request<T>('PATCH', path, body)
 }
 
+function del<T>(path: string): Promise<T> {
+  return request<T>('DELETE', path)
+}
+
 // --- Auth response types ---
 
 export interface SetupStatusResponse {
@@ -381,6 +385,16 @@ export interface PatchWalletInput {
 
 export function patchWallet(id: string, input: PatchWalletInput): Promise<WalletItem> {
   return patch<WalletItem>(`/wallets/${id}`, input)
+}
+
+export interface DeleteWalletResponse {
+  wallet_id: string
+  deleted: Record<string, number>
+}
+
+/** Permanently remove a wallet and every record derived from it (AUD-367). */
+export function deleteWallet(id: string): Promise<DeleteWalletResponse> {
+  return del<DeleteWalletResponse>(`/wallets/${id}`)
 }
 
 // --- Assets API ---

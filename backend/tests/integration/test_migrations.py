@@ -171,6 +171,30 @@ async def test_defaulted_insert_satisfies_check_constraints(
 
 
 # ---------------------------------------------------------------------------
+# Tests: schedule interval defaults (AUD-366)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_freshness_s"),
+    [
+        ("discovery", 86400),
+        ("quote_refresh", 3600),
+    ],
+)
+async def test_schedule_intervals_raised_to_cut_rpc_quota_burn(
+    db_session: AsyncSession, kind: str, expected_freshness_s: int
+) -> None:
+    """0013 raises discovery to 24h and quote_refresh to 1h (AUD-366) so a
+    single configured RPC/quote provider's quota is not burned as fast."""
+    row = await db_session.execute(
+        text("SELECT freshness_s FROM schedule WHERE kind = :kind"),
+        {"kind": kind},
+    )
+    assert row.scalar() == expected_freshness_s
+
+
+# ---------------------------------------------------------------------------
 # Tests: reset_password
 # ---------------------------------------------------------------------------
 

@@ -36,6 +36,9 @@ _WALLETS_URL = "/api/v1/wallets"
 _PASSWORD = "correct-horse-battery-staple-99"
 _ADDR_A = "0x" + "a" * 40
 _ADDR_B = "0x" + "b" * 40
+# Token address owned by this module only — committed by the delete tests, so it
+# must not collide with the fixtures of any other test module.
+_TOKEN_ADDR = "0x3670000000000000000000000000000000000367"
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +51,16 @@ async def _clean_tables(db_session_factory: async_sessionmaker[AsyncSession]) ->
     """Truncate relevant tables before every test."""
     async with db_session_factory() as session:
         async with session.begin():
+            # Wallet-referencing rows first — the delete tests seed some, and a
+            # failed assertion there would otherwise wedge every later test on
+            # the wallet foreign keys.
+            await session.execute(text("DELETE FROM balance_observation"))
+            await session.execute(text("DELETE FROM monitored_pair"))
             await session.execute(text("DELETE FROM wallet"))
+            await session.execute(
+                text("DELETE FROM asset WHERE token_address = :addr"),
+                {"addr": _TOKEN_ADDR},
+            )
             await session.execute(text("DELETE FROM login_attempt"))
             await session.execute(text("DELETE FROM session"))
             await session.execute(text("DELETE FROM owner"))
@@ -300,3 +312,107 @@ async def test_stop_unknown_wallet_returns_404(http_client: httpx.AsyncClient) -
         f"{_WALLETS_URL}/{uuid.uuid4()}/stop", headers={"x-csrf-token": csrf}
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /wallets/{id} tests (AUD-367)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_delete_wallet_removes_it_from_the_list(
+    http_client: httpx.AsyncClient,
+) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
+    keep_id = (
+        await _add_wallet(http_client, csrf, address=_ADDR_B, label="Keep")
+    ).json()["id"]
+
+    r = await http_client.delete(
+        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["wallet_id"] == wallet_id
+    assert body["deleted"]["wallet"] == 1
+
+    listed = await http_client.get(_WALLETS_URL)
+    assert [w["id"] for w in listed.json()["items"]] == [keep_id]
+    assert (await http_client.get(f"{_WALLETS_URL}/{wallet_id}")).status_code == 404
+
+
+@pytest.mark.integration
+async def test_delete_wallet_also_removes_its_derived_records(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Deleting an address must not leave orphaned observations behind — the
+    whole point of delete over stop is that nothing of it is left."""
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            asset_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO asset (token_address, symbol, name, decimals,"
+                        " source)"
+                        " VALUES (:addr, 'TKN', 'Token', 18, 'manual')"
+                        " RETURNING id"
+                    ),
+                    {"addr": _TOKEN_ADDR},
+                )
+            ).scalar_one()
+            await session.execute(
+                text(
+                    "INSERT INTO balance_observation (wallet_id, asset_id,"
+                    " raw_amount, block_number)"
+                    " VALUES (:wid, :aid, 1, 1)"
+                ),
+                {"wid": wallet_id, "aid": asset_id},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO monitored_pair (wallet_id, asset_id)"
+                    " VALUES (:wid, :aid)"
+                ),
+                {"wid": wallet_id, "aid": asset_id},
+            )
+
+    r = await http_client.delete(
+        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted"]["balance_observation"] == 1
+    assert r.json()["deleted"]["monitored_pair"] == 1
+
+    async with db_session_factory() as session:
+        for table in ("balance_observation", "monitored_pair"):
+            left = await session.execute(
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                {"wid": wallet_id},
+            )
+            assert left.scalar() == 0, table
+
+
+@pytest.mark.integration
+async def test_delete_unknown_wallet_returns_404(
+    http_client: httpx.AsyncClient,
+) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.delete(
+        f"{_WALLETS_URL}/{uuid.uuid4()}", headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.integration
+async def test_delete_wallet_requires_csrf(http_client: httpx.AsyncClient) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
+
+    r = await http_client.delete(f"{_WALLETS_URL}/{wallet_id}")
+    assert r.status_code == 403
+    assert (await http_client.get(f"{_WALLETS_URL}/{wallet_id}")).status_code == 200

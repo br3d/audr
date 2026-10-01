@@ -103,6 +103,121 @@ async def reactivate_wallet(
     return wallet
 
 
+async def delete_wallet(
+    session: AsyncSession,
+    *,
+    wallet_id: uuid.UUID,
+) -> dict[str, int]:
+    """Permanently delete a wallet and every record derived from it (AUD-367).
+
+    Unlike :func:`stop_wallet`, which only pauses scanning, this removes the
+    address from the application entirely: balance observations, discovery
+    coverage, monitored pairs, indexed on-chain events, the event-indexer
+    checkpoint, and the wallet's valuation lines all go.  Valuation snapshots
+    (and their history points) left without any line are removed too, so the
+    history series does not keep reporting a total that included this wallet.
+
+    Shared records that are not owned by the wallet — ``asset``, catalogue
+    entries, quote sets — are left untouched.
+
+    Returns a mapping of table name to deleted row count, for the audit trail.
+    Raises WalletNotFoundError if the wallet does not exist.
+    """
+    await _get_or_raise(session, wallet_id)
+    params: dict[str, object] = {"wid": str(wallet_id)}
+    deleted: dict[str, int] = {}
+
+    async def _delete(table: str, sql: str) -> None:
+        stmt = sa.text(sql)
+        if ":snapshot_ids" in sql:
+            # Expanding bindparam renders a literal IN (...) list, which keeps
+            # asyncpg from having to infer an array parameter type.
+            stmt = stmt.bindparams(
+                sa.bindparam("snapshot_ids", expanding=True)
+            )
+        result = await session.execute(stmt, params)
+        deleted[table] = int(result.rowcount or 0)
+
+    # Snapshots this wallet contributed to, captured before its lines go: after
+    # the delete there is no way left to tell them apart from snapshots that
+    # never included this address.
+    touched_snapshots = list(
+        (
+            await session.execute(
+                sa.text(
+                    "SELECT DISTINCT snapshot_id FROM valuation_line"
+                    " WHERE wallet_id = :wid"
+                ),
+                params,
+            )
+        ).scalars()
+    )
+    params["snapshot_ids"] = touched_snapshots
+
+    # Child of balance_observation — must go before its parent.
+    await _delete(
+        "balance_observation_invalidation",
+        "DELETE FROM balance_observation_invalidation"
+        " WHERE observation_id IN ("
+        "   SELECT id FROM balance_observation WHERE wallet_id = :wid"
+        " )",
+    )
+    await _delete(
+        "balance_observation",
+        "DELETE FROM balance_observation WHERE wallet_id = :wid",
+    )
+    await _delete(
+        "discovery_coverage",
+        "DELETE FROM discovery_coverage WHERE wallet_id = :wid",
+    )
+    await _delete(
+        "monitored_pair",
+        "DELETE FROM monitored_pair WHERE wallet_id = :wid",
+    )
+    await _delete(
+        "onchain_event",
+        "DELETE FROM onchain_event WHERE wallet_id = :wid",
+    )
+    await _delete(
+        "event_indexer_checkpoint",
+        "DELETE FROM event_indexer_checkpoint WHERE wallet_id = :wid",
+    )
+    await _delete(
+        "valuation_line",
+        "DELETE FROM valuation_line WHERE wallet_id = :wid",
+    )
+    # history_point hangs off valuation_snapshot, so clear it for the snapshots
+    # this wallet just emptied, then drop those snapshots.  Snapshots that
+    # still carry lines from other wallets are kept as they are.
+    if touched_snapshots:
+        await _delete(
+            "history_point",
+            "DELETE FROM history_point"
+            " WHERE snapshot_id IN :snapshot_ids"
+            "   AND NOT EXISTS ("
+            "     SELECT 1 FROM valuation_line vl"
+            "     WHERE vl.snapshot_id = history_point.snapshot_id"
+            "   )",
+        )
+        await _delete(
+            "valuation_snapshot",
+            "DELETE FROM valuation_snapshot"
+            " WHERE id IN :snapshot_ids"
+            "   AND NOT EXISTS ("
+            "     SELECT 1 FROM valuation_line vl"
+            "     WHERE vl.snapshot_id = valuation_snapshot.id"
+            "   )",
+        )
+    else:
+        deleted["history_point"] = 0
+        deleted["valuation_snapshot"] = 0
+    await _delete("wallet", "DELETE FROM wallet WHERE id = :wid")
+
+    await session.flush()
+    await session.commit()
+    return deleted
+
+
 async def list_wallets(session: AsyncSession) -> list[Wallet]:
     """Return all tracked wallets, ordered by creation time."""
     result = await session.execute(
