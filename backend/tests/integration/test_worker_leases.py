@@ -59,8 +59,13 @@ async def test_duplicate_claim_rejected(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.integration
-async def test_retry_budget_exhaustion_moves_to_failed(db_session: AsyncSession) -> None:
-    """A job that fails more than max_retries times is marked as failed permanently."""
+async def test_retry_budget_exhaustion_backs_off_immediately(db_session: AsyncSession) -> None:
+    """A job that fails more than max_retries times is not immediately retryable.
+
+    It is NOT blocked forever (see test_job_retry_backoff.py for AUD-356's
+    self-healing backoff) — only immediately after the streak, while the
+    exponential backoff window is still open.
+    """
     max_retries = 2
     for _ in range(max_retries + 1):
         run_id = await claim_job(
@@ -70,7 +75,7 @@ async def test_retry_budget_exhaustion_moves_to_failed(db_session: AsyncSession)
             break
         await fail_job(db_session, run_id=run_id, error="transient error")
 
-    # Final state should be failed (not retryable).
+    # Immediately afterwards: still inside the backoff window, not retryable yet.
     run_id = await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries)
     assert run_id is None
 

@@ -120,12 +120,39 @@ async def test_disabled_and_paused_schedules_block_dispatch(db_session: AsyncSes
     assert await claim_job(db_session, kind=JobKind.DISCOVERY) is None
 
 
-async def test_missing_schedule_row_means_always_due(db_session: AsyncSession) -> None:
-    """No schedule row configured → dispatch is not gated (documented default)."""
+async def test_missing_schedule_row_falls_back_to_a_conservative_interval(
+    db_session: AsyncSession,
+) -> None:
+    """No schedule row configured must not mean "always due" (AUD-356).
+
+    That was the old default, and it is what turned an empty ``schedule``
+    table into a ~2-claims/sec hot loop in production: every poll re-claimed
+    and immediately completed the job with zero cooldown. The first-ever run
+    is still allowed immediately (there is nothing to be fresher than yet);
+    subsequent polls fall back to a conservative in-code interval instead.
+    """
     await db_session.execute(
         sa.text("DELETE FROM schedule WHERE kind = :kind"),
         {"kind": JobKind.NEWS_REFRESH.value},
     )
     await db_session.flush()
 
+    run_id = await claim_job(db_session, kind=JobKind.NEWS_REFRESH)
+    assert run_id is not None, "the first-ever run with no schedule row must still be allowed"
+    await complete_job(db_session, run_id=run_id)
+    await db_session.flush()
+
+    # Immediately afterwards: no schedule row, but a very recent prior run —
+    # must not hot-loop.
+    assert await claim_job(db_session, kind=JobKind.NEWS_REFRESH) is None
+
+    # Backdate the only prior run beyond the conservative default → due again.
+    await db_session.execute(
+        sa.text(
+            "UPDATE job_run SET completed_at = now() - interval '1 hour'"
+            " WHERE kind = :kind AND status = 'completed'"
+        ),
+        {"kind": JobKind.NEWS_REFRESH.value},
+    )
+    await db_session.flush()
     assert await claim_job(db_session, kind=JobKind.NEWS_REFRESH) is not None
