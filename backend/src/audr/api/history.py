@@ -90,7 +90,7 @@ class SnapshotDetailResponse(BaseModel):
 async def get_history(
     _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
-    period: Literal["24h", "7d", "30d", "all"] = Query(default="7d"),
+    period: Literal["24h", "7d", "30d", "90d", "1y", "all"] = Query(default="7d"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=MAX_POINTS, ge=1, le=MAX_POINTS),
 ) -> HistoryResponse:

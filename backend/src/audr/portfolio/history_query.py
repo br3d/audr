@@ -34,8 +34,19 @@ _DEFAULT_PERIOD_HOURS: dict[str, int | None] = {
     "24h": 24,
     "7d": 7 * 24,
     "30d": 30 * 24,
+    "90d": 90 * 24,
+    "1y": 365 * 24,
     "all": None,
 }
+
+# 90d/1y cover windows long enough that a dense (e.g. hourly) history would
+# otherwise return thousands of raw points. When the window holds more than
+# this many points we thin to one point per time bucket; short/sparse
+# history (today's reality) stays untouched and matches 'all' exactly.
+# 24h/7d/30d/all are unthinned — the frontend already depends on their
+# point-for-point contract.
+_THIN_TARGET_POINTS = 500
+_THINNED_PERIODS = frozenset({"90d", "1y"})
 
 
 @dataclass
@@ -78,7 +89,7 @@ class SnapshotDetail:
     lines: list[SnapshotLine]
 
 
-Period = Literal["24h", "7d", "30d", "all"]
+Period = Literal["24h", "7d", "30d", "90d", "1y", "all"]
 
 
 async def query_history(
@@ -105,40 +116,88 @@ async def query_history(
     params: dict[str, object] = {"limit": limit + 1}
     since_clause = ""
     if since is not None:
-        since_clause = "AND hp.snapshotted_at >= :since"
+        since_clause = "AND snapshotted_at >= :since"
         params["since"] = since
 
     cursor_clause = ""
     if cursor is not None:
         cursor_clause = """
-            AND hp.snapshotted_at < (
+            AND snapshotted_at < (
                 SELECT snapshotted_at FROM history_point WHERE snapshot_id = :cursor
             )
         """
         params["cursor"] = str(cursor)
 
-    rows = await session.execute(
-        sa.text(
-            f"""
-            SELECT
-                hp.snapshot_id::text,
-                hp.snapshotted_at,
-                hp.total_value_usd::text,
-                hp.quality,
-                hp.included_wallet_count,
-                hp.included_asset_count,
-                hp.has_gap,
-                hp.is_canonical
-            FROM history_point hp
-            WHERE 1=1
-              {since_clause}
-              {cursor_clause}
-            ORDER BY hp.snapshotted_at DESC
-            LIMIT :limit
-            """
-        ),
-        params,
+    bucket_seconds = await _bucket_seconds(
+        session, period=period, since_clause=since_clause, params=params
     )
+
+    if bucket_seconds is None:
+        rows = await session.execute(
+            sa.text(
+                f"""
+                SELECT
+                    hp.snapshot_id::text,
+                    hp.snapshotted_at,
+                    hp.total_value_usd::text,
+                    hp.quality,
+                    hp.included_wallet_count,
+                    hp.included_asset_count,
+                    hp.has_gap,
+                    hp.is_canonical
+                FROM history_point hp
+                WHERE 1=1
+                  {since_clause}
+                  {cursor_clause}
+                ORDER BY hp.snapshotted_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
+    else:
+        # Thin to one (the most recent) point per bucket before paginating,
+        # so a dense/long history doesn't return thousands of raw points.
+        params["bucket_seconds"] = bucket_seconds
+        rows = await session.execute(
+            sa.text(
+                f"""
+                WITH candidates AS (
+                    SELECT snapshot_id, snapshotted_at, total_value_usd, quality,
+                           included_wallet_count, included_asset_count, has_gap,
+                           is_canonical
+                    FROM (
+                        SELECT hp.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY floor(
+                                       extract(epoch FROM hp.snapshotted_at) / :bucket_seconds
+                                   )
+                                   ORDER BY hp.snapshotted_at DESC
+                               ) AS _bucket_rank
+                        FROM history_point hp
+                        WHERE 1=1
+                          {since_clause}
+                    ) hp
+                    WHERE hp._bucket_rank = 1
+                )
+                SELECT
+                    snapshot_id::text,
+                    snapshotted_at,
+                    total_value_usd::text,
+                    quality,
+                    included_wallet_count,
+                    included_asset_count,
+                    has_gap,
+                    is_canonical
+                FROM candidates
+                WHERE 1=1
+                  {cursor_clause}
+                ORDER BY snapshotted_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
     raw = rows.fetchall()
 
     # Determine if a next page exists.
@@ -229,6 +288,39 @@ def _period_start(period: Period) -> datetime | None:
     if hours is None:
         return None
     return datetime.now(tz=UTC) - timedelta(hours=hours)
+
+
+async def _bucket_seconds(
+    session: AsyncSession,
+    *,
+    period: Period,
+    since_clause: str,
+    params: dict[str, object],
+) -> int | None:
+    """Return the thinning bucket size in seconds for this request.
+
+    Returns None when the period isn't subject to thinning, or when the
+    window currently holds at most _THIN_TARGET_POINTS points (nothing to
+    thin — short/sparse history is returned at full resolution).
+    """
+    if period not in _THINNED_PERIODS:
+        return None
+
+    count_params: dict[str, object] = {}
+    if "since" in params:
+        count_params["since"] = params["since"]
+    raw_count = (
+        await session.execute(
+            sa.text(f"SELECT COUNT(*) FROM history_point hp WHERE 1=1 {since_clause}"),
+            count_params,
+        )
+    ).scalar_one()
+    if raw_count <= _THIN_TARGET_POINTS:
+        return None
+
+    hours = _DEFAULT_PERIOD_HOURS[period]
+    assert hours is not None  # thinned periods always have a bounded window
+    return max(1, (hours * 3600) // _THIN_TARGET_POINTS)
 
 
 def _row_to_entry(row: object) -> HistoryEntry:
