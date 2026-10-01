@@ -17,13 +17,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
+from audr.assets.constants import is_native_eth
 from audr.auth.models import Session
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
-
-# Sentinel address used to represent native ETH in the asset table.
-_NATIVE_ETH_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 _SOURCE_TO_METADATA_SOURCE: dict[str, str] = {
     "catalog": "catalog",
@@ -84,7 +82,7 @@ class PatchAssetBody(BaseModel):
 def _row_to_asset_item(row: dict) -> AssetItemOut:
     source = str(row["source"])
     token_address = str(row["token_address"])
-    is_native = token_address == _NATIVE_ETH_ADDRESS
+    is_native = is_native_eth(token_address)
 
     kind: str
     if is_native:

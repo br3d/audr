@@ -29,6 +29,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.assets.cmc_catalog import resolve_cmc_ids
+from audr.assets.constants import NATIVE_ETH_ADDRESS
 from audr.jobs.store import JobKind, enqueue_job
 from audr.operations.status import ComponentStatus, QuoteStatus
 from audr.providers.coingecko_demo import CoinGeckoError, CoinGeckoProvider
@@ -36,8 +37,6 @@ from audr.providers.coinmarketcap_public import CoinMarketCapError, CoinMarketCa
 from audr.settings.quotes import get_coingecko_api_key
 
 logger = logging.getLogger(__name__)
-
-_ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 _PROVIDER_ERRORS = (CoinGeckoError, CoinMarketCapError)
 

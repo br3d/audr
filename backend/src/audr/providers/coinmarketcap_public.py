@@ -29,10 +29,11 @@ from typing import Any
 
 import httpx
 
+from audr.assets.constants import NATIVE_ETH_ADDRESS, is_native_eth
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://pro-api.coinmarketcap.com"
-_ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 _ETH_CMC_ID = 1027
 _TIMEOUT = 15.0
 
@@ -174,9 +175,9 @@ class CoinMarketCapProvider:
         symbol) is simply absent from the result, matching
         CoinGeckoProvider.get_prices' unknown-token contract.
         """
-        erc20 = [a.lower() for a in token_addresses if a.lower() != _ETH_NATIVE_ADDRESS]
+        erc20 = [a.lower() for a in token_addresses if not is_native_eth(a)]
         wants_eth = include_eth or any(
-            a.lower() == _ETH_NATIVE_ADDRESS for a in token_addresses
+            is_native_eth(a) for a in token_addresses
         )
 
         resolved: dict[str, int] = await self._resolver(erc20) if erc20 else {}
@@ -196,7 +197,7 @@ class CoinMarketCapProvider:
         if wants_eth:
             eth_price = prices_by_id.get(_ETH_CMC_ID)
             if eth_price is not None:
-                prices[_ETH_NATIVE_ADDRESS] = eth_price
+                prices[NATIVE_ETH_ADDRESS] = eth_price
 
         return prices
 
