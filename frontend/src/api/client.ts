@@ -647,3 +647,84 @@ export function fetchAssetNews(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   return get<AssetNewsResponse>(`/assets/${assetId}/news?${params.toString()}`)
 }
+
+// --- Events & allowances types ---
+
+export type OnchainEventType = 'transfer_in' | 'transfer_out'
+
+export interface OnchainEvent {
+  id: string
+  wallet_id: string
+  tx_hash: string
+  block_number: number
+  log_index: number
+  event_type: OnchainEventType
+  token_address: string
+  from_address: string
+  to_address: string
+  // Raw uint256 as a decimal string — never a float
+  raw_amount: string
+  indexed_at: string
+}
+
+export interface EventsResponse {
+  total: number
+  limit: number
+  offset: number
+  events: OnchainEvent[]
+}
+
+export interface Allowance {
+  wallet_id: string
+  token_address: string
+  spender_address: string
+  // Raw uint256 as a decimal string — never a float
+  raw_amount: string
+  is_unlimited: boolean
+  observed_at_block: number
+  tx_hash: string
+  indexed_at: string
+}
+
+export interface AllowancesResponse {
+  total: number
+  limit: number
+  offset: number
+  allowances: Allowance[]
+}
+
+// --- Events & allowances API ---
+
+export interface FetchEventsParams {
+  walletId?: string
+  eventType?: OnchainEventType
+  tokenAddress?: string
+  limit?: number
+  offset?: number
+}
+
+export function fetchEvents(params: FetchEventsParams = {}): Promise<EventsResponse> {
+  const q = new URLSearchParams()
+  if (params.walletId) q.set('wallet_id', params.walletId)
+  if (params.eventType) q.set('event_type', params.eventType)
+  if (params.tokenAddress) q.set('token_address', params.tokenAddress)
+  q.set('limit', String(params.limit ?? 50))
+  q.set('offset', String(params.offset ?? 0))
+  return get<EventsResponse>(`/events?${q.toString()}`)
+}
+
+export interface FetchAllowancesParams {
+  walletId?: string
+  unlimitedOnly?: boolean
+  limit?: number
+  offset?: number
+}
+
+export function fetchAllowances(params: FetchAllowancesParams = {}): Promise<AllowancesResponse> {
+  const q = new URLSearchParams()
+  if (params.walletId) q.set('wallet_id', params.walletId)
+  if (params.unlimitedOnly) q.set('unlimited_only', 'true')
+  q.set('limit', String(params.limit ?? 50))
+  q.set('offset', String(params.offset ?? 0))
+  return get<AllowancesResponse>(`/allowances?${q.toString()}`)
+}

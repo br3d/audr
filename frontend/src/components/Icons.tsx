@@ -177,6 +177,14 @@ export function IconSignOut(props: IconProps) {
   )
 }
 
+export function IconZap(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path d="M11 2 4 11h5l-1 7 7-9h-5l1-7z" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export function IconRefresh(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
