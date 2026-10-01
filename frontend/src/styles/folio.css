@@ -69,6 +69,8 @@
   --bg-hover: #edf0f7;
   --bg-input: #f8f9fc;
 
+  --sidebar-bg: #ffffff;
+
   --border: rgba(0, 0, 0, 0.07);
   --border-strong: rgba(0, 0, 0, 0.14);
 
@@ -167,7 +169,7 @@ body {
 .sidebar-logo-name {
   font-size: var(--text-md);
   font-weight: 600;
-  color: #e8eaf6;
+  color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
@@ -187,7 +189,7 @@ body {
   border-radius: var(--r-sm);
   font-size: var(--text-sm);
   font-weight: 500;
-  color: #8b8fa8;
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -200,13 +202,13 @@ body {
 
 .nav-item:hover {
   background: rgba(74, 108, 247, 0.1);
-  color: #c8cae8;
+  color: var(--text-primary);
 }
 
 .nav-item.active,
 .nav-item[aria-current="page"] {
   background: rgba(74, 108, 247, 0.18);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .nav-item-icon {
@@ -227,7 +229,7 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #4a4e65;
+  color: var(--text-muted);
   padding: 12px 10px 4px;
 }
 
