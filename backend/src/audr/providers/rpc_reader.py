@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -56,6 +57,20 @@ class MalformedResponseError(Exception):
     """Raised when the RPC result cannot be parsed as expected."""
 
 
+class _EndpointUnavailable(Exception):
+    """Internal: this endpoint is unusable right now, try the next one.
+
+    Covers the provider-level failures that are a property of the *endpoint*
+    rather than of the request: an exhausted paid plan (402), a revoked or
+    missing key (401/403), a throttle that survived our retries (429), and
+    the server-side 5xx family. A malformed request or a JSON-RPC error would
+    fail identically on every endpoint, so those are not retried elsewhere.
+    """
+
+
+_ENDPOINT_UNAVAILABLE_STATUSES = frozenset({401, 402, 403, 429})
+
+
 class RpcReader:
     """Read-only Ethereum JSON-RPC client.
 
@@ -68,11 +83,16 @@ class RpcReader:
         *,
         url: str,
         expected_chain_id: int,
+        fallback_urls: Sequence[str] = (),
         timeout: float = 10.0,
         rate_limiter: RateLimiter | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._url = url
+        # Tried in order; the reader sticks to the first endpoint that answers
+        # and only moves on when one reports itself unusable (AUD-364).
+        self._urls: list[str] = [url, *(u for u in fallback_urls if u != url)]
+        self._url_index = 0
         self._expected_chain_id = expected_chain_id
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
@@ -163,31 +183,70 @@ class RpcReader:
     async def _call_raw(self, method: str, params: list) -> Any:  # type: ignore[type-arg]
         """POST a JSON-RPC request and return the parsed ``result`` value.
 
+        Walks the endpoint list from the currently selected endpoint onwards,
+        moving on whenever one reports itself unusable (402 exhausted plan,
+        401/403 bad key, 429 that outlived our retries, 5xx, transport
+        failure) and remembering the endpoint that answered so the rest of
+        the job run goes straight there. A fresh reader starts from the
+        configured endpoint again, so a keyed provider recovers on the next
+        job run without operator action (AUD-364).
+        """
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        last_unavailable: _EndpointUnavailable | None = None
+
+        for index in range(self._url_index, len(self._urls)):
+            url = self._urls[index]
+            try:
+                result = await self._call_endpoint(url, method, payload)
+            except _EndpointUnavailable as exc:
+                last_unavailable = exc
+                remaining = len(self._urls) - index - 1
+                logger.warning(
+                    "RPC endpoint unusable (%s) — %d fallback endpoint(s) left",
+                    exc,
+                    remaining,
+                )
+                continue
+            self._url_index = index
+            return result
+
+        raise RpcError(f"all {len(self._urls)} RPC endpoint(s) unusable: {last_unavailable}")
+
+    async def _call_endpoint(
+        self,
+        url: str,
+        method: str,
+        payload: dict[str, Any],
+    ) -> Any:  # type: ignore[type-arg]
+        """Issue the request against a single endpoint.
+
         Every attempt (including retries) goes through the shared rate
         limiter first. A 429 response is retried with backoff — honoring
         ``Retry-After`` when the provider sends one — instead of failing the
-        whole call on the first throttle (AUD-362); any other HTTP/JSON-RPC
-        error still raises immediately.
+        whole call on the first throttle (AUD-362); only once those retries
+        are exhausted is the endpoint declared unusable.
         """
-        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         attempt = 0
         while True:
             if self._rate_limiter is not None:
                 await self._rate_limiter.acquire()
 
             try:
-                resp = await self._client.post(self._url, json=payload)
+                resp = await self._client.post(url, json=payload)
             except httpx.HTTPError as exc:
-                raise RpcError(f"HTTP error calling {method}") from exc
+                raise _EndpointUnavailable(f"HTTP error calling {method}") from exc
 
             if resp.status_code == 429:
                 if not self._retry_policy.is_retryable(attempt):
-                    raise RpcError(
+                    raise _EndpointUnavailable(
                         f"HTTP 429 from RPC endpoint (retries exhausted calling {method})"
                     )
                 await asyncio.sleep(_retry_after_seconds(resp, self._retry_policy, attempt))
                 attempt += 1
                 continue
+
+            if resp.status_code in _ENDPOINT_UNAVAILABLE_STATUSES or resp.status_code >= 500:
+                raise _EndpointUnavailable(f"HTTP {resp.status_code} from RPC endpoint")
 
             if resp.status_code != 200:
                 raise RpcError(f"HTTP {resp.status_code} from RPC endpoint")

@@ -36,7 +36,7 @@ from audr.portfolio.discovery import (
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.snapshot import publish_valuation_snapshot
 from audr.providers.rpc_reader import RpcReader
-from audr.providers.rpc_targets import RpcUrlError, get_validated_rpc_url
+from audr.providers.rpc_targets import RpcUrlError, get_rpc_endpoints
 from audr.wallets.service import list_wallets
 
 logger = logging.getLogger(__name__)
@@ -95,12 +95,9 @@ async def _discover_for_active_wallets(session: AsyncSession, *, run_id: uuid.UU
 async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Scan ETH and ERC-20 balances for all active wallets at the current block."""
     try:
-        rpc_url = await get_validated_rpc_url(session)
+        rpc_endpoints = await get_rpc_endpoints(session)
     except RpcUrlError:
         logger.exception("balance_scan skipped — RPC URL failed validation run_id=%s", run_id)
-        return
-    if rpc_url is None:
-        logger.warning("balance_scan skipped — no RPC integration configured run_id=%s", run_id)
         return
 
     wallets = await list_wallets(session)
@@ -124,7 +121,8 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
         monitored.setdefault(wallet_addr, []).append(token_addr)
 
     async with RpcReader(
-        url=rpc_url,
+        url=rpc_endpoints[0],
+        fallback_urls=rpc_endpoints[1:],
         expected_chain_id=_ETH_MAINNET_CHAIN_ID,
         rate_limiter=get_shared_rpc_rate_limiter(),
     ) as rpc:

@@ -13,6 +13,8 @@ import socket
 
 import pytest
 
+from audr.providers import rpc_targets
+from audr.providers.rpc_defaults import DEFAULT_PUBLIC_RPC_URLS
 from audr.providers.rpc_targets import (
     RpcUrlError,
     validate_rpc_url,
@@ -145,3 +147,56 @@ class TestAsyncWrapper:
     async def test_validate_rpc_url_async_raises_for_private_host(self) -> None:
         with pytest.raises(RpcUrlError):
             await validate_rpc_url_async("http://127.0.0.1/")
+
+
+class TestEndpointChain:
+    """get_rpc_endpoints must always offer the keyless public defaults so chain
+    reads survive a keyed provider running out of quota (AUD-364)."""
+
+    @pytest.mark.unit
+    async def test_configured_url_comes_first_then_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _configured(session: object) -> str:
+            return "https://mainnet.infura.io/v3/key"
+
+        monkeypatch.setattr(rpc_targets, "get_validated_rpc_url", _configured)
+        endpoints = await rpc_targets.get_rpc_endpoints(None)  # type: ignore[arg-type]
+        assert endpoints[0] == "https://mainnet.infura.io/v3/key"
+        assert endpoints[1:] == list(DEFAULT_PUBLIC_RPC_URLS)
+
+    @pytest.mark.unit
+    async def test_no_integration_yields_defaults_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _unconfigured(session: object) -> None:
+            return None
+
+        monkeypatch.setattr(rpc_targets, "get_validated_rpc_url", _unconfigured)
+        assert await rpc_targets.get_rpc_endpoints(None) == list(  # type: ignore[arg-type]
+            DEFAULT_PUBLIC_RPC_URLS
+        )
+
+    @pytest.mark.unit
+    async def test_configured_default_is_not_duplicated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _configured(session: object) -> str:
+            return DEFAULT_PUBLIC_RPC_URLS[1]
+
+        monkeypatch.setattr(rpc_targets, "get_validated_rpc_url", _configured)
+        endpoints = await rpc_targets.get_rpc_endpoints(None)  # type: ignore[arg-type]
+        assert endpoints[0] == DEFAULT_PUBLIC_RPC_URLS[1]
+        assert len(endpoints) == len(DEFAULT_PUBLIC_RPC_URLS)
+        assert len(set(endpoints)) == len(endpoints)
+
+    @pytest.mark.unit
+    async def test_validation_failure_is_not_papered_over(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _rebound(session: object) -> str:
+            raise RpcUrlError("resolves to a private address")
+
+        monkeypatch.setattr(rpc_targets, "get_validated_rpc_url", _rebound)
+        with pytest.raises(RpcUrlError):
+            await rpc_targets.get_rpc_endpoints(None)  # type: ignore[arg-type]

@@ -39,7 +39,7 @@ from audr.providers.rpc_reader import (
     _topic_to_address,
     decode_transfer_amount,
 )
-from audr.providers.rpc_targets import RpcUrlError, get_validated_rpc_url
+from audr.providers.rpc_targets import RpcUrlError, get_rpc_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,9 @@ _MAINNET_CHAIN_ID = 1
 async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Index ERC-20 Transfer events for all active wallets."""
     try:
-        rpc_url = await get_validated_rpc_url(session)
+        rpc_endpoints = await get_rpc_endpoints(session)
     except RpcUrlError:
         logger.exception("event_indexer skipped — RPC URL failed validation run_id=%s", run_id)
-        return
-    if rpc_url is None:
-        logger.warning("event_indexer skipped — no RPC URL configured run_id=%s", run_id)
         return
 
     token_addresses = await _get_tracked_token_addresses(session)
@@ -70,7 +67,8 @@ async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None
     max_chunks = get_settings().event_indexer_max_chunks_per_run
 
     async with RpcReader(
-        url=rpc_url,
+        url=rpc_endpoints[0],
+        fallback_urls=rpc_endpoints[1:],
         expected_chain_id=_MAINNET_CHAIN_ID,
         rate_limiter=get_shared_rpc_rate_limiter(),
     ) as reader:

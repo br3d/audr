@@ -60,6 +60,31 @@ enough data to exercise the whole product. Re-runs are harmless (the wallet
 address is unique-indexed, so a second run gets a `409` and changes nothing).
 Pass `AUDR_SEED_WALLET=skip` when you only want the RPC step.
 
+### Keyless RPC fallback (AUD-364)
+
+Configuring an RPC integration is an upgrade, not a prerequisite. The chain
+readers (`balance_scan`, `event_indexer`) always append the keyless public
+endpoints listed in `backend/src/audr/providers/rpc_defaults.py` after whatever
+is configured, and `RpcReader` moves to the next endpoint whenever one reports
+itself unusable — HTTP 402 (plan exhausted), 401/403 (bad or revoked key), 5xx,
+a transport failure, or a 429 that outlived its retries. The endpoint that
+answers is then used for the rest of that job run; a fresh run starts from the
+configured endpoint again, so a keyed provider recovers by itself once its quota
+resets.
+
+Consequences for operators:
+
+- An exhausted Infura/Alchemy plan degrades to public endpoints instead of
+  taking every chain-reading job down (the AUD-364 outage).
+- A rebound hostname is still a hard failure: if the stored URL stops passing
+  SSRF validation the job fails rather than silently falling back.
+- `validate_rpc` deliberately does **not** fall back — it probes exactly the
+  endpoint you configured, so Settings → Integrations keeps telling the truth
+  about your own key.
+- Public endpoints are shared infrastructure with their own unannounced rate
+  limits. A sustained 402 on the configured provider is worth fixing, not
+  living on.
+
 ### Subsequent starts
 
 ```bash
