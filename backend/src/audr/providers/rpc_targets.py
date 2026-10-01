@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.providers.rpc_defaults import DEFAULT_PUBLIC_RPC_URLS
 from audr.settings.integrations import get_integration
 
 _PRIVATE_RANGES = [
@@ -121,3 +122,23 @@ async def get_validated_rpc_url(session: AsyncSession) -> str | None:
     return await validate_rpc_url_async(
         integration.url, allow_private_hosts=integration.allow_private_host
     )
+
+
+async def get_rpc_endpoints(session: AsyncSession) -> list[str]:
+    """Return the ordered RPC endpoints a job should try: the configured one
+    first, then the keyless public defaults (AUD-364).
+
+    The defaults are always appended, so a keyed provider that runs out of
+    quota (HTTP 402) or has its key revoked degrades to public endpoints
+    instead of taking every chain-reading job down with it. With no
+    integration configured at all the defaults alone are returned, which is
+    what makes a fresh install work with zero configuration.
+
+    Raises RpcUrlError if a configured URL no longer passes validation — a
+    rebound hostname is a security signal, not something to silently paper
+    over with a fallback.
+    """
+    configured = await get_validated_rpc_url(session)
+    if configured is None:
+        return list(DEFAULT_PUBLIC_RPC_URLS)
+    return [configured, *(u for u in DEFAULT_PUBLIC_RPC_URLS if u != configured)]
