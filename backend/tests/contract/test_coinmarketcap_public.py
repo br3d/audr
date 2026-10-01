@@ -9,16 +9,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import respx
 from httpx import Response
 
+from audr.jobs.policy import RetryPolicy
 from audr.providers.coinmarketcap_public import (
     CoinMarketCapError,
     CoinMarketCapProvider,
     RateLimitError,
 )
+
+_FAST_RETRY_POLICY = RetryPolicy(base_delay_s=0.0, max_delay_s=0.0, jitter=False)
 
 _BASE = "https://pro-api.coinmarketcap.com"
 _ETH_ADDR = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -221,7 +225,7 @@ async def test_context_manager_closes_client() -> None:
 
 
 @pytest.mark.contract
-async def test_get_prices_by_ids_chunks_at_fifty_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_prices_by_ids_chunks_at_fifty_ids() -> None:
     """More than 50 ids are split across requests (AUD-359).
 
     The keyless endpoint answers any `ids` list longer than 50 with HTTP 400
@@ -230,9 +234,6 @@ async def test_get_prices_by_ids_chunks_at_fifty_ids(monkeypatch: pytest.MonkeyP
     chunk must therefore carry at most 50 ids, and prices from every chunk must
     be merged into one result.
     """
-    monkeypatch.setattr(
-        "audr.providers.coinmarketcap_public._INTER_BATCH_DELAY_S", 0, raising=True
-    )
     requested_ids: list[list[str]] = []
     all_ids = list(range(1, 121))  # 120 ids -> 3 chunks of 50/50/20
 
@@ -266,13 +267,62 @@ def _simple_price_response_for(ids: list[str]) -> Response:
 
 
 @pytest.mark.contract
-async def test_get_prices_by_ids_retries_once_on_rate_limit(
+async def test_get_prices_by_ids_retries_on_rate_limit_with_backoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A chunk that trips the anonymous rate limit is retried once, then succeeds."""
+    """A chunk that trips the anonymous rate limit is retried with exponential
+    backoff + jitter (AUD-370), not just once, until it succeeds or the retry
+    policy is exhausted."""
+    delays: list[float] = []
     monkeypatch.setattr(
-        "audr.providers.coinmarketcap_public._RATE_LIMIT_RETRY_DELAY_S", 0, raising=True
+        "audr.providers.coinmarketcap_public.asyncio.sleep",
+        AsyncMock(side_effect=lambda d: delays.append(d)),
     )
+    attempts = {"n": 0}
+
+    def _respond(request: Any) -> Response:
+        attempts["n"] += 1
+        if attempts["n"] <= 2:
+            return Response(429, json={"status": {"error_code": "1008"}})
+        return Response(200, json=_simple_price_response([(1027, 2690.18)]))
+
+    policy = RetryPolicy(base_delay_s=1.0, max_delay_s=60.0, jitter=False)
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(side_effect=_respond)
+        async with CoinMarketCapProvider(
+            resolver=_resolver_for({}), retry_policy=policy
+        ) as provider:
+            prices = await provider.get_prices_by_ids([1027])
+
+    assert attempts["n"] == 3
+    assert delays == [1.0, 2.0]  # exponential backoff between retries
+    assert prices[1027] == Decimal("2690.18")
+
+
+@pytest.mark.contract
+async def test_get_prices_by_ids_raises_if_rate_limit_persists() -> None:
+    """429s that outlast the retry policy propagate, leaving pacing to the
+    worker's own retry backoff."""
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(
+            return_value=Response(429, json={"status": {"error_code": "1008"}})
+        )
+        async with CoinMarketCapProvider(
+            resolver=_resolver_for({}), retry_policy=_FAST_RETRY_POLICY
+        ) as provider:
+            with pytest.raises(RateLimitError):
+                await provider.get_prices_by_ids([1027])
+
+
+@pytest.mark.contract
+async def test_get_prices_acquires_rate_limiter_before_each_request() -> None:
+    """Every HTTP attempt, including retries, draws from the injected rate limiter."""
+    acquire_calls = {"n": 0}
+
+    class _FakeLimiter:
+        async def acquire(self) -> None:
+            acquire_calls["n"] += 1
+
     attempts = {"n": 0}
 
     def _respond(request: Any) -> Response:
@@ -283,25 +333,11 @@ async def test_get_prices_by_ids_retries_once_on_rate_limit(
 
     with respx.mock() as mock:
         mock.get(f"{_BASE}/public-api/v1/simple/price").mock(side_effect=_respond)
-        async with CoinMarketCapProvider(resolver=_resolver_for({})) as provider:
-            prices = await provider.get_prices_by_ids([1027])
+        async with CoinMarketCapProvider(
+            resolver=_resolver_for({}),
+            rate_limiter=_FakeLimiter(),
+            retry_policy=_FAST_RETRY_POLICY,
+        ) as provider:
+            await provider.get_prices_by_ids([1027])
 
-    assert attempts["n"] == 2
-    assert prices[1027] == Decimal("2690.18")
-
-
-@pytest.mark.contract
-async def test_get_prices_by_ids_raises_if_rate_limit_persists(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Two consecutive 429s propagate, leaving pacing to the worker's backoff."""
-    monkeypatch.setattr(
-        "audr.providers.coinmarketcap_public._RATE_LIMIT_RETRY_DELAY_S", 0, raising=True
-    )
-    with respx.mock() as mock:
-        mock.get(f"{_BASE}/public-api/v1/simple/price").mock(
-            return_value=Response(429, json={"status": {"error_code": "1008"}})
-        )
-        async with CoinMarketCapProvider(resolver=_resolver_for({})) as provider:
-            with pytest.raises(RateLimitError):
-                await provider.get_prices_by_ids([1027])
+    assert acquire_calls["n"] == 2

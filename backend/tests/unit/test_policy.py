@@ -6,7 +6,12 @@ import time
 
 import pytest
 
-from audr.jobs.policy import RateLimiter, RetryPolicy, get_shared_rpc_rate_limiter
+from audr.jobs.policy import (
+    RateLimiter,
+    RetryPolicy,
+    get_shared_cmc_rate_limiter,
+    get_shared_rpc_rate_limiter,
+)
 
 
 @pytest.mark.unit
@@ -83,3 +88,50 @@ class TestSharedRpcRateLimiter:
         finally:
             get_settings.cache_clear()
             get_shared_rpc_rate_limiter.cache_clear()
+
+
+@pytest.mark.unit
+class TestSharedCmcRateLimiter:
+    def test_returns_same_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        get_shared_cmc_rate_limiter.cache_clear()
+        try:
+            first = get_shared_cmc_rate_limiter()
+            second = get_shared_cmc_rate_limiter()
+            assert first is second
+        finally:
+            get_shared_cmc_rate_limiter.cache_clear()
+
+    def test_configured_from_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        monkeypatch.setenv("CMC_RATE_LIMIT_PER_SECOND", "0.25")
+        monkeypatch.setenv("CMC_RATE_LIMIT_BURST", "1")
+        from audr.config import get_settings
+
+        get_settings.cache_clear()
+        get_shared_cmc_rate_limiter.cache_clear()
+        try:
+            limiter = get_shared_cmc_rate_limiter()
+            assert limiter._interval == pytest.approx(4.0)
+            assert limiter._burst == 1
+        finally:
+            get_settings.cache_clear()
+            get_shared_cmc_rate_limiter.cache_clear()
+
+    def test_defaults_are_conservative(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default budget is far tighter than the RPC default (AUD-370)."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        from audr.config import get_settings
+
+        get_settings.cache_clear()
+        get_shared_cmc_rate_limiter.cache_clear()
+        try:
+            limiter = get_shared_cmc_rate_limiter()
+            assert limiter._interval == pytest.approx(2.0)  # 0.5 calls/s
+            assert limiter._burst == 1
+        finally:
+            get_settings.cache_clear()
+            get_shared_cmc_rate_limiter.cache_clear()

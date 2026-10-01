@@ -92,3 +92,25 @@ def test_rpc_rate_limit_overridable_from_env(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.rpc_rate_limit_per_second == 3.5
     assert settings.rpc_rate_limit_burst == 2
     assert settings.event_indexer_max_chunks_per_run == 7
+
+
+@pytest.mark.unit
+def test_cmc_rate_limit_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.delenv("CMC_RATE_LIMIT_PER_SECOND", raising=False)
+    monkeypatch.delenv("CMC_RATE_LIMIT_BURST", raising=False)
+    settings = Settings()
+    assert settings.cmc_rate_limit_per_second == 0.5
+    assert settings.cmc_rate_limit_burst == 1
+
+
+@pytest.mark.unit
+def test_cmc_rate_limit_overridable_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.setenv("CMC_RATE_LIMIT_PER_SECOND", "0.2")
+    monkeypatch.setenv("CMC_RATE_LIMIT_BURST", "2")
+    settings = Settings()
+    assert settings.cmc_rate_limit_per_second == 0.2
+    assert settings.cmc_rate_limit_burst == 2
