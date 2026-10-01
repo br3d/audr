@@ -54,6 +54,12 @@ hostname, never the full URL. When no URL is available the step is skipped with
 a note and the rest of the seed still succeeds — the URL can then be entered
 manually in Settings → Integrations. Ask infraLead for the shared value.
 
+Seeding is unconditional: every run registers the demo Buterin wallet and
+configures the RPC integration, because the script exists to give an instance
+enough data to exercise the whole product. Re-runs are harmless (the wallet
+address is unique-indexed, so a second run gets a `409` and changes nothing).
+Pass `AUDR_SEED_WALLET=skip` when you only want the RPC step.
+
 ### Subsequent starts
 
 ```bash
