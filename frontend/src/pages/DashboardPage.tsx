@@ -1,11 +1,22 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { fetchPortfolio, fetchHistory, ApiError } from '../api/client'
-import type { PortfolioQuality } from '../api/client'
+import type { HistoryPeriod, PortfolioQuality } from '../api/client'
 import MoneyValue from '../components/MoneyValue'
 import AllocationTable from '../components/AllocationTable'
 import AllocationChart from '../components/AllocationChart'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
+
+// Folio's reference design shows four range segments (day/month/3 months/year),
+// but the history API only serves these periods today — 3-month and 1-year
+// windows need backend support (tracked separately) before they can be added.
+const RANGE_OPTIONS: { value: HistoryPeriod; label: string }[] = [
+  { value: '24h', label: '1D' },
+  { value: '7d', label: '1W' },
+  { value: '30d', label: '1M' },
+  { value: 'all', label: 'All' },
+]
 
 function QualityNotices({ quality }: { quality: PortfolioQuality }) {
   const notices: string[] = []
@@ -40,10 +51,13 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   })
 
+  const [historyPeriod, setHistoryPeriod] = useState<HistoryPeriod>('30d')
+
   const historyQuery = useQuery({
-    queryKey: ['history', '30d' as const],
-    queryFn: () => fetchHistory('30d'),
+    queryKey: ['history', historyPeriod],
+    queryFn: () => fetchHistory(historyPeriod),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   })
 
   if (isLoading) {
@@ -133,16 +147,29 @@ export default function DashboardPage() {
         </p>
       )}
 
-      {/* Portfolio value history (30d) */}
+      {/* Portfolio value history */}
       {!historyQuery.isLoading &&
         !historyQuery.isError &&
         historyQuery.data &&
         historyQuery.data.entries.length > 0 && (
           <section aria-label="Portfolio value history" className="card mb-20">
             <div className="card-header">
-              <div className="card-title">Portfolio Value — 30 days</div>
+              <div className="card-title card-title-chart">Portfolio value</div>
+              <div className="range-switcher" role="group" aria-label="History range">
+                {RANGE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="range-switcher-btn"
+                    aria-pressed={historyPeriod === opt.value}
+                    onClick={() => setHistoryPeriod(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <HistoryChart points={historyQuery.data.entries} />
+            <HistoryChart points={historyQuery.data.entries} period={historyPeriod} />
           </section>
         )}
 
