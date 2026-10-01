@@ -378,6 +378,32 @@ async def test_has_gap_true_for_partial_quality_snapshot(
     assert result.has_gap is True
 
 
+async def test_gaps_quality_snapshot_materializes_history_point(
+    db_session: AsyncSession,
+) -> None:
+    """A 'gaps' snapshot (AUD-361: provider-confirmed-unpriceable holdings)
+    materializes into history_point instead of violating the quality check
+    constraint — regression test for the 0012 migration."""
+    wallet_id = await _insert_wallet(db_session, "0x5555000000000000000000000000000000000021")
+    asset_id = await _insert_asset(db_session, token_address="0x6666000000000000000000000000000000000022")
+    obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
+
+    sid = await _insert_snapshot(db_session, quality="gaps")
+    await _insert_valuation_line(
+        db_session,
+        snapshot_id=sid,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        observation_id=obs_id,
+        price_usd=None,
+        value_usd=None,
+    )
+
+    result = await materialize_history_point(db_session, snapshot_id=sid)
+    assert result.quality == "gaps"
+    assert result.has_gap is True
+
+
 async def test_has_gap_false_for_complete_quality_snapshot(
     db_session: AsyncSession,
 ) -> None:
