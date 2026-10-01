@@ -35,10 +35,20 @@ class WorkerStatus:
 
 
 @dataclass
+class CatalogStatus:
+    # DEGRADED means no catalog_version row has entries yet — ERC-20 discovery
+    # finds zero candidates even though the worker is otherwise healthy
+    # (AUD-357: a prior silent catalog-import failure left this invisible).
+    entry_count: int = 0
+    status: ComponentStatus = ComponentStatus.UNKNOWN
+
+
+@dataclass
 class SystemStatus:
     migration: MigrationStatus = field(default_factory=MigrationStatus)
     key: KeyStatus = field(default_factory=KeyStatus)
     worker: WorkerStatus = field(default_factory=WorkerStatus)
+    catalog: CatalogStatus = field(default_factory=CatalogStatus)
 
     @property
     def healthy(self) -> bool:

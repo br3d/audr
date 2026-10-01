@@ -198,18 +198,24 @@ async def _record_worker_status(
 
 
 async def _bootstrap_catalog(factory: async_sessionmaker[AsyncSession]) -> None:
-    """Import the pinned token catalog at startup (idempotent). Errors are non-fatal."""
+    """Import the vendored token catalog at startup (idempotent).
+
+    Not fatal to the worker process, but a failure here means ERC-20 discovery
+    will find zero candidates — that degradation must stay visible via
+    GET /health/ready and GET /api/v1/status (audr.operations.status),
+    not just this log line (AUD-357).
+    """
     try:
         async with factory() as session:
             version = await import_catalog(session)
             await session.commit()
             logger.info(
-                "catalog bootstrap commit=%s entries=%d",
-                version.commit_hash[:12],
+                "catalog bootstrap version=%s entries=%d",
+                version.commit_hash,
                 version.entry_count,
             )
     except Exception:
-        logger.warning(
+        logger.error(
             "catalog bootstrap failed — discovery will run without catalog candidates",
             exc_info=True,
         )

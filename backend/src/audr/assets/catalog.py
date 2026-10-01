@@ -1,64 +1,69 @@
 """Catalog import and upgrade service (T034 / T035 / US1).
 
-The catalog is a pinned commit of the Uniswap token list (EIP-1616 format).
-Only Ethereum mainnet tokens (chainId=1) are imported.
+The catalog is a vendored snapshot of the Uniswap default token list
+(Ethereum mainnet, chainId=1), committed into this repository rather than
+fetched from GitHub at worker startup. A self-hosted product must not depend
+on the availability of a specific upstream Git commit every time the worker
+boots (AUD-357): the previously pinned commit stopped resolving and silently
+left discovery with zero candidates.
 
-Pinned commit:
+Vendored source:
   Repository: https://github.com/Uniswap/default-token-list
-  Commit:     ba9f85db4bc18c8f69ce72b2327c5cdfe8a02e53
   File:       src/tokens/mainnet.json
+  Snapshot:   backend/src/audr/assets/data/uniswap_mainnet_tokenlist.json
 """
 
 from __future__ import annotations
 
+import hashlib
+import importlib.resources
+import json
 import uuid
+from pathlib import Path
 from typing import Any
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.assets.models import CatalogEntry, CatalogVersion
+from audr.operations.status import CatalogStatus, ComponentStatus
 
-# Pinned Ethereum-only catalog (reviewed 2026-09-27)
-PINNED_COMMIT = "ba9f85db4bc18c8f69ce72b2327c5cdfe8a02e53"
 CATALOG_CHAIN_ID = 1  # Ethereum mainnet only
 
-_CATALOG_URL = (
-    "https://raw.githubusercontent.com/Uniswap/default-token-list"
-    f"/{PINNED_COMMIT}/src/tokens/mainnet.json"
+_VENDORED_CATALOG_PATH = (
+    importlib.resources.files("audr.assets") / "data" / "uniswap_mainnet_tokenlist.json"
 )
 
 
 class CatalogImportError(Exception):
-    """Raised when the catalog cannot be fetched or parsed."""
+    """Raised when the catalog cannot be read or parsed."""
 
 
 async def import_catalog(
     session: AsyncSession,
     *,
-    url: str = _CATALOG_URL,
-    commit_hash: str = PINNED_COMMIT,
+    path: Path | Any = _VENDORED_CATALOG_PATH,
     chain_id: int = CATALOG_CHAIN_ID,
-    http_client: httpx.AsyncClient | None = None,
 ) -> CatalogVersion:
-    """Fetch and import a token catalog into catalog_version + catalog_entry tables.
+    """Import the vendored token catalog into catalog_version + catalog_entry.
 
-    Idempotent: if *commit_hash* is already imported, returns the existing version.
+    Idempotent: if this catalog snapshot (identified by a content hash of
+    *path*) is already imported, returns the existing version without
+    re-reading entries.
     """
     from sqlalchemy import select
 
+    entries, version_id = _load_entries(path, chain_id=chain_id)
+
     existing = await session.execute(
-        select(CatalogVersion).where(CatalogVersion.commit_hash == commit_hash)
+        select(CatalogVersion).where(CatalogVersion.commit_hash == version_id)
     )
     row = existing.scalar_one_or_none()
     if row is not None:
         return row
 
-    entries = await _fetch_entries(url, chain_id=chain_id, client=http_client)
-
     version = CatalogVersion(
         id=uuid.uuid4(),
-        commit_hash=commit_hash,
+        commit_hash=version_id,
         chain_id=chain_id,
         entry_count=len(entries),
     )
@@ -92,6 +97,19 @@ async def get_latest_catalog_version(
     return result.scalar_one_or_none()
 
 
+async def get_catalog_status(session: AsyncSession) -> CatalogStatus:
+    """Report whether a usable catalog has ever been imported (AUD-357).
+
+    DEGRADED (zero entries) means ERC-20 discovery cannot find any
+    candidates — this must stay visible on /health/ready and /api/v1/status
+    rather than only appearing as a worker-log WARNING.
+    """
+    version = await get_latest_catalog_version(session)
+    entry_count = version.entry_count if version is not None else 0
+    status = ComponentStatus.OK if entry_count > 0 else ComponentStatus.DEGRADED
+    return CatalogStatus(entry_count=entry_count, status=status)
+
+
 async def list_catalog_entries(
     session: AsyncSession,
     *,
@@ -106,29 +124,21 @@ async def list_catalog_entries(
     return list(result.scalars())
 
 
-async def _fetch_entries(
-    url: str,
-    *,
-    chain_id: int,
-    client: httpx.AsyncClient | None,
-) -> list[dict[str, Any]]:
-    """Fetch token list JSON from *url* and filter to *chain_id*."""
-    owned = client is None
-    if owned:
-        client = httpx.AsyncClient(follow_redirects=False, timeout=30.0)
+def _load_entries(path: Path | Any, *, chain_id: int) -> tuple[list[dict[str, Any]], str]:
+    """Read and parse the catalog JSON file at *path*.
+
+    Returns the chain-filtered token entries plus an opaque content-hash
+    version id used for idempotency (stored in catalog_version.commit_hash).
+    """
     try:
-        response = await client.get(url)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise CatalogImportError(f"Failed to fetch catalog from {url}: {exc}") from exc
-    finally:
-        if owned:
-            await client.aclose()
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise CatalogImportError(f"Failed to read catalog file {path}: {exc}") from exc
 
     try:
-        data = response.json()
+        data = json.loads(raw)
     except Exception as exc:
-        raise CatalogImportError("Catalog response is not valid JSON") from exc
+        raise CatalogImportError("Catalog file is not valid JSON") from exc
 
     # Support both array format and EIP-1616 object format {"tokens": [...]}
     if isinstance(data, list):
@@ -138,4 +148,6 @@ async def _fetch_entries(
     else:
         raise CatalogImportError("Unrecognised catalog format")
 
-    return [t for t in tokens if t.get("chainId") == chain_id]
+    entries = [t for t in tokens if t.get("chainId") == chain_id]
+    version_id = f"vendored:{hashlib.sha256(raw).hexdigest()[:16]}"
+    return entries, version_id
