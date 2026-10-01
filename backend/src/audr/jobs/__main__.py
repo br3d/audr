@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.assets.catalog import import_catalog
 from audr.assets.cmc_catalog import import_cmc_map
+from audr.assets.constants import NATIVE_ETH_ADDRESS
 from audr.db import _get_session_factory
 from audr.jobs.canonicality import recheck_canonicality
 from audr.operations.cleanup import cleanup_expired_auth_rows
@@ -41,8 +42,6 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 5.0
 _ETH_MAINNET_CHAIN_ID = 1
-# Conventional placeholder address for native ETH balance observations.
-_ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 
 async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
@@ -135,7 +134,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                 await record_balance(
                     session,
                     wallet_address=addr,
-                    token_address=_ETH_NATIVE_ADDRESS,
+                    token_address=NATIVE_ETH_ADDRESS,
                     raw_amount=eth_balance,
                     block_number=block_number,
                 )

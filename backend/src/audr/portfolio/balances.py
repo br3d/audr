@@ -19,6 +19,15 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.assets.constants import (
+    NATIVE_ETH_ADDRESS,
+    NATIVE_ETH_DECIMALS,
+    NATIVE_ETH_NAME,
+    NATIVE_ETH_SOURCE,
+    NATIVE_ETH_SYMBOL,
+    is_native_eth,
+    normalise_token_address,
+)
 from audr.assets.models import Asset
 from audr.wallets.models import Wallet
 
@@ -139,21 +148,40 @@ async def _ensure_wallet(session: AsyncSession, address: str) -> uuid.UUID:
 
 
 async def _ensure_asset(session: AsyncSession, token_address: str) -> uuid.UUID:
-    """Return the asset ID for *token_address*, inserting a placeholder if absent."""
+    """Return the asset ID for *token_address*, inserting a row if absent.
+
+    Native ETH is created with its real identity rather than an ``UNKNOWN``
+    placeholder (AUD-360) — minting a placeholder for the native sentinel is a
+    silent failure that surfaces to the user as an unnamed top holding.
+    """
+    native = is_native_eth(token_address)
+    canonical = normalise_token_address(token_address) if native else token_address
+
     result = await session.execute(
-        sa.select(Asset.id).where(Asset.token_address == token_address)
+        sa.select(Asset.id).where(Asset.token_address == canonical)
     )
     row = result.first()
     if row is not None:
         return uuid.UUID(str(row[0]))
-    asset = Asset(
-        id=uuid.uuid4(),
-        token_address=token_address,
-        symbol="UNKNOWN",
-        name="Unknown Token",
-        decimals=18,
-        source="manual",
-    )
+
+    if native:
+        asset = Asset(
+            id=uuid.uuid4(),
+            token_address=NATIVE_ETH_ADDRESS,
+            symbol=NATIVE_ETH_SYMBOL,
+            name=NATIVE_ETH_NAME,
+            decimals=NATIVE_ETH_DECIMALS,
+            source=NATIVE_ETH_SOURCE,
+        )
+    else:
+        asset = Asset(
+            id=uuid.uuid4(),
+            token_address=canonical,
+            symbol="UNKNOWN",
+            name="Unknown Token",
+            decimals=18,
+            source="manual",
+        )
     session.add(asset)
     await session.flush()
     return asset.id

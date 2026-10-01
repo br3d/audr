@@ -17,13 +17,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_session
+from audr.assets.constants import is_native_eth
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
 
 router = APIRouter(prefix="/api/v1")
-
-_NATIVE_ETH_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 _SOURCE_TO_METADATA_SOURCE: dict[str, str] = {
     "catalog": "catalog",
@@ -216,7 +215,7 @@ async def get_portfolio(
 
     for line in lines:
         token_address = str(line["token_address"])
-        is_native = token_address == _NATIVE_ETH_ADDRESS
+        is_native = is_native_eth(token_address)
         source = str(line["source"])
         metadata_source = _SOURCE_TO_METADATA_SOURCE.get(source, "owner")
 

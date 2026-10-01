@@ -21,10 +21,11 @@ from typing import Any
 
 import httpx
 
+from audr.assets.constants import NATIVE_ETH_ADDRESS, is_native_eth
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.coingecko.com/api/v3"
-_ETH_NATIVE_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 _ETH_COIN_ID = "ethereum"
 _PLATFORM_ID = "ethereum"
 _TIMEOUT = 15.0
@@ -150,9 +151,9 @@ class CoinGeckoProvider:
         """
         prices: dict[str, Decimal] = {}
 
-        erc20 = [a for a in token_addresses if a.lower() != _ETH_NATIVE_ADDRESS]
+        erc20 = [a for a in token_addresses if not is_native_eth(a)]
         wants_eth = include_eth or any(
-            a.lower() == _ETH_NATIVE_ADDRESS for a in token_addresses
+            is_native_eth(a) for a in token_addresses
         )
 
         if erc20:
@@ -161,7 +162,7 @@ class CoinGeckoProvider:
 
         if wants_eth:
             eth_price = await self.get_eth_price()
-            prices[_ETH_NATIVE_ADDRESS] = eth_price
+            prices[NATIVE_ETH_ADDRESS] = eth_price
 
         return prices
 
