@@ -37,7 +37,10 @@ BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost}}"
 API="${BASE_URL}/api/v1"
 PASSWORD="Rand0mP@ssw0rd"
 BUTERIN_ADDRESS="0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
-BUTERIN_LABEL="Buterin"
+# Labelled "(demo seed)" so it is never mistaken for an address the operator
+# added themselves — the two indistinguishable "Buterin" rows are what opened
+# AUD-350.
+BUTERIN_LABEL="Buterin (demo seed)"
 COOKIE_JAR="$(mktemp)"
 trap 'rm -f "${COOKIE_JAR}"' EXIT
 
