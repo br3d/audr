@@ -29,13 +29,17 @@ async def _insert_asset(
     symbol: str = "TKN",
     decimals: int = 18,
     excluded: bool = False,
+    price_unavailable: bool = False,
 ) -> uuid.UUID:
     asset_id = uuid.uuid4()
     await session.execute(
         sa.text(
             """
-            INSERT INTO asset (id, token_address, symbol, name, decimals, source, excluded)
-            VALUES (:id, :addr, :sym, :name, :dec, 'manual', :excluded)
+            INSERT INTO asset
+              (id, token_address, symbol, name, decimals, source, excluded, price_unavailable_since)
+            VALUES
+              (:id, :addr, :sym, :name, :dec, 'manual', :excluded,
+               CASE WHEN :unavailable THEN now() ELSE NULL END)
             """
         ),
         {
@@ -45,6 +49,7 @@ async def _insert_asset(
             "name": symbol,
             "dec": decimals,
             "excluded": excluded,
+            "unavailable": price_unavailable,
         },
     )
     return asset_id
@@ -187,6 +192,48 @@ class TestComputeQuality:
         assert quality == "stale"
         assert priced == 0
 
+    def test_unpriced_but_provider_confirmed_unavailable_is_gaps(self) -> None:
+        """A holding the provider confirmed it doesn't know is 'gaps', not 'partial' (AUD-361).
+
+        'gaps' means total_usd is still reachable from what *is* priced — the
+        dust/exotic-token scenario from AUD-361 where 4 of 88 holdings will
+        never resolve against the keyless CoinMarketCap map.
+        """
+        from audr.portfolio.snapshot import HoldingRow
+
+        aid1 = uuid.uuid4()
+        aid2 = uuid.uuid4()
+        priced_holding = HoldingRow(uuid.uuid4(), aid1, uuid.uuid4(), "0x" + "a" * 40, 1, 1, 18)
+        unavailable_holding = HoldingRow(
+            uuid.uuid4(), aid2, uuid.uuid4(), "0x" + "b" * 40, 1, 1, 18, price_unavailable=True
+        )
+        quality, priced = _compute_quality(
+            [priced_holding, unavailable_holding], {aid1: Decimal("1")}
+        )
+        assert quality == "gaps"
+        assert priced == 1
+
+    def test_unavailable_and_never_asked_mix_is_partial(self) -> None:
+        """A genuinely-never-asked holding keeps the snapshot 'partial', even
+        alongside a confirmed-unavailable one — it could still resolve on the
+        next refresh, so the total must stay blocked.
+        """
+        from audr.portfolio.snapshot import HoldingRow
+
+        aid1 = uuid.uuid4()
+        aid2 = uuid.uuid4()
+        aid3 = uuid.uuid4()
+        priced_holding = HoldingRow(uuid.uuid4(), aid1, uuid.uuid4(), "0x" + "a" * 40, 1, 1, 18)
+        unavailable_holding = HoldingRow(
+            uuid.uuid4(), aid2, uuid.uuid4(), "0x" + "b" * 40, 1, 1, 18, price_unavailable=True
+        )
+        never_asked_holding = HoldingRow(uuid.uuid4(), aid3, uuid.uuid4(), "0x" + "c" * 40, 1, 1, 18)
+        quality, priced = _compute_quality(
+            [priced_holding, unavailable_holding, never_asked_holding], {aid1: Decimal("1")}
+        )
+        assert quality == "partial"
+        assert priced == 1
+
 
 # ---------------------------------------------------------------------------
 # Snapshot publishing DB integration tests
@@ -262,6 +309,49 @@ async def test_publish_snapshot_unknown_price_is_null(db_session: AsyncSession) 
     assert row is not None
     assert row[0] is None  # price_usd is NULL
     assert row[1] is None  # value_usd is NULL
+
+
+@pytest.mark.integration
+async def test_publish_snapshot_provider_confirmed_gap_is_quality_gaps(
+    db_session: AsyncSession,
+) -> None:
+    """A holding whose asset is flagged price_unavailable_since yields 'gaps' (AUD-361).
+
+    This is the exact AUD-361 scenario: a dust/exotic holding the keyless
+    CoinMarketCap map will never resolve must not keep the whole portfolio
+    total unreachable — its line still gets a NULL price (unknown ≠ zero),
+    but the snapshot quality distinguishes it from a holding that was simply
+    never asked about.
+    """
+    wallet_id = await _insert_wallet(db_session, "0x" + "f" * 40)
+    priced_id = await _insert_asset(db_session, token_address="0x" + "1a" * 20, decimals=18)
+    dust_id = await _insert_asset(
+        db_session,
+        token_address="0x" + "1b" * 20,
+        decimals=18,
+        price_unavailable=True,
+    )
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=priced_id, raw_amount=10**18)
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=dust_id, raw_amount=10**18)
+    await _insert_quote_set(db_session, asset_id=priced_id, price_usd=Decimal("100"))
+    await db_session.flush()
+
+    result = await publish_valuation_snapshot(db_session)
+
+    assert result.quality == "gaps"
+    assert result.priced_count == 1
+
+    dust_line = await db_session.execute(
+        sa.text(
+            "SELECT price_usd, value_usd FROM valuation_line"
+            " WHERE snapshot_id = :snap AND asset_id = :asset"
+        ),
+        {"snap": str(result.snapshot_id), "asset": str(dust_id)},
+    )
+    row = dust_line.first()
+    assert row is not None
+    assert row[0] is None  # unknown ≠ zero even when quality is 'gaps'
+    assert row[1] is None
 
 
 @pytest.mark.integration

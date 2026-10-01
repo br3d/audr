@@ -7,7 +7,7 @@ and inserts a history_point row.
 Rules:
 - Excluded assets do not appear in valuation_lines and are not counted.
 - total_value_usd is the sum of non-null value_usd lines (NULL lines are unknown).
-- has_gap is true when quality is 'stale' or 'partial' (some values are unknown).
+- has_gap is true when quality is 'stale', 'partial', or 'gaps' (some values are unknown).
 - is_canonical is always true on first write; the canonicality job clears it later.
 - Idempotent: a second call for the same snapshot_id returns the existing row ID.
 """
@@ -95,7 +95,7 @@ async def materialize_history_point(
             v = Decimal(str(line["value_usd"]))
             total_value_usd = (total_value_usd or Decimal(0)) + v
 
-    has_gap = quality in ("stale", "partial", "unknown")
+    has_gap = quality in ("stale", "partial", "gaps", "unknown")
     point_id = uuid.uuid4()
 
     await session.execute(

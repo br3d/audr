@@ -78,6 +78,7 @@ class PortfolioResponseOut(BaseModel):
     currency: str
     priced_subtotal_usd: str | None
     total_usd: str | None
+    unpriced_asset_count: int
     quality: PortfolioQualityOut
     balance_block: int | None
     balance_block_time: str | None
@@ -95,12 +96,23 @@ class PortfolioResponseOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _map_quality(quality_str: str) -> PortfolioQualityOut:
-    """Map the snapshot quality string to the contract quality object."""
+def _map_quality(quality_str: str, *, total_is_null: bool) -> PortfolioQualityOut:
+    """Map the snapshot quality string to the contract quality object.
+
+    ``incomplete`` tracks whether ``total_usd`` is actually reachable, not
+    raw holding coverage (AUD-361): a "gaps" snapshot (every unpriced holding
+    is one the provider confirmed it doesn't know, none are genuinely
+    unknown) still yields a real total, so it is not reported as incomplete —
+    only "partial"/"stale"/"unknown" snapshots, where total_usd really is
+    null, are. ``stale_prices`` is true only for "stale" (zero holdings
+    priced at all); coverage gaps are not price staleness, so a successful
+    quote_refresh that leaves confirmed-unpriceable dust behind still reports
+    fresh prices.
+    """
     return PortfolioQualityOut(
-        incomplete=quality_str in ("partial", "unknown"),
+        incomplete=total_is_null,
         stale_balances=quality_str == "stale",
-        stale_prices=quality_str in ("stale", "partial"),
+        stale_prices=quality_str == "stale",
         mixed_observation_times=False,
         discovery_overdue=False,
         verification_pending=False,
@@ -156,6 +168,7 @@ async def get_portfolio(
             currency="USD",
             priced_subtotal_usd=None,
             total_usd=None,
+            unpriced_asset_count=0,
             quality=_EMPTY_QUALITY,
             balance_block=None,
             balance_block_time=None,
@@ -209,7 +222,7 @@ async def get_portfolio(
     # 3. Build holdings and compute totals.
     holdings: list[HoldingOut] = []
     priced_subtotal = Decimal(0)
-    all_have_price = True
+    unpriced_asset_count = 0
     max_block: int | None = None
     max_observed: datetime | None = None
 
@@ -239,7 +252,7 @@ async def get_portfolio(
             except Exception:
                 pass
         else:
-            all_have_price = False
+            unpriced_asset_count += 1
 
         block_number = line["block_number"]
         if block_number is not None:
@@ -277,8 +290,12 @@ async def get_portfolio(
             )
         )
 
-    # total_usd is null when any included holding lacks a price.
-    total_usd_str: str | None = format_decimal(priced_subtotal) if all_have_price and holdings else None
+    # total_usd is null unless every unpriced holding has been confirmed
+    # unpriceable by the provider ("gaps") — a holding that has simply never
+    # been asked about yet ("partial") still blocks the total (AUD-361).
+    total_usd_str: str | None = (
+        format_decimal(priced_subtotal) if quality_str in ("complete", "gaps") else None
+    )
     if not holdings:
         priced_subtotal_str: str | None = None
     else:
@@ -309,7 +326,7 @@ async def get_portfolio(
                 except Exception:
                     pass
 
-    quality = _map_quality(quality_str)
+    quality = _map_quality(quality_str, total_is_null=total_usd_str is None)
     valuation_time_str: str | None = None
     if valuation_time is not None:
         valuation_time_str = (
@@ -325,6 +342,7 @@ async def get_portfolio(
         currency="USD",
         priced_subtotal_usd=priced_subtotal_str,
         total_usd=total_usd_str,
+        unpriced_asset_count=unpriced_asset_count,
         quality=quality,
         balance_block=max_block,
         balance_block_time=None,
