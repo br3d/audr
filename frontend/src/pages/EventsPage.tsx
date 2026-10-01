@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Decimal } from 'decimal.js'
 import {
@@ -8,6 +7,7 @@ import {
   ApiError,
 } from '../api/client'
 import type { OnchainEvent, OnchainEventType, Allowance, WalletItem } from '../api/client'
+import { boolField, enumField, intField, stringField, useHashQueryState } from '../routing'
 
 const PAGE_SIZE = 50
 
@@ -15,6 +15,14 @@ const EVENT_TYPES: { value: OnchainEventType; label: string }[] = [
   { value: 'transfer_in', label: 'Transfer in' },
   { value: 'transfer_out', label: 'Transfer out' },
 ]
+
+const EVENTS_SCHEMA = {
+  wallet: stringField(''),
+  type: enumField<OnchainEventType | ''>(['', 'transfer_in', 'transfer_out'], ''),
+  unlimited: boolField(false),
+  eventsOffset: intField(0),
+  allowancesOffset: intField(0),
+}
 
 function shorten(address: string): string {
   if (address.length <= 12) return address
@@ -192,12 +200,10 @@ function AllowanceRow({ allowance, walletLabel }: { allowance: Allowance; wallet
 }
 
 export default function EventsPage() {
-  const [walletFilter, setWalletFilter] = useState('')
-  const [eventTypeFilter, setEventTypeFilter] = useState<OnchainEventType | ''>('')
-  const [eventsOffset, setEventsOffset] = useState(0)
-
-  const [unlimitedOnly, setUnlimitedOnly] = useState(false)
-  const [allowancesOffset, setAllowancesOffset] = useState(0)
+  const [
+    { wallet: walletFilter, type: eventTypeFilter, unlimited: unlimitedOnly, eventsOffset, allowancesOffset },
+    updateQuery,
+  ] = useHashQueryState('events', EVENTS_SCHEMA)
 
   const walletsQuery = useQuery({
     queryKey: ['wallets-for-events-filter'],
@@ -229,19 +235,15 @@ export default function EventsPage() {
   })
 
   function handleWalletFilterChange(value: string) {
-    setWalletFilter(value)
-    setEventsOffset(0)
-    setAllowancesOffset(0)
+    updateQuery({ wallet: value, eventsOffset: 0, allowancesOffset: 0 })
   }
 
   function handleEventTypeFilterChange(value: OnchainEventType | '') {
-    setEventTypeFilter(value)
-    setEventsOffset(0)
+    updateQuery({ type: value, eventsOffset: 0 })
   }
 
   function handleUnlimitedOnlyChange(value: boolean) {
-    setUnlimitedOnly(value)
-    setAllowancesOffset(0)
+    updateQuery({ unlimited: value, allowancesOffset: 0 })
   }
 
   const events = eventsQuery.data?.events ?? []
@@ -354,8 +356,8 @@ export default function EventsPage() {
               offset={eventsOffset}
               limit={eventsQuery.data.limit}
               total={eventsQuery.data.total}
-              onPrev={() => setEventsOffset((o) => Math.max(0, o - PAGE_SIZE))}
-              onNext={() => setEventsOffset((o) => o + PAGE_SIZE)}
+              onPrev={() => updateQuery({ eventsOffset: Math.max(0, eventsOffset - PAGE_SIZE) })}
+              onNext={() => updateQuery({ eventsOffset: eventsOffset + PAGE_SIZE })}
             />
           </>
         )}
@@ -436,8 +438,8 @@ export default function EventsPage() {
               offset={allowancesOffset}
               limit={allowancesQuery.data.limit}
               total={allowancesQuery.data.total}
-              onPrev={() => setAllowancesOffset((o) => Math.max(0, o - PAGE_SIZE))}
-              onNext={() => setAllowancesOffset((o) => o + PAGE_SIZE)}
+              onPrev={() => updateQuery({ allowancesOffset: Math.max(0, allowancesOffset - PAGE_SIZE) })}
+              onNext={() => updateQuery({ allowancesOffset: allowancesOffset + PAGE_SIZE })}
             />
           </>
         )}

@@ -1,0 +1,137 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import React from 'react'
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+vi.mock('../api/client', () => {
+  class ApiError extends Error {
+    status: number
+    body: undefined
+    constructor(status: number, message: string) {
+      super(message)
+      this.name = 'ApiError'
+      this.status = status
+    }
+  }
+  return {
+    fetchAssets: vi.fn(),
+    addManualAsset: vi.fn(),
+    patchAsset: vi.fn(),
+    ApiError,
+  }
+})
+
+import AssetsPage from '../pages/AssetsPage'
+import { fetchAssets } from '../api/client'
+import type { AssetItem, AssetsResponse } from '../api/client'
+
+const mockFetchAssets = vi.mocked(fetchAssets)
+
+const ASSET_ETH: AssetItem = {
+  id: 'a1',
+  chain_id: 1,
+  kind: 'native',
+  contract_address: null,
+  symbol: 'ETH',
+  name: 'Ether',
+  decimals: 18,
+  excluded: false,
+  metadata_source: 'catalog',
+  has_metadata_conflict: false,
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+const ASSET_USDC: AssetItem = {
+  id: 'a2',
+  chain_id: 1,
+  kind: 'catalog',
+  contract_address: '0x2222222222222222222222222222222222222222',
+  symbol: 'USDC',
+  name: 'USD Coin',
+  decimals: 6,
+  excluded: false,
+  metadata_source: 'catalog',
+  has_metadata_conflict: false,
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+function makeAssetsResponse(items: AssetItem[] = [ASSET_ETH, ASSET_USDC]): AssetsResponse {
+  return { items, next_cursor: null, request_id: 'r1', generated_at: '2026-01-01T00:00:00Z' }
+}
+
+function mountPage() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  act(() => {
+    root.render(
+      React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)),
+    )
+  })
+  return { container, root }
+}
+
+describe('AssetsPage — search and exclusion filter persistence in the URL (AUD-353)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/')
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse())
+  })
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount()
+    })
+    document.body.removeChild(container)
+    vi.clearAllMocks()
+  })
+
+  it('writes the search text into the URL hash', async () => {
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.querySelector('input[type="search"]')).toBeTruthy())
+
+    const searchInput = container.querySelector('input[type="search"]') as HTMLInputElement
+    // Use native setter so React's synthetic onChange fires in jsdom.
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      nativeSetter?.call(searchInput, 'usdc')
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect(window.location.hash).toBe('#/assets?q=usdc')
+    expect(container.textContent).toContain('USDC')
+    expect(container.textContent).not.toContain('Ether')
+  })
+
+  it('restores the search text and "show excluded" toggle from the URL on mount (AC1)', async () => {
+    window.history.replaceState(null, '', '#/assets?q=usdc&excluded=1')
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() =>
+      expect(container.querySelector('input[type="search"]')).toBeTruthy(),
+    )
+    expect(mockFetchAssets).toHaveBeenCalledWith(true, undefined)
+    const searchInput = container.querySelector('input[type="search"]') as HTMLInputElement
+    expect(searchInput.value).toBe('usdc')
+    const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+  })
+
+  it('writes the "show excluded" toggle into the URL hash', async () => {
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.querySelector('input[type="checkbox"]')).toBeTruthy())
+
+    const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement
+    await act(async () => {
+      checkbox.click()
+    })
+
+    expect(window.location.hash).toBe('#/assets?excluded=1')
+    await vi.waitFor(() => expect(mockFetchAssets).toHaveBeenCalledWith(true, undefined))
+  })
+})
