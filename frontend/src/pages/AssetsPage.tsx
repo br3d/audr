@@ -9,6 +9,12 @@ import {
 import type { AssetItem } from '../api/client'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { IconSearch, IconPlus, IconX } from '../components/Icons'
+import { boolField, stringField, useHashQueryState } from '../routing'
+
+const ASSETS_SCHEMA = {
+  q: stringField(''),
+  excluded: boolField(false),
+}
 
 function AddManualAssetForm({
   onAdded,
@@ -263,9 +269,13 @@ function AssetRow({
 
 export default function AssetsPage() {
   const queryClient = useQueryClient()
-  const [showExcluded, setShowExcluded] = useState(false)
+  const [{ q: search, excluded: showExcluded }, updateQuery] = useHashQueryState(
+    'assets',
+    ASSETS_SCHEMA,
+  )
   const [showAddForm, setShowAddForm] = useState(false)
-  const [search, setSearch] = useState('')
+  const setSearch = (value: string) => updateQuery({ q: value })
+  const setShowExcluded = (value: boolean) => updateQuery({ excluded: value })
 
   const {
     data,

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -105,6 +105,12 @@ function mountPage() {
 describe('EventsPage', () => {
   let container: HTMLDivElement
   let root: Root
+
+  beforeEach(() => {
+    // Filters now live in the URL hash (AUD-353) — reset it so one test's
+    // selections don't leak into the next.
+    window.history.replaceState(null, '', '/')
+  })
 
   afterEach(async () => {
     await act(async () => {

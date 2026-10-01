@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchHistory, ApiError } from '../api/client'
 import type { HistoryPeriod } from '../api/client'
 import HistoryChart from '../components/HistoryChart'
+import { enumField, useHashQueryState } from '../routing'
 
 const RANGES: { value: HistoryPeriod; label: string }[] = [
   { value: '24h', label: '24h' },
@@ -11,8 +11,13 @@ const RANGES: { value: HistoryPeriod; label: string }[] = [
   { value: 'all', label: 'All time' },
 ]
 
+const HISTORY_SCHEMA = {
+  period: enumField<HistoryPeriod>(['24h', '7d', '30d', 'all'], '7d'),
+}
+
 export default function HistoryPage() {
-  const [period, setPeriod] = useState<HistoryPeriod>('7d')
+  const [{ period }, updateQuery] = useHashQueryState('history', HISTORY_SCHEMA)
+  const setPeriod = (value: HistoryPeriod) => updateQuery({ period: value })
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['history', period],
