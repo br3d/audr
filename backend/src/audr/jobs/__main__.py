@@ -21,6 +21,7 @@ from audr.jobs.canonicality import recheck_canonicality
 from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
+from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import JobKind, upsert_worker_status
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
@@ -122,7 +123,11 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     for wallet_addr, token_addr in rows:
         monitored.setdefault(wallet_addr, []).append(token_addr)
 
-    async with RpcReader(url=rpc_url, expected_chain_id=_ETH_MAINNET_CHAIN_ID) as rpc:
+    async with RpcReader(
+        url=rpc_url,
+        expected_chain_id=_ETH_MAINNET_CHAIN_ID,
+        rate_limiter=get_shared_rpc_rate_limiter(),
+    ) as rpc:
         await rpc.validate_chain()
         block_number = await rpc.get_block_number()
 

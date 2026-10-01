@@ -25,6 +25,8 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.config import get_settings
+from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.providers.rpc_reader import (
     APPROVAL_TOPIC,
     LOG_CHUNK_SIZE,
@@ -65,27 +67,48 @@ async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None
         logger.info("event_indexer skipped — no active wallets run_id=%s", run_id)
         return
 
-    async with RpcReader(url=rpc_url, expected_chain_id=_MAINNET_CHAIN_ID) as reader:
+    max_chunks = get_settings().event_indexer_max_chunks_per_run
+
+    async with RpcReader(
+        url=rpc_url,
+        expected_chain_id=_MAINNET_CHAIN_ID,
+        rate_limiter=get_shared_rpc_rate_limiter(),
+    ) as reader:
         current_block = await reader.get_block_number()
         logger.info(
-            "event_indexer run_id=%s current_block=%d wallets=%d tokens=%d",
+            "event_indexer run_id=%s current_block=%d wallets=%d tokens=%d chunk_budget=%d",
             run_id,
             current_block,
             len(wallets),
             len(token_addresses),
+            max_chunks,
         )
 
         total_events = 0
+        chunks_remaining = max_chunks
+        deferred_wallets = 0
         for wallet_id, wallet_address in wallets:
-            indexed = await _index_wallet(
+            if chunks_remaining <= 0:
+                deferred_wallets += 1
+                continue
+            indexed, chunks_used = await _index_wallet(
                 session,
                 reader,
                 wallet_id=wallet_id,
                 wallet_address=wallet_address,
                 token_addresses=token_addresses,
                 current_block=current_block,
+                max_chunks=chunks_remaining,
             )
             total_events += indexed
+            chunks_remaining -= chunks_used
+
+    if deferred_wallets:
+        logger.info(
+            "event_indexer run_id=%s chunk budget exhausted — deferred wallets=%d to next run",
+            run_id,
+            deferred_wallets,
+        )
 
     logger.info(
         "event_indexer run_id=%s done total_events_inserted=%d",
@@ -107,7 +130,15 @@ async def _index_wallet(
     wallet_address: str,
     token_addresses: list[str],
     current_block: int,
-) -> int:
+    max_chunks: int,
+) -> tuple[int, int]:
+    """Index one wallet's events; returns (events_inserted, chunks_used).
+
+    ``max_chunks`` bounds how many LOG_CHUNK_SIZE block-ranges this call may
+    process — once exhausted, progress is checkpointed at the last completed
+    chunk boundary and the remaining range resumes on the wallet's next run
+    (AUD-362), so a long catch-up range can't burn the whole run's RPC budget.
+    """
     checkpoint = await _get_checkpoint(session, wallet_id)
     if checkpoint is None:
         # First run: record current block and index nothing (no backfill)
@@ -118,18 +149,29 @@ async def _index_wallet(
             wallet_address,
             current_block,
         )
-        return 0
+        return 0, 0
 
     from_block = checkpoint + 1
-    if from_block > current_block:
-        return 0  # already up to date
+    if from_block > current_block or max_chunks <= 0:
+        return 0, 0  # already up to date, or no budget left this run
 
     wallet_topic = _pad_address_topic(wallet_address)
     inserted = 0
+    chunks_used = 0
 
     # Process in LOG_CHUNK_SIZE block chunks
     chunk_start = from_block
     while chunk_start <= current_block:
+        if chunks_used >= max_chunks:
+            await _upsert_checkpoint(session, wallet_id, chunk_start - 1)
+            await session.flush()
+            logger.info(
+                "event_indexer wallet=%s chunk budget exhausted at block=%d, resuming next run",
+                wallet_address,
+                chunk_start - 1,
+            )
+            return inserted, chunks_used
+
         chunk_end = min(chunk_start + LOG_CHUNK_SIZE - 1, current_block)
 
         try:
@@ -165,7 +207,7 @@ async def _index_wallet(
             if chunk_start > from_block:
                 await _upsert_checkpoint(session, wallet_id, chunk_start - 1)
                 await session.flush()
-            return inserted
+            return inserted, chunks_used
 
         seen: set[tuple[str, int]] = set()
         for log in [*out_logs, *in_logs, *approval_logs]:
@@ -191,6 +233,7 @@ async def _index_wallet(
                 )
 
         chunk_start = chunk_end + 1
+        chunks_used += 1
 
     await _upsert_checkpoint(session, wallet_id, current_block)
     await session.flush()
@@ -201,7 +244,7 @@ async def _index_wallet(
         current_block,
         inserted,
     )
-    return inserted
+    return inserted, chunks_used
 
 
 # ---------------------------------------------------------------------------

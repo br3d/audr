@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
 
+    # Shared RPC rate-limit budget for the worker process (AUD-362). Default
+    # is conservative for Infura's free tier (10 req/s) with a small burst so
+    # balance_scan, discovery, and event_indexer don't collectively trip 429s.
+    rpc_rate_limit_per_second: float = 10.0
+    rpc_rate_limit_burst: int = 5
+
+    # Caps how many eth_getLogs block-chunks event_indexer processes in a
+    # single run; the rest resume from the per-wallet checkpoint next run
+    # (AUD-362) so one run can't balloon into an unbounded RPC burst.
+    event_indexer_max_chunks_per_run: int = 50
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
