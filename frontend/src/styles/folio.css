@@ -685,6 +685,14 @@ body {
   background: var(--bg-hover);
 }
 
+.table-folio tbody tr.row-risk {
+  background: var(--danger-bg);
+}
+
+.table-folio tbody tr.row-risk:hover {
+  background: var(--danger-bg);
+}
+
 .td-mono {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
