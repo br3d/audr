@@ -12,10 +12,13 @@
 #   (the app is served — SPA + /api + /health — by nginx on port 80)
 #
 # Demo wallet (AUDR_SEED_WALLET):
-#   auto (default) – create the Buterin wallet only if the instance tracks no
-#                    wallets yet, so seeding never pollutes a real instance
-#   force          – always create it
-#   skip           – never create it (use when you only want RPC configured)
+#   always (default) – register the Buterin wallet; already-present addresses
+#                      are left untouched (the API answers 409)
+#   skip             – never create it (use when you only want RPC configured)
+#
+# Seeding is deliberately unconditional (AUD-350): the point of the script is
+# to fill a portfolio with enough real data to exercise every feature, so both
+# the demo wallet and the RPC integration are always configured.
 #
 # The password seeded is the canonical test password defined in
 # backend/tests/fixtures/seed.py (TEST_PASSWORD = "Rand0mP@ssw0rd").
@@ -95,22 +98,16 @@ fi
 
 # ── 2. Create Buterin wallet (idempotent: ignore 409 Conflict) ────────────────
 #
-# Guarded (AUD-350): the demo wallet is only created on an instance that has no
-# wallets yet.  Running this script against an instance that already tracks the
-# operator's own addresses used to silently add a second "Buterin" wallet next
-# to theirs, which is indistinguishable from a real one in the UI.  Set
-# AUDR_SEED_WALLET=force to add it anyway, or =skip to never add it.
+# Unconditional by design (AUD-350): seeding exists to give a portfolio enough
+# data to test with, so the demo wallet is always registered.  Re-runs are
+# harmless — the address has a unique index and the API answers 409.  Set
+# AUDR_SEED_WALLET=skip when you only want the RPC integration configured.
 
-SEED_WALLET_MODE="${AUDR_SEED_WALLET:-auto}"
+SEED_WALLET_MODE="${AUDR_SEED_WALLET:-always}"
 WALLET_SEEDED="skipped"
-WALLET_COUNT=$(curl -sf "${API}/wallets?limit=1" -b "${COOKIE_JAR}" \
-  | python3 -c "import sys,json; print(len(json.load(sys.stdin)['items']))")
 
 if [[ "${SEED_WALLET_MODE}" == "skip" ]]; then
   echo "  -> AUDR_SEED_WALLET=skip — not creating the demo wallet"
-elif [[ "${SEED_WALLET_MODE}" != "force" && "${WALLET_COUNT}" != "0" ]]; then
-  echo "  -> Instance already tracks wallets — not adding the demo wallet"
-  echo "     (set AUDR_SEED_WALLET=force to add ${BUTERIN_ADDRESS} anyway)"
 else
   echo "  -> Registering wallet ${BUTERIN_ADDRESS} (${BUTERIN_LABEL})"
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${API}/wallets" \
