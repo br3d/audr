@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
+from audr.assets.catalog import get_catalog_status
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
 from audr.jobs.store import JobKind, enqueue_job, get_worker_heartbeat
@@ -129,10 +130,16 @@ class RecoveryStatus(BaseModel):
     reason: str | None = None
 
 
+class CatalogStatusModel(BaseModel):
+    status: str
+    entry_count: int
+
+
 class StatusResponse(BaseModel):
     db: DbStatus
     worker: WorkerStatus
     recovery: RecoveryStatus
+    catalog: CatalogStatusModel
     schedules: dict[str, ScheduleConfig]
     version: str | None = None
 
@@ -612,6 +619,10 @@ async def get_status(
     # Recovery: not yet implemented — always inactive.
     recovery = RecoveryStatus(active=False, reason=None)
 
+    # Catalog: DEGRADED means ERC-20 discovery finds zero candidates (AUD-357) —
+    # must stay visible here rather than only as a worker-log WARNING.
+    catalog = await get_catalog_status(db)
+
     # Schedules: same structure as GET /settings.
     settings = await _query_settings_response(db)
 
@@ -619,6 +630,7 @@ async def get_status(
         db=db_status,
         worker=worker_status,
         recovery=recovery,
+        catalog=CatalogStatusModel(status=catalog.status.value, entry_count=catalog.entry_count),
         schedules=settings.schedules,
         version=None,
     )

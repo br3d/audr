@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from audr.operations.status import (
+    CatalogStatus,
     ComponentStatus,
     KeyStatus,
     MigrationStatus,
@@ -34,6 +35,7 @@ class ReadyResponse(BaseModel):
     migration: str
     key: str
     worker: str
+    catalog: str
 
 
 @router.get("/live", response_model=LiveResponse, include_in_schema=False)
@@ -63,6 +65,7 @@ async def readiness() -> ReadyResponse:
                 "migration": system.migration.status.value,
                 "key": system.key.status.value,
                 "worker": system.worker.status,
+                "catalog": system.catalog.status.value,
             },
         )
     return ReadyResponse(
@@ -70,12 +73,14 @@ async def readiness() -> ReadyResponse:
         migration=system.migration.status.value,
         key=system.key.status.value,
         worker=system.worker.status,
+        catalog=system.catalog.status.value,
     )
 
 
 async def _collect_status() -> SystemStatus:
     import sqlalchemy as sa
 
+    from audr.assets.catalog import get_catalog_status
     from audr.db import _get_session_factory
     from audr.jobs.store import get_worker_heartbeat
     from audr.operations.crypto import MissingKeyError
@@ -108,9 +113,11 @@ async def _collect_status() -> SystemStatus:
             # readiness always reported the dataclass default "unknown".
             ws_status, _ws_heartbeat = await get_worker_heartbeat(session)
             system.worker = WorkerStatus(status=ws_status)
+            system.catalog = await get_catalog_status(session)
     except Exception:
         logger.exception("health check DB error")
         system.migration = MigrationStatus(status=ComponentStatus.DEGRADED)
         system.key = KeyStatus(status=ComponentStatus.UNKNOWN)
+        system.catalog = CatalogStatus(status=ComponentStatus.UNKNOWN)
 
     return system
