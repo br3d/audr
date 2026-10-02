@@ -42,6 +42,18 @@ const POINT_INCOMPLETE: HistoryPoint = {
   is_gap_marker: false,
 }
 
+const POINT_INVALIDATED: HistoryPoint = {
+  snapshot_id: 'abc-invalidated',
+  snapshotted_at: '2026-01-18T12:00:00Z',
+  total_value_usd: '4900.00',
+  quality: 'ok',
+  included_wallet_count: 1,
+  included_asset_count: 1,
+  has_gap: false,
+  is_canonical: false,
+  is_gap_marker: false,
+}
+
 function mount(element: React.ReactElement): { container: HTMLDivElement; root: Root } {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -142,6 +154,33 @@ describe('HistoryTable', () => {
     )
     const tbody = container.querySelector('tbody')
     expect(tbody?.querySelectorAll('tr').length).toBe(3)
+    await unmount(container, root)
+  })
+
+  it('renders invalidated marker for non-canonical points', async () => {
+    const { container, root } = mount(
+      React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }),
+    )
+    const marker = container.querySelector('[data-testid="invalidated-marker"]')
+    expect(marker).toBeTruthy()
+    await unmount(container, root)
+  })
+
+  it('does not render invalidated marker for canonical points', async () => {
+    const { container, root } = mount(
+      React.createElement(HistoryTable, { points: [POINT_OK] }),
+    )
+    const marker = container.querySelector('[data-testid="invalidated-marker"]')
+    expect(marker).toBeNull()
+    await unmount(container, root)
+  })
+
+  it('labels the row as invalidated for non-canonical points', async () => {
+    const { container, root } = mount(
+      React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }),
+    )
+    const row = container.querySelector('tbody tr')
+    expect(row?.getAttribute('aria-label')).toMatch(/invalidated/i)
     await unmount(container, root)
   })
 

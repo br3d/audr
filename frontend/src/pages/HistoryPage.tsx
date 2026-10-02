@@ -8,11 +8,13 @@ const RANGES: { value: HistoryPeriod; label: string }[] = [
   { value: '24h', label: '24h' },
   { value: '7d', label: '7d' },
   { value: '30d', label: '30d' },
+  { value: '90d', label: '90d' },
+  { value: '1y', label: '1 year' },
   { value: 'all', label: 'All time' },
 ]
 
 const HISTORY_SCHEMA = {
-  period: enumField<HistoryPeriod>(['24h', '7d', '30d', 'all'], '7d'),
+  period: enumField<HistoryPeriod>(['24h', '7d', '30d', '90d', '1y', 'all'], '7d'),
 }
 
 export default function HistoryPage() {
@@ -28,6 +30,7 @@ export default function HistoryPage() {
   const hasGaps = data?.entries.some((p) => p.has_gap) ?? false
   const hasStale = data?.entries.some((p) => p.quality === 'stale') ?? false
   const hasIncomplete = data?.entries.some((p) => p.quality === 'incomplete') ?? false
+  const hasInvalidated = data?.entries.some((p) => !p.is_canonical) ?? false
 
   return (
     <div>
@@ -61,7 +64,7 @@ export default function HistoryPage() {
 
       {data && (
         <>
-          {(hasGaps || hasStale || hasIncomplete) && (
+          {(hasGaps || hasStale || hasIncomplete || hasInvalidated) && (
             <div className="notice-list mb-16">
               {hasGaps && (
                 <p role="note" className="notice-item">
@@ -79,6 +82,13 @@ export default function HistoryPage() {
                 <p role="note" className="notice-item">
                   Some points are marked <strong>incomplete</strong> — not all holdings
                   had usable balances and prices at that snapshot.
+                </p>
+              )}
+              {hasInvalidated && (
+                <p role="note" className="notice-item">
+                  Some points are marked <strong>invalidated</strong> — they were
+                  recalculated after a blockchain reorganization or a block that failed
+                  verification, and their value is no longer considered current.
                 </p>
               )}
             </div>

@@ -22,6 +22,7 @@ interface ChartDatum {
   value: number | null
   has_gap: boolean
   quality: HistoryPoint['quality']
+  is_canonical: boolean
 }
 
 const LINE_COLOR = '#4a6cf7'
@@ -105,6 +106,7 @@ export function buildChartData(points: HistoryPoint[]): ChartDatum[] {
       value: p.has_gap || p.total_value_usd === null ? null : parseFloat(p.total_value_usd),
       has_gap: p.has_gap,
       quality: p.quality,
+      is_canonical: p.is_canonical,
     }))
 }
 
@@ -122,6 +124,7 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
 
   const data = buildChartData(points)
   const hasGaps = data.some((d) => d.has_gap)
+  const hasInvalidated = data.some((d) => !d.is_canonical && d.value !== null)
   const values = data
     .map((d) => d.value)
     .filter((v): v is number => v !== null)
@@ -131,7 +134,28 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
   const tickFormatter = (ts: string) => formatTimestamp(ts, period)
 
   const endDot = (props: DotItemDotProps) => {
-    if (props.index !== lastValueIndex || props.value === null) {
+    const datum = data[props.index ?? -1] as ChartDatum | undefined
+    if (props.value === null || !datum) {
+      return <g key={props.index} />
+    }
+    // Invalidated points get a hollow marker — shape, not color, carries the
+    // meaning, so it reads correctly without relying on color perception.
+    if (!datum.is_canonical) {
+      return (
+        <circle
+          key={props.index}
+          cx={props.cx}
+          cy={props.cy}
+          r={4}
+          fill="#fff"
+          stroke={LINE_COLOR}
+          strokeWidth={2}
+          strokeDasharray="2 1"
+          data-testid="invalidated-point"
+        />
+      )
+    }
+    if (props.index !== lastValueIndex) {
       return <g key={props.index} />
     }
     return (
@@ -161,6 +185,12 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
         {hasGaps && (
           <span className="history-chart-legend-gap" role="note">
             Breaks in the line mark gaps — periods with missing data
+          </span>
+        )}
+        {hasInvalidated && (
+          <span className="history-chart-legend-gap" role="note">
+            Hollow markers show invalidated points — recalculated after a reorg or
+            failed verification
           </span>
         )}
       </div>

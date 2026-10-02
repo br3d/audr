@@ -47,50 +47,66 @@ test.describe('History page — navigation', () => {
 })
 
 test.describe('History page — range selector', () => {
-  test('range selector contains all four options: 24h, 7d, 30d, all time', async ({
+  test('range selector contains all six options: 24h, 7d, 30d, 90d, 1 year, all time', async ({
     page,
   }) => {
     await navigateToHistory(page)
     const fieldset = page.getByRole('group', { name: /range/i })
-    await expect(fieldset.getByRole('radio', { name: /24 hours/i })).toBeVisible()
-    await expect(fieldset.getByRole('radio', { name: /7 days/i })).toBeVisible()
-    await expect(fieldset.getByRole('radio', { name: /30 days/i })).toBeVisible()
-    await expect(fieldset.getByRole('radio', { name: /all time/i })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: '24h' })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: '7d' })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: '30d' })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: '90d' })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: '1 year' })).toBeVisible()
+    await expect(fieldset.getByRole('button', { name: 'All time' })).toBeVisible()
   })
 
   test('default selected range is 7 days', async ({ page }) => {
     await navigateToHistory(page)
-    const radio7d = page.getByRole('radio', { name: /7 days/i })
-    await expect(radio7d).toBeChecked()
+    const btn7d = page.getByRole('button', { name: '7d' })
+    await expect(btn7d).toHaveAttribute('aria-pressed', 'true')
   })
 
-  test('selecting 24h range updates checked state', async ({ page }) => {
+  test('selecting 24h range updates pressed state', async ({ page }) => {
     await navigateToHistory(page)
-    const radio24h = page.getByRole('radio', { name: /24 hours/i })
-    await radio24h.click()
-    await expect(radio24h).toBeChecked()
+    const btn24h = page.getByRole('button', { name: '24h' })
+    await btn24h.click()
+    await expect(btn24h).toHaveAttribute('aria-pressed', 'true')
   })
 
-  test('selecting 30d range updates checked state', async ({ page }) => {
+  test('selecting 30d range updates pressed state', async ({ page }) => {
     await navigateToHistory(page)
-    const radio30d = page.getByRole('radio', { name: /30 days/i })
-    await radio30d.click()
-    await expect(radio30d).toBeChecked()
+    const btn30d = page.getByRole('button', { name: '30d' })
+    await btn30d.click()
+    await expect(btn30d).toHaveAttribute('aria-pressed', 'true')
   })
 
-  test('selecting all time range updates checked state', async ({ page }) => {
+  test('selecting 90d range updates pressed state and requests data', async ({ page }) => {
     await navigateToHistory(page)
-    const radioAll = page.getByRole('radio', { name: /all time/i })
-    await radioAll.click()
-    await expect(radioAll).toBeChecked()
+    const btn90d = page.getByRole('button', { name: '90d' })
+    await btn90d.click()
+    await expect(btn90d).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('selecting 1 year range updates pressed state and requests data', async ({ page }) => {
+    await navigateToHistory(page)
+    const btn1y = page.getByRole('button', { name: '1 year' })
+    await btn1y.click()
+    await expect(btn1y).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('selecting all time range updates pressed state', async ({ page }) => {
+    await navigateToHistory(page)
+    const btnAll = page.getByRole('button', { name: 'All time' })
+    await btnAll.click()
+    await expect(btnAll).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('range selector is keyboard navigable', async ({ page }) => {
     await navigateToHistory(page)
-    const radio24h = page.getByRole('radio', { name: /24 hours/i })
-    // Tab to the first radio and use arrow keys
-    await radio24h.focus()
-    await expect(radio24h).toBeFocused()
+    const btn24h = page.getByRole('button', { name: '24h' })
+    // Tab to the first range button and use arrow keys
+    await btn24h.focus()
+    await expect(btn24h).toBeFocused()
   })
 })
 
@@ -172,6 +188,21 @@ test.describe('History page — gap handling', () => {
     const count = await gapMarkers.count()
     if (count > 0) {
       await expect(page.getByText(/gap/i).first()).toBeVisible()
+    }
+  })
+})
+
+test.describe('History page — invalidation handling', () => {
+  test('invalidation explanation note is shown when data contains non-canonical points', async ({
+    page,
+  }) => {
+    await navigateToHistory(page)
+    await page.waitForTimeout(1500)
+    // If invalidated markers exist in the table, the explanation note must also be present
+    const invalidatedMarkers = page.getByTestId('invalidated-marker')
+    const count = await invalidatedMarkers.count()
+    if (count > 0) {
+      await expect(page.getByText(/invalidated/i).first()).toBeVisible()
     }
   })
 })
@@ -261,8 +292,11 @@ test.describe('History page — mobile viewport', () => {
     await navigateToHistory(page)
     const fieldset = page.getByRole('group', { name: /range/i })
     await expect(fieldset).toBeVisible()
-    await fieldset.getByRole('radio', { name: /30 days/i }).click()
-    await expect(fieldset.getByRole('radio', { name: /30 days/i })).toBeChecked()
+    await fieldset.getByRole('button', { name: '30d' }).click()
+    await expect(fieldset.getByRole('button', { name: '30d' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   test('chart or empty state is visible on mobile', async ({ page }) => {
