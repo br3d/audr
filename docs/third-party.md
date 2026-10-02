@@ -122,7 +122,6 @@ dependencies are not shipped.
 | `certifi` | 2026.7.22 | MPL-2.0 | transitive |
 | `cffi` | 2.1.1 | MIT-0 | transitive |
 | `click` | 8.5.0 | BSD-3-Clause | transitive |
-| `croniter` | 6.2.4 | MIT | direct |
 | `cryptography` | 50.0.1 | Apache-2.0 OR BSD-3-Clause | direct |
 | `cytoolz` | 1.1.0 | BSD-3-Clause | transitive |
 | `eth-abi` | 6.0.0 | MIT | direct |
@@ -145,11 +144,9 @@ dependencies are not shipped.
 | `pydantic` | 2.13.5 | MIT | direct |
 | `pydantic-core` | 2.46.5 | MIT | transitive |
 | `pydantic-settings` | 2.15.0 | MIT | direct |
-| `python-dateutil` | 2.9.0.post0 | Apache-2.0 OR BSD-3-Clause | transitive |
 | `python-dotenv` | 1.2.3 | BSD-3-Clause | transitive |
 | `pyyaml` | 6.0.3 | MIT | transitive |
 | `regex` | 2026.9.10 | Apache-2.0 AND CNRI-Python | transitive |
-| `six` | 1.17.0 | MIT | transitive |
 | `sqlalchemy` | 2.0.54 | MIT | direct |
 | `starlette` | 1.7.0 | BSD-3-Clause | transitive |
 | `toolz` | 1.1.0 | BSD-3-Clause | transitive |
@@ -172,11 +169,6 @@ Notes:
   unmodified.
 - `regex` carries `Apache-2.0 AND CNRI-Python`; it enters the image only as a
   transitive dependency of `parsimonious`, which `eth-abi` requires.
-- `croniter` is still listed as a direct requirement in `backend/uv.lock` and
-  is therefore installed into the image, but nothing in `backend/src` imports
-  it any more — AUD-331 removed the cron layer from `backend/pyproject.toml`
-  without re-locking. It is recorded here because it genuinely ships; removing
-  it is a follow-up.
 
 ### Backend development dependencies (not shipped)
 
