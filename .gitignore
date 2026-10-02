@@ -41,3 +41,10 @@ secrets/
 # Local test-suite logs written by scripts/test.sh
 .test-backend.log
 .test-frontend.log
+
+# Playwright run output (traces/screenshots) — regenerated on every e2e run
+frontend/test-results/
+test-results/
+
+# Local agent/assistant workspace config
+.claude/
