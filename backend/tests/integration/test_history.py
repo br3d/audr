@@ -23,7 +23,7 @@ from audr.portfolio.snapshot import publish_valuation_snapshot
 # ---------------------------------------------------------------------------
 
 
-pytestmark = pytest.mark.anyio
+pytestmark = [pytest.mark.anyio, pytest.mark.integration]
 
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:

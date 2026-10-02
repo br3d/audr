@@ -341,7 +341,12 @@ def _compute_gap_threshold(entries: list[HistoryEntry]) -> float:
     """Return the gap threshold in seconds.
 
     Uses 2× the median inter-point interval, with a floor of _MIN_GAP_SECONDS.
-    Falls back to the floor when there are fewer than 2 entries.
+    Falls back to the floor when there are fewer than 2 entries, or when
+    there is exactly one inter-point delta: with a single delta, that delta
+    *is* the median, so `median * 2` would always exceed it and no gap
+    could ever be detected regardless of how large the delta is. In that
+    case the delta has nothing to be "distant" relative to, so fall back to
+    the absolute floor instead of deriving a threshold from itself.
     """
     if len(entries) < 2:
         return float(_MIN_GAP_SECONDS)
@@ -352,6 +357,8 @@ def _compute_gap_threshold(entries: list[HistoryEntry]) -> float:
         )
         for i in range(len(entries) - 1)
     )
+    if len(deltas) == 1:
+        return float(_MIN_GAP_SECONDS)
     median = deltas[len(deltas) // 2]
     return max(float(_MIN_GAP_SECONDS), median * 2.0)
 
