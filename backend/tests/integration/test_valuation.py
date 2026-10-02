@@ -74,13 +74,14 @@ async def _insert_balance(
     asset_id: uuid.UUID,
     raw_amount: int,
     block_number: int = 12345678,
+    block_time: datetime | None = None,
 ) -> None:
     await session.execute(
         sa.text(
             """
             INSERT INTO balance_observation
-              (id, wallet_id, asset_id, raw_amount, block_number, observed_at)
-            VALUES (:id, :wallet, :asset, :raw, :block, now())
+              (id, wallet_id, asset_id, raw_amount, block_number, block_time, observed_at)
+            VALUES (:id, :wallet, :asset, :raw, :block, :block_time, now())
             """
         ),
         {
@@ -89,6 +90,7 @@ async def _insert_balance(
             "asset": str(asset_id),
             "raw": raw_amount,
             "block": block_number,
+            "block_time": block_time,
         },
     )
 
@@ -288,6 +290,39 @@ async def test_publish_snapshot_value_usd_exact(db_session: AsyncSession) -> Non
     assert row is not None
     stored_value = Decimal(row[0])
     assert stored_value == Decimal("500")
+
+
+@pytest.mark.integration
+async def test_publish_snapshot_copies_block_time_from_observation(
+    db_session: AsyncSession,
+) -> None:
+    """valuation_line.block_time is denormalized from the source balance_observation (AUD-72).
+
+    It must survive on the immutable snapshot row even if the observation it
+    came from is later superseded by a newer scan.
+    """
+    wallet_id = await _insert_wallet(db_session, "0x" + "7" * 40)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "8" * 40, decimals=18)
+    chain_block_time = datetime(2026, 1, 1, tzinfo=UTC)
+    await _insert_balance(
+        db_session,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        raw_amount=10**18,
+        block_time=chain_block_time,
+    )
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("2000"))
+    await db_session.flush()
+
+    result = await publish_valuation_snapshot(db_session)
+
+    line_row = await db_session.execute(
+        sa.text("SELECT block_time FROM valuation_line WHERE snapshot_id = :snap"),
+        {"snap": str(result.snapshot_id)},
+    )
+    row = line_row.first()
+    assert row is not None
+    assert row[0] == chain_block_time
 
 
 @pytest.mark.integration

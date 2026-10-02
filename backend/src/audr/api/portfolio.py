@@ -195,6 +195,7 @@ async def get_portfolio(
                 vl.asset_id,
                 vl.raw_amount::text   AS raw_amount,
                 vl.block_number,
+                vl.block_time         AS block_time,
                 vl.price_usd::text    AS price_usd,
                 vl.value_usd::text    AS value_usd,
                 a.token_address,
@@ -219,11 +220,27 @@ async def get_portfolio(
 
     lines = [dict(r) for r in lines_result.mappings()]
 
-    # 3. Build holdings and compute totals.
+    # 3. Determine the freshest balance block among this snapshot's holdings.
+    # Every wallet/asset scanned in the same balance_scan run shares one
+    # block_number (jobs.__main__.handle_balance_scan reads it once per run),
+    # so a line whose block is behind the max was not updated by the latest
+    # run and is a carried-forward (stale) balance — this is what
+    # stale_contribution_usd below sums (AUD-72).
+    max_block: int | None = None
+    max_block_time: datetime | None = None
+    for line in lines:
+        block_number = line["block_number"]
+        if block_number is not None:
+            bn = int(block_number)
+            if max_block is None or bn > max_block:
+                max_block = bn
+                max_block_time = line["block_time"]
+
+    # 4. Build holdings and compute totals.
     holdings: list[HoldingOut] = []
     priced_subtotal = Decimal(0)
+    stale_subtotal = Decimal(0)
     unpriced_asset_count = 0
-    max_block: int | None = None
     max_observed: datetime | None = None
 
     for line in lines:
@@ -255,10 +272,21 @@ async def get_portfolio(
             unpriced_asset_count += 1
 
         block_number = line["block_number"]
-        if block_number is not None:
-            bn = int(block_number)
-            if max_block is None or bn > max_block:
-                max_block = bn
+        is_stale_balance = (
+            block_number is not None
+            and max_block is not None
+            and int(block_number) < max_block
+        )
+        if is_stale_balance and price_usd_str is not None and value_usd_str is not None:
+            try:
+                stale_subtotal += Decimal(value_usd_str)
+            except Exception:
+                pass
+
+        block_time_val = line["block_time"]
+        block_time_str: str | None = (
+            block_time_val.isoformat() if hasattr(block_time_val, "isoformat") else None
+        )
 
         observed_at = line["observed_at"]
         observed_str: str | None = None
@@ -284,7 +312,7 @@ async def get_portfolio(
                 included=True,
                 metadata_source=metadata_source,
                 read_status="ok",
-                block_time=None,
+                block_time=block_time_str,
                 observed_at=observed_str,
                 last_success_at=observed_str,
             )
@@ -298,10 +326,12 @@ async def get_portfolio(
     )
     if not holdings:
         priced_subtotal_str: str | None = None
+        stale_contribution_str: str | None = None
     else:
         priced_subtotal_str = format_decimal(priced_subtotal)
+        stale_contribution_str = format_decimal(stale_subtotal)
 
-    # 4. Build allocations from included priced holdings.
+    # 5. Build allocations from included priced holdings.
     allocations: list[AllocationItemOut] = []
     if priced_subtotal > 0:
         for holding in holdings:
@@ -334,6 +364,9 @@ async def get_portfolio(
             if hasattr(valuation_time, "isoformat")
             else str(valuation_time)
         )
+    balance_block_time_str: str | None = (
+        max_block_time.isoformat() if hasattr(max_block_time, "isoformat") else None
+    )
 
     return PortfolioResponseOut(
         snapshot_id=snapshot_id,
@@ -345,12 +378,12 @@ async def get_portfolio(
         unpriced_asset_count=unpriced_asset_count,
         quality=quality,
         balance_block=max_block,
-        balance_block_time=None,
+        balance_block_time=balance_block_time_str,
         balance_observed_at=max_observed.isoformat() if max_observed else None,
         discovery_completed_at=None,
         holdings=holdings,
         allocations=allocations,
-        stale_contribution_usd=None,
+        stale_contribution_usd=stale_contribution_str,
         request_id=str(uuid.uuid4()),
         generated_at=now.isoformat(),
     )

@@ -47,12 +47,17 @@ async def record_balance(
     token_address: str,
     raw_amount: int,
     block_number: int,
+    block_time: datetime | None = None,
 ) -> None:
     """Record a balance observation.
 
     Upserts the wallet and asset rows if they don't already exist (using
     'manual' source for auto-created assets).  Then inserts a new
     balance_observation row — the history is append-only.
+
+    ``block_time`` is the chain's own timestamp for ``block_number`` (when
+    the RPC caller has one available), distinct from ``observed_at`` below,
+    which is the wall-clock moment this process made the read.
     """
     if not isinstance(raw_amount, int):
         raise TypeError(f"raw_amount must be int, got {type(raw_amount)}")
@@ -67,9 +72,9 @@ async def record_balance(
         sa.text(
             """
             INSERT INTO balance_observation
-              (id, wallet_id, asset_id, raw_amount, block_number, observed_at)
+              (id, wallet_id, asset_id, raw_amount, block_number, block_time, observed_at)
             VALUES
-              (:id, :wallet_id, :asset_id, :raw_amount, :block_number, :now)
+              (:id, :wallet_id, :asset_id, :raw_amount, :block_number, :block_time, :now)
             """
         ),
         {
@@ -78,6 +83,7 @@ async def record_balance(
             "asset_id": str(asset_id),
             "raw_amount": raw_amount,
             "block_number": block_number,
+            "block_time": block_time,
             "now": datetime.now(tz=UTC),
         },
     )

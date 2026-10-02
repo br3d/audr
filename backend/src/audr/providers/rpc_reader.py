@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -118,6 +119,16 @@ class RpcReader:
         """Return the current block number."""
         result = await self._call("eth_blockNumber", [])
         return _parse_hex_int(result)
+
+    async def get_block_time(self, block_number: int) -> datetime:
+        """Return the UTC timestamp at which *block_number* was mined."""
+        result = await self._call_raw("eth_getBlockByNumber", [hex(block_number), False])
+        if not isinstance(result, dict) or "timestamp" not in result:
+            raise MalformedResponseError(
+                f"eth_getBlockByNumber result missing 'timestamp': {result!r}"
+            )
+        seconds = _parse_hex_int(result["timestamp"])
+        return datetime.fromtimestamp(seconds, tz=UTC)
 
     async def get_eth_balance(self, address: str) -> int:
         """Return the ETH balance of *address* in Wei as an integer."""

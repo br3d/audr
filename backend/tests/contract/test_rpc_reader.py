@@ -11,6 +11,8 @@ Covers:
   - No signing methods: the reader never exposes private key operations.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 import respx
 from httpx import Response
@@ -104,6 +106,38 @@ async def test_erc20_balance_call(rpc_mock: respx.MockRouter) -> None:
         wallet_address="0x" + "a" * 40,
     )
     assert amount == 100
+
+
+@pytest.mark.contract
+async def test_get_block_time_returns_utc_timestamp(rpc_mock: respx.MockRouter) -> None:
+    """get_block_time parses eth_getBlockByNumber's hex timestamp into a UTC datetime."""
+    rpc_mock.post("http://rpc.test/").mock(
+        return_value=Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"number": "0x101", "timestamp": "0x655f5e00"},
+            },
+        )
+    )
+    reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+    block_time = await reader.get_block_time(0x101)
+    assert block_time == datetime.fromtimestamp(0x655F5E00, tz=UTC)
+
+
+@pytest.mark.contract
+async def test_get_block_time_missing_timestamp_raises(rpc_mock: respx.MockRouter) -> None:
+    """A block result without a 'timestamp' field is a malformed response, not a crash."""
+    rpc_mock.post("http://rpc.test/").mock(
+        return_value=Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 1, "result": {"number": "0x101"}},
+        )
+    )
+    reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+    with pytest.raises(MalformedResponseError):
+        await reader.get_block_time(0x101)
 
 
 @pytest.mark.contract

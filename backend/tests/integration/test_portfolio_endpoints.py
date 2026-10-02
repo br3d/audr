@@ -103,14 +103,15 @@ async def _seed_snapshot(
                 asset_id = h["asset_id"]
                 raw_amount = h.get("raw_amount", "1000000000000000000")
                 block_number = h.get("block_number", 12345678)
+                block_time = h.get("block_time")
                 price_usd = h.get("price_usd")
                 value_usd = h.get("value_usd")
 
                 await session.execute(
                     text(
                         "INSERT INTO valuation_line"
-                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, price_usd, value_usd)"
-                        " VALUES (:id, :snap, :wallet, :asset, :raw, :block, :price, :value)"
+                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, block_time, price_usd, value_usd)"
+                        " VALUES (:id, :snap, :wallet, :asset, :raw, :block, :block_time, :price, :value)"
                     ),
                     {
                         "id": str(uuid.uuid4()),
@@ -119,6 +120,7 @@ async def _seed_snapshot(
                         "asset": asset_id,
                         "raw": raw_amount,
                         "block": block_number,
+                        "block_time": block_time,
                         "price": price_usd,
                         "value": value_usd,
                     },
@@ -367,6 +369,104 @@ async def test_portfolio_stale_quality_sets_stale_prices_flag(
     assert r.status_code == 200
     quality = r.json()["quality"]
     assert quality["stale_prices"] is True
+
+
+@pytest.mark.integration
+async def test_portfolio_exposes_block_time_and_stale_contribution(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """AUD-72: block_time / stale_contribution_usd are computed, not null stubs.
+
+    Two holdings land in the same snapshot from different balance_scan runs
+    (different block_number/block_time pairs): the older one is "carried
+    forward" and its value contributes to stale_contribution_usd, while
+    balance_block_time tracks the newer, freshest block. The chain's block
+    time must be distinguishable from the server's own valuation_time (the
+    quote-refresh clock) — they are different clocks and must not collapse
+    to the same value.
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    fresh_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40, symbol="FRESH")
+    stale_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="STALE")
+
+    older_block_time = "2026-01-01T00:00:00+00:00"
+    newer_block_time = "2026-01-02T00:00:00+00:00"
+
+    snap_id = await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": fresh_asset_id,
+                "block_number": 20000100,
+                "block_time": newer_block_time,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            },
+            {
+                "wallet_id": wallet_id,
+                "asset_id": stale_asset_id,
+                "block_number": 20000000,
+                "block_time": older_block_time,
+                "price_usd": "50.0",
+                "value_usd": "50.0",
+            },
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["snapshot_id"] == snap_id
+
+    # Freshest block among the holdings wins at the envelope level.
+    assert data["balance_block"] == 20000100
+    assert data["balance_block_time"] == newer_block_time
+
+    # Only the older holding's value counts as carried-forward.
+    assert data["stale_contribution_usd"] == "50.000000000000000000"
+
+    holdings_by_asset = {h["asset_id"]: h for h in data["holdings"]}
+    assert holdings_by_asset[fresh_asset_id]["block_time"] == newer_block_time
+    assert holdings_by_asset[stale_asset_id]["block_time"] == older_block_time
+
+    # The chain's block time and the server's quote/valuation clock are
+    # independent — this must not be a copy of valuation_time.
+    assert data["balance_block_time"] != data["valuation_time"]
+
+
+@pytest.mark.integration
+async def test_portfolio_fully_fresh_snapshot_has_zero_stale_contribution(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """When every holding shares the latest block, nothing is carried forward."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "block_number": 20000000,
+                "block_time": "2026-01-01T00:00:00+00:00",
+                "price_usd": "10.0",
+                "value_usd": "10.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["stale_contribution_usd"] == "0.000000000000000000"
+    assert data["balance_block_time"] == "2026-01-01T00:00:00+00:00"
 
 
 @pytest.mark.integration

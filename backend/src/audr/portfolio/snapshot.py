@@ -46,6 +46,7 @@ class HoldingRow:
     raw_amount: int
     block_number: int
     decimals: int
+    block_time: datetime | None = None
     # True when the asset's most recent quote_refresh attempt asked the
     # provider about it and the provider didn't know it (AUD-361) — as
     # opposed to the asset simply never having been asked about.
@@ -111,9 +112,9 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
                 """
                 INSERT INTO valuation_line
                   (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,
-                   price_usd, value_usd, observation_id, created_at)
+                   block_time, price_usd, value_usd, observation_id, created_at)
                 VALUES
-                  (:id, :snap, :wallet, :asset, :raw, :block, :price, :value, :obs, :now)
+                  (:id, :snap, :wallet, :asset, :raw, :block, :block_time, :price, :value, :obs, :now)
                 """
             ),
             {
@@ -123,6 +124,7 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
                 "asset": str(holding.asset_id),
                 "raw": str(holding.raw_amount),
                 "block": holding.block_number,
+                "block_time": holding.block_time,
                 "price": str(price_decimal) if price_decimal is not None else None,
                 "value": format_decimal(value_decimal) if value_decimal is not None else None,
                 "obs": str(holding.observation_id),
@@ -219,6 +221,7 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
                 a.token_address,
                 bo.raw_amount::numeric,
                 bo.block_number,
+                bo.block_time,
                 COALESCE(a.decimals_override, a.decimals) AS effective_decimals,
                 bo.id  AS observation_id,
                 a.price_unavailable_since IS NOT NULL AS price_unavailable
@@ -240,12 +243,13 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
         HoldingRow(
             wallet_id=uuid.UUID(str(row[0])),
             asset_id=uuid.UUID(str(row[1])),
-            observation_id=uuid.UUID(str(row[6])),
+            observation_id=uuid.UUID(str(row[7])),
             token_address=row[2],
             raw_amount=int(row[3]),
             block_number=int(row[4]),
-            decimals=int(row[5]),
-            price_unavailable=bool(row[7]),
+            block_time=row[5],
+            decimals=int(row[6]),
+            price_unavailable=bool(row[8]),
         )
         for row in result
     ]

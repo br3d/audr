@@ -128,6 +128,13 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     ) as rpc:
         await rpc.validate_chain()
         block_number = await rpc.get_block_number()
+        try:
+            block_time = await rpc.get_block_time(block_number)
+        except Exception:
+            # Freshness reporting degrades to block-number-only; the scan itself
+            # must not fail just because the timestamp call didn't land.
+            logger.exception("block_time fetch failed block=%d run_id=%s", block_number, run_id)
+            block_time = None
 
         for wallet in active:
             addr = wallet.address
@@ -140,6 +147,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                     token_address=NATIVE_ETH_ADDRESS,
                     raw_amount=eth_balance,
                     block_number=block_number,
+                    block_time=block_time,
                 )
             except Exception:
                 logger.exception("eth balance failed wallet=%s run_id=%s", addr, run_id)
@@ -156,6 +164,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                         token_address=token_addr,
                         raw_amount=amount,
                         block_number=block_number,
+                        block_time=block_time,
                     )
                 except Exception:
                     logger.exception(
