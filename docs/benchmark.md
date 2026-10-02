@@ -103,7 +103,107 @@ $750,000,000 and spot-checks stay easy to verify by hand.
 
 ## Reference results
 
-<!-- RESULTS -->
+Produced **2026-10-02** by a single full-scale run:
+
+```bash
+docker compose -f compose.test.yaml --profile benchmark run --rm benchmark
+```
+
+### Reference host
+
+| | |
+|---|---|
+| Platform | `Linux-5.15.0-191-generic-x86_64-with-glibc2.41` |
+| CPU / RAM | 2 cores x86_64 / 11.7 GiB |
+| Postgres | 16.15 (ephemeral `db-test`, container-local volume) |
+| Python | 3.14.7, in container |
+| 1m/5m/15m load at start | **1.72 / 0.69 / 0.43** — 0.86 per CPU |
+| Benchmark peak RSS | 178 MiB |
+| Fixture seed time | 906 s (~15 min), of which 896 s is the 4.38M-row `valuation_line` insert |
+
+> **These are an upper bound, not a quiet-host figure.** 0.86 load per CPU is
+> above the 0.7 contention threshold, so the run self-flagged
+> `host.contended = true` and the latency numbers include scheduler delay from
+> other work on the box. They are published anyway because the margin settles
+> the question either way: the worst p95 is **20× inside** the SC-004 budget, so
+> no plausible amount of contention relief changes the verdict. A quiet-host
+> re-run would move these numbers down, never up. The catalog logical-call
+> report below is unaffected — it is an exact count, not a timing.
+>
+> That direction was checked rather than assumed: two confirmation runs against
+> the same seeded database (`--skip-seed --trials 20`) on a less loaded host
+> returned a dashboard p95 of **106–115 ms** versus the 149 ms published here,
+> and every history window came in at or below its table value. The published
+> figures are the conservative ones.
+
+### Warm read latency — SC-004
+
+10 discarded warm-ups then 100 timed trials per target, nearest-rank
+percentiles, in-process ASGI.
+
+| Target | p50 | p95 | p99 | max | Rows | Response |
+|---|---|---|---|---|---|---|
+| `GET /api/v1/portfolio` (dashboard) | 98.92 ms | **149.42 ms** | 163.94 ms | 195.50 ms | 500 | 297 KiB |
+| `GET /api/v1/history?period=24h` | 12.22 ms | **16.43 ms** | 18.18 ms | 21.94 ms | 24 | 6.4 KiB |
+| `GET /api/v1/history?period=30d` | 33.20 ms | **52.62 ms** | 63.80 ms | 98.29 ms | 720 | 190 KiB |
+| `GET /api/v1/history?period=1y` | 45.18 ms | **67.31 ms** | 77.22 ms | 91.61 ms | 501 | 132 KiB |
+| `GET /api/v1/history?period=all` | 64.80 ms | **130.76 ms** | 165.32 ms | 185.35 ms | 2,000 | 527 KiB |
+
+**SC-004: met.** The worst measured p95 is the dashboard at 149.42 ms against a
+3,000 ms budget — **20.1× of headroom**. The gate exited zero.
+
+Shape worth noting: the dashboard is the slowest target despite returning fewer
+rows than `history_all`, because it aggregates the newest snapshot across all
+500 held pairs, whereas history reads pre-aggregated `history_point` rows. The
+history windows scale with returned points, not with the 4.38M `valuation_line`
+rows behind them — `period=all` downsamples to 2,000 points, which is why it
+stays under the dashboard.
+
+### Catalog logical-call report
+
+Exact, network-free count for one full catalog-driven balance scan. Identical on
+every host.
+
+| Method | Logical calls |
+|---|---|
+| `eth_call` | 20,350 |
+| `eth_getBalance` | 50 |
+| `eth_blockNumber` | 1 |
+| `eth_chainId` | 1 |
+| **Total** | **20,402** |
+
+| | |
+|---|---|
+| Catalog snapshot | `vendored:3deceee47e622008`, 407 entries |
+| Active wallets | 50 |
+| Monitored pairs after discovery | 20,350 (407 × 50) |
+| Logical calls per wallet | 408 |
+| Transport requests, as implemented | 20,402 (one per logical call) |
+| Transport requests if batched at 50 | 409 |
+| Discovery persist time | 68.13 s |
+| Scan floor at configured 10 calls/s | **2,040 s (34 min)** |
+| Scan floor at `research.md` ceiling of 20 calls/s | 1,020 s (17 min) |
+
+The 34-minute floor is the headline number here, and it is a scan-design
+consequence, not a performance defect — see *Interpreting the logical-call
+report* below.
+
+### Fixture row counts as measured
+
+| Table | Rows |
+|---|---|
+| `valuation_line` | 4,380,000 |
+| `monitored_pair` | 20,350 |
+| `valuation_snapshot` | 8,760 |
+| `history_point` | 8,760 |
+| `asset` | 507 |
+| `catalog_entry` | 407 |
+| `wallet` | 50 |
+
+The report's own `host.git_commit` reads `unknown` because the benchmark
+container has no `.git`; the measured tree was `main` at `8fb74b6` plus this
+change's `scripts/benchmark.py` host-contention reporting, which touches only
+what the report *records*, never what it measures.
 
 ---
 

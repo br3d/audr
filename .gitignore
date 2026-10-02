@@ -48,3 +48,8 @@ test-results/
 
 # Local agent/assistant workspace config
 .claude/
+
+# Local benchmark run logs. A reference run takes tens of minutes, so it is
+# launched detached and its stdout is kept on disk across heartbeats; the
+# published numbers belong in docs/benchmark.md, not in a committed log.
+.bench-runs/

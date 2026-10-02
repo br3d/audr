@@ -101,6 +101,11 @@ _STUB_RESULTS: dict[str, Any] = {
 _TRANSPORT_BATCH_SIZE = 50
 _SPEC_RATE_CEILING_PER_S = 20.0
 
+# 1-minute load average per CPU above which measured latency is dominated by
+# host contention rather than by the application. 1.0 would be the textbook
+# line; 0.7 leaves headroom because the benchmark itself contributes load.
+CONTENTION_THRESHOLD = 0.7
+
 _LATENCY_TARGETS: list[tuple[str, str, dict[str, str]]] = [
     ("dashboard", "/api/v1/portfolio", {}),
     ("history_24h", "/api/v1/history", {"period": "24h"}),
@@ -179,8 +184,16 @@ def _mem_total_gib() -> float | None:
     return None
 
 
+def _loadavg() -> list[float] | None:
+    try:
+        parts = Path("/proc/loadavg").read_text().split()
+        return [float(parts[0]), float(parts[1]), float(parts[2])]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def _host_spec() -> dict[str, Any]:
-    return {
+    spec: dict[str, Any] = {
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor() or "unknown",
@@ -190,6 +203,17 @@ def _host_spec() -> dict[str, Any]:
         "in_container": Path("/.dockerenv").exists(),
         "git_commit": _git_commit(),
     }
+    # A latency number from a contended host measures the contention, not the
+    # application, so the report must not be readable without the load that
+    # produced it. The first two attempts at a reference run were made at
+    # load ~11 on 2 cores and nothing in the output said so.
+    load = _loadavg()
+    cpus = os.cpu_count() or 1
+    if load is not None:
+        spec["loadavg_1_5_15"] = load
+        spec["load_per_cpu_at_start"] = round(load[0] / cpus, 2)
+        spec["contended"] = load[0] / cpus > CONTENTION_THRESHOLD
+    return spec
 
 
 def _peak_rss_mib() -> float:
@@ -280,6 +304,7 @@ async def _measure_latency(
 ) -> dict[str, Any]:
     import httpx
     import sqlalchemy as sa
+
     from audr.api.app import app
     from audr.db import get_db
 
@@ -366,6 +391,7 @@ async def _measure_latency(
 
 async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> dict[str, Any]:
     import sqlalchemy as sa
+
     from audr.assets.catalog import import_catalog
     from audr.config import get_settings
     from audr.jobs import __main__ as jobs_main
@@ -636,6 +662,18 @@ def main() -> int:
     os.environ.setdefault("SECRET_KEY", _BENCH_SECRET_KEY)
 
     print(f"==> audr benchmark — db={args.db_url}")
+    start_spec = _host_spec()
+    if start_spec.get("contended"):
+        print(
+            f"==> WARNING: host is contended — 1m load {start_spec['loadavg_1_5_15'][0]}"
+            f" over {start_spec['cpu_count']} cpu"
+            f" ({start_spec['load_per_cpu_at_start']} per cpu, threshold"
+            f" {CONTENTION_THRESHOLD}).\n"
+            "    Latency numbers from this run measure host contention as much as the\n"
+            "    application. Treat them as an upper bound, do not publish them as\n"
+            "    reference figures, and re-run on a quiet host. The catalog\n"
+            "    logical-call report is unaffected: it is an exact count, not a timing."
+        )
     report = asyncio.run(_run(args))
 
     print("==> Summary")
@@ -660,6 +698,11 @@ def main() -> int:
         print("==> SC-004 FAILED")
         for violation in violations:
             print(f"  {violation}")
+        if report.get("host", {}).get("contended"):
+            print(
+                "    NOTE: this host was contended at start (see host.loadavg_1_5_15).\n"
+                "    Confirm on a quiet host before treating this as a real regression."
+            )
         return 1
     print(f"==> SC-004 budget met (all p95 <= {args.p95_budget_ms}ms)")
     return 0

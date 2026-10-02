@@ -129,7 +129,9 @@ With both fixed, two consecutive clean runs passed **20/20**, no flakes.
 
 ### Benchmark
 
-Run — see **`docs/benchmark.md`** for the reference-host results, the fixture identity and the methodology. Reproduce with:
+**Run 2026-10-02 at full reference scale (4,380,000 `valuation_line` rows) — SC-004 met.** Worst measured warm p95 is the dashboard at **149.42 ms** against the 3,000 ms budget (20.1× headroom); the slowest history window (`period=all`) is 130.76 ms. The same run reports **20,402 logical provider calls** for one full catalog-driven scan, a floor of 34 min at the configured 10 calls/s.
+
+The host carried 0.86 load per CPU at start, above the benchmark's 0.7 contention threshold, so those latency figures are recorded as an **upper bound** rather than clean-host numbers — the margin makes the SC-004 verdict safe regardless. See **`docs/benchmark.md`** for the full tables, the reference-host spec, the fixture identity and the methodology. Reproduce with:
 
 ```bash
 docker compose -f compose.test.yaml --profile benchmark run --rm benchmark
