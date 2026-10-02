@@ -229,6 +229,88 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 
 ---
 
+## Backups
+
+audr has no proprietary indexer — a lost `db_data` volume with no backup means
+every wallet, holding, and valuation is gone. `scripts/backup.sh` and
+`scripts/restore.sh` (AUD-390) close that gap, encrypted from the first run.
+See [security-at-rest.md](security-at-rest.md) for the threat model this sits
+inside.
+
+### Running a backup
+
+```bash
+./scripts/backup.sh                    # writes to ./backups
+./scripts/backup.sh /mnt/offsite        # or a configurable destination
+```
+
+This pipes `pg_dump` (run inside the `db` container via `docker compose exec`)
+straight through [`age`](https://github.com/FiloSottile/age) and writes
+`audr-YYYYMMDD-HHMMSS.sql.age` — there is never an intermediate plaintext dump
+on disk. If `age` is not installed, the script falls back to
+`gpg --symmetric` (AES-256) and writes `.sql.gpg` instead.
+
+**Zero-config first backup**: if no recipient key exists yet, the script
+generates one on first run — an `age` identity at `secrets/backup_key.txt`
+(mode `600`) — and prints its public key. You do not need to set up a key
+before taking your first backup. To use a recipient key you manage elsewhere
+(e.g. a hardware key, a key held outside this host) instead of the
+auto-generated one, set `AUDR_BACKUP_RECIPIENT` to its `age1...` public key.
+
+**`secrets/master_key.hex` is copied separately**, as `master_key-<ts>.hex`
+next to the dump, and is deliberately **not** bundled into the encrypted
+archive — the whole point of keeping the KEK outside the database is that
+compromising one does not compromise the other. Back this file up with the
+same discipline you'd apply to `secrets/master_key.hex` itself (see
+[Key-loss behavior](#key-loss-behavior)). **A dump without it is not fully
+recoverable**: the data restores fine, but every RPC URL and quote-provider
+API key stored in `integration.encrypted_blob` stays permanently unreadable.
+
+### Retention
+
+There is no automated pruning. Treat `age`-encrypted dumps as cheap (a few
+hours of data loss, at most) and keep a simple rotation — e.g. daily for a
+week, weekly for a month — pruned by a cron job or your backup storage's own
+lifecycle rules. Each `master_key-<ts>.hex` is identical as long as the key
+hasn't been rotated, so only the most recent one needs to be kept offsite,
+but it costs nothing to keep one per dump.
+
+### Restoring
+
+```bash
+./scripts/restore.sh audr-20261002-131755.sql.age
+# "already has N table(s) ... Refusing to restore" if the target DB is not empty
+./scripts/restore.sh --force audr-20261002-131755.sql.age
+```
+
+`restore.sh` decrypts with `secrets/backup_key.txt` (or `--identity FILE`) and
+restores into the `db` service via `docker compose exec`. It refuses to run
+against a database that already has tables unless `--force` is passed, in
+which case it drops and recreates the `public` schema first. If
+`secrets/master_key.hex` was lost along with the volume, restore the matching
+`master_key-<ts>.hex` to that path too — otherwise the restored
+`key_state` row won't unwrap and provider credentials stay unreadable even
+though the restore itself succeeds.
+
+Before restoring into a database that already has tables (e.g. a Compose
+project that was freshly recreated), make sure `migrate` has actually
+finished applying Alembic migrations — `docker compose up -d --wait db migrate`
+is **not** sufficient for this, since `migrate` has no healthcheck and
+`--wait` is satisfied as soon as the container is *running*, not once it
+*exits*. Use `docker compose run --rm migrate` (blocks until it exits) or
+just bring up `api` too and wait for *that* to become healthy, since `api`
+depends on `migrate`'s completion.
+
+### Restore drill
+
+A full backup → `docker compose down -v` (total volume loss) → restore → API
+health → data-intact cycle was run once against a throwaway Compose stack for
+AUD-390; see [verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390)
+for the steps and a race condition found (and worked around) in the drill
+itself.
+
+---
+
 ## Exports
 
 Portfolio and history export (JSON and CSV) is implemented. Both are available from the Account & Data page and directly:
