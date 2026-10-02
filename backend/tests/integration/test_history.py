@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.history_query import MAX_POINTS, query_history, get_snapshot_detail
+from audr.portfolio.snapshot import publish_valuation_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +278,114 @@ async def test_materialize_history_point_idempotent(
         )
     ).scalar()
     assert count == 1
+
+
+async def _insert_quote_set(
+    session: AsyncSession,
+    *,
+    asset_id: uuid.UUID,
+    price_usd: Decimal,
+    status: str = "complete",
+    offset_minutes: int = 0,
+) -> uuid.UUID:
+    qset_id = uuid.uuid4()
+    await session.execute(
+        sa.text(
+            "INSERT INTO quote_set (id, provider, fetched_at, status)"
+            " VALUES (:id, 'coingecko', now() + (:offset * interval '1 minute'), :status)"
+        ),
+        {"id": str(qset_id), "status": status, "offset": offset_minutes},
+    )
+    await session.execute(
+        sa.text(
+            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd)"
+            " VALUES (:id, :qset, :asset, :price)"
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "qset": str(qset_id),
+            "asset": str(asset_id),
+            "price": str(price_usd),
+        },
+    )
+    return qset_id
+
+
+async def test_publish_snapshot_later_verified_block_adds_history_point(
+    db_session: AsyncSession,
+) -> None:
+    """A later verified block with unchanged quantities carries a new observation
+    id, so the AUD-70 input key differs and publishing again adds a new history
+    point — the converse of test_materialize_history_point_idempotent's exact-retry
+    case above, which adds none."""
+    wallet_id = await _insert_wallet(db_session, "0xa001000000000000000000000000000000000a1")
+    asset_id = await _insert_asset(db_session, token_address="0xa002000000000000000000000000000000000a2")
+    await _insert_balance_observation(
+        db_session,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        block_number=100,
+        observed_at=datetime(2026, 9, 1, 0, 0, tzinfo=UTC),
+    )
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("10"))
+    await db_session.flush()
+
+    first = await publish_valuation_snapshot(db_session)
+    assert first.created is True
+    await materialize_history_point(db_session, snapshot_id=first.snapshot_id)
+
+    # Same quantity, later verified block: a new observation row, same raw_amount.
+    await _insert_balance_observation(
+        db_session,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        block_number=200,
+        observed_at=datetime(2026, 9, 1, 1, 0, tzinfo=UTC),
+    )
+    await db_session.flush()
+
+    second = await publish_valuation_snapshot(db_session)
+    assert second.created is True
+    assert second.snapshot_id != first.snapshot_id
+    await materialize_history_point(db_session, snapshot_id=second.snapshot_id)
+
+    count = (await db_session.execute(sa.text("SELECT COUNT(*) FROM history_point"))).scalar()
+    assert count == 2
+
+
+async def test_publish_snapshot_quote_only_change_adds_history_point(
+    db_session: AsyncSession,
+) -> None:
+    """Changing only the quote set (holdings/observation unchanged) still adds a
+    new snapshot and history point, since the AUD-70 input key also covers the
+    quote_set id the prices came from."""
+    wallet_id = await _insert_wallet(db_session, "0xa003000000000000000000000000000000000a3")
+    asset_id = await _insert_asset(db_session, token_address="0xa004000000000000000000000000000000000a4")
+    await _insert_balance_observation(
+        db_session,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        observed_at=datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
+    )
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("10"))
+    await db_session.flush()
+
+    first = await publish_valuation_snapshot(db_session)
+    assert first.created is True
+    await materialize_history_point(db_session, snapshot_id=first.snapshot_id)
+
+    # A fresh, strictly newer quote_set — holdings are unchanged, only the
+    # quote data's provenance (quote_set id) is new.
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("11"), offset_minutes=10)
+    await db_session.flush()
+
+    second = await publish_valuation_snapshot(db_session)
+    assert second.created is True
+    assert second.snapshot_id != first.snapshot_id
+    await materialize_history_point(db_session, snapshot_id=second.snapshot_id)
+
+    count = (await db_session.execute(sa.text("SELECT COUNT(*) FROM history_point"))).scalar()
+    assert count == 2
 
 
 # ---------------------------------------------------------------------------
