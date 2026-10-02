@@ -101,9 +101,14 @@ export function buildChartData(points: HistoryPoint[]): ChartDatum[] {
     .sort((a, b) => a.snapshotted_at.localeCompare(b.snapshotted_at))
     .map((p) => ({
       snapshotted_at: p.snapshotted_at,
-      // A gap point breaks the line (null) rather than drawing a reference marker.
+      // Only a genuinely valueless entry breaks the line (null). Synthetic gap
+      // markers carry total_value_usd === null, so they break it here.
+      // `has_gap` must NOT null the value: it is a data-quality annotation
+      // meaning "some asset values in this snapshot were unknown", and such a
+      // point still has a valid total. Treating it as a break blanked the whole
+      // chart whenever every snapshot was partial (AUD-371).
       // parseFloat is acceptable here: chart rendering does not require decimal precision.
-      value: p.has_gap || p.total_value_usd === null ? null : parseFloat(p.total_value_usd),
+      value: p.total_value_usd === null ? null : parseFloat(p.total_value_usd),
       has_gap: p.has_gap,
       quality: p.quality,
       is_canonical: p.is_canonical,
@@ -123,7 +128,10 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
   }
 
   const data = buildChartData(points)
-  const hasGaps = data.some((d) => d.has_gap)
+  // Driven by real breaks in the drawn line, not by the has_gap annotation —
+  // otherwise the legend promises breaks that aren't there.
+  const hasLineBreaks = data.some((d) => d.value === null)
+  const hasPartialPoints = data.some((d) => d.has_gap && d.value !== null)
   const hasInvalidated = data.some((d) => !d.is_canonical && d.value !== null)
   const values = data
     .map((d) => d.value)
@@ -182,9 +190,15 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
           />
           Portfolio value (USD)
         </span>
-        {hasGaps && (
+        {hasLineBreaks && (
           <span className="history-chart-legend-gap" role="note">
             Breaks in the line mark gaps — periods with missing data
+          </span>
+        )}
+        {hasPartialPoints && (
+          <span className="history-chart-legend-gap" role="note">
+            Some points are partial — a few asset values were unknown when the
+            snapshot was taken, so the total is an underestimate
           </span>
         )}
         {hasInvalidated && (

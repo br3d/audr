@@ -10,7 +10,7 @@ const POINT_OK: HistoryPoint = {
   snapshot_id: 'abc-ok',
   snapshotted_at: '2026-01-15T12:00:00Z',
   total_value_usd: '5000.00',
-  quality: 'ok',
+  quality: 'complete',
   included_wallet_count: 1,
   included_asset_count: 1,
   has_gap: false,
@@ -18,11 +18,26 @@ const POINT_OK: HistoryPoint = {
   is_gap_marker: false,
 }
 
+// A synthetic gap marker: no snapshot, no value. This is what earns the "Gap"
+// badge — not merely has_gap, which only annotates data quality.
 const POINT_GAP: HistoryPoint = {
-  snapshot_id: 'abc-gap',
+  snapshot_id: null,
   snapshotted_at: '2026-01-16T12:00:00Z',
-  total_value_usd: '4800.50',
+  total_value_usd: null,
   quality: 'stale',
+  included_wallet_count: 1,
+  included_asset_count: 1,
+  has_gap: true,
+  is_canonical: true,
+  is_gap_marker: true,
+}
+
+// A real snapshot with a usable total whose inputs were partly unknown.
+const POINT_PARTIAL: HistoryPoint = {
+  snapshot_id: 'abc-partial',
+  snapshotted_at: '2026-01-16T18:00:00Z',
+  total_value_usd: '4800.50',
+  quality: 'partial',
   included_wallet_count: 1,
   included_asset_count: 1,
   has_gap: true,
@@ -34,7 +49,7 @@ const POINT_INCOMPLETE: HistoryPoint = {
   snapshot_id: 'abc-incomplete',
   snapshotted_at: '2026-01-17T12:00:00Z',
   total_value_usd: null,
-  quality: 'incomplete',
+  quality: 'gaps',
   included_wallet_count: 1,
   included_asset_count: 1,
   has_gap: false,
@@ -46,7 +61,7 @@ const POINT_INVALIDATED: HistoryPoint = {
   snapshot_id: 'abc-invalidated',
   snapshotted_at: '2026-01-18T12:00:00Z',
   total_value_usd: '4900.00',
-  quality: 'ok',
+  quality: 'complete',
   included_wallet_count: 1,
   included_asset_count: 1,
   has_gap: false,
@@ -131,19 +146,28 @@ describe('HistoryTable', () => {
     await unmount(container, root)
   })
 
-  it('shows "Incomplete" quality label', async () => {
+  it('shows "Gaps" quality label', async () => {
     const { container, root } = mount(
       React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }),
     )
-    expect(container.textContent).toContain('Incomplete')
+    expect(container.textContent).toContain('Gaps')
     await unmount(container, root)
   })
 
-  it('shows "OK" quality label for ok quality', async () => {
+  it('shows "Complete" quality label for complete quality', async () => {
     const { container, root } = mount(
       React.createElement(HistoryTable, { points: [POINT_OK] }),
     )
-    expect(container.textContent).toContain('OK')
+    expect(container.textContent).toContain('Complete')
+    await unmount(container, root)
+  })
+
+  it('shows "Partial" and no gap badge for a has_gap point that still has a value', async () => {
+    const { container, root } = mount(
+      React.createElement(HistoryTable, { points: [POINT_PARTIAL] }),
+    )
+    expect(container.textContent).toContain('Partial')
+    expect(container.querySelector('[data-testid="gap-marker"]')).toBeNull()
     await unmount(container, root)
   })
 

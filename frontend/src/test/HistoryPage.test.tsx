@@ -36,7 +36,7 @@ function makePoint(overrides: Partial<HistoryPoint> = {}): HistoryPoint {
     snapshot_id: 'snap-1',
     snapshotted_at: '2026-01-15T12:00:00Z',
     total_value_usd: '5000.00',
-    quality: 'ok',
+    quality: 'complete',
     included_wallet_count: 1,
     included_asset_count: 1,
     has_gap: false,
