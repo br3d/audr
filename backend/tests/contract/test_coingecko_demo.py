@@ -119,6 +119,41 @@ async def test_5xx_error_raises_coingecko_error() -> None:
 
 
 @pytest.mark.contract
+async def test_401_unauthorized_raises_coingecko_error() -> None:
+    """HTTP 401 (bad/expired API key) raises CoinGeckoError, not RateLimitError."""
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/simple/price").mock(return_value=Response(401))
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        with pytest.raises(CoinGeckoError) as exc_info:
+            await provider.get_eth_price()
+        await provider.close()
+
+    assert exc_info.value.status_code == 401
+    assert not isinstance(exc_info.value, RateLimitError)
+
+
+@pytest.mark.contract
+async def test_get_token_prices_request_carries_no_wallet_data() -> None:
+    """The outgoing request identifies tokens only — never a wallet/account address.
+
+    The quote adapter must only ever learn which *tokens* a price is needed
+    for, not which wallet holds them — wallet addresses are never part of
+    the CoinGecko request shape.
+    """
+    with respx.mock() as mock:
+        route = mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            return_value=Response(200, json=_token_price_response(_USDC_ADDR, 1.0))
+        )
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        await provider.get_token_prices([_USDC_ADDR])
+        await provider.close()
+
+    sent_params = dict(route.calls.last.request.url.params)
+    assert set(sent_params) == {"contract_addresses", "vs_currencies", "precision"}
+    assert sent_params["contract_addresses"] == _USDC_ADDR.lower()
+
+
+@pytest.mark.contract
 async def test_missing_coin_id_raises_coingecko_error() -> None:
     """Response missing the expected coin_id raises CoinGeckoError."""
     with respx.mock() as mock:
