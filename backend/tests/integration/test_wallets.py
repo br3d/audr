@@ -54,6 +54,11 @@ async def _clean_tables(db_session_factory: async_sessionmaker[AsyncSession]) ->
             # Wallet-referencing rows first — the delete tests seed some, and a
             # failed assertion there would otherwise wedge every later test on
             # the wallet foreign keys.
+            # valuation_line references balance_observation as well as wallet,
+            # so it has to be cleared first (AUD-394).
+            await session.execute(text("DELETE FROM valuation_line"))
+            await session.execute(text("DELETE FROM history_point"))
+            await session.execute(text("DELETE FROM valuation_snapshot"))
             await session.execute(text("DELETE FROM balance_observation"))
             await session.execute(text("DELETE FROM monitored_pair"))
             await session.execute(text("DELETE FROM wallet"))
@@ -395,6 +400,166 @@ async def test_delete_wallet_also_removes_its_derived_records(
                 {"wid": wallet_id},
             )
             assert left.scalar() == 0, table
+
+
+@pytest.mark.integration
+async def test_delete_wallet_with_valued_observation(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A wallet that was actually valued must still delete (AUD-394).
+
+    valuation_line carries an observation_id FK into balance_observation, so a
+    wallet whose balances made it into a published snapshot used to fail the
+    delete with a ForeignKeyViolation — which is what the founder hit on a real
+    address.  Every wallet on the live instance is in this state, so this is the
+    realistic case, not an edge case.
+    """
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            asset_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO asset (token_address, symbol, name, decimals,"
+                        " source)"
+                        " VALUES (:addr, 'TKN', 'Token', 18, 'manual')"
+                        " RETURNING id"
+                    ),
+                    {"addr": _TOKEN_ADDR},
+                )
+            ).scalar_one()
+            observation_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO balance_observation (wallet_id, asset_id,"
+                        " raw_amount, block_number)"
+                        " VALUES (:wid, :aid, 1, 1) RETURNING id"
+                    ),
+                    {"wid": wallet_id, "aid": asset_id},
+                )
+            ).scalar_one()
+            snapshot_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO valuation_snapshot (quality, input_key)"
+                        " VALUES ('complete', :key) RETURNING id"
+                    ),
+                    {"key": f"aud394-{wallet_id}"},
+                )
+            ).scalar_one()
+            await session.execute(
+                text(
+                    "INSERT INTO valuation_line (snapshot_id, wallet_id, asset_id,"
+                    " observation_id, raw_amount, block_number)"
+                    " VALUES (:sid, :wid, :aid, :oid, 1, 1)"
+                ),
+                {
+                    "sid": snapshot_id,
+                    "wid": wallet_id,
+                    "aid": asset_id,
+                    "oid": observation_id,
+                },
+            )
+
+    r = await http_client.delete(
+        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 200, r.text
+    deleted = r.json()["deleted"]
+    assert deleted["valuation_line"] == 1
+    assert deleted["balance_observation"] == 1
+    # The snapshot held only this wallet's line, so it goes too — otherwise the
+    # history series would keep reporting a total that included this address.
+    assert deleted["valuation_snapshot"] == 1
+
+    async with db_session_factory() as session:
+        for table in ("valuation_line", "balance_observation"):
+            left = await session.execute(
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                {"wid": wallet_id},
+            )
+            assert left.scalar() == 0, table
+        snapshots_left = await session.execute(
+            text("SELECT count(*) FROM valuation_snapshot WHERE id = :sid"),
+            {"sid": snapshot_id},
+        )
+        assert snapshots_left.scalar() == 0
+
+
+@pytest.mark.integration
+async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A snapshot that still carries another wallet's line must survive."""
+    csrf = await _setup_and_get_csrf(http_client)
+    doomed_id = (await _add_wallet(http_client, csrf)).json()["id"]
+    keeper_id = (
+        await _add_wallet(http_client, csrf, address=_ADDR_B)
+    ).json()["id"]
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            asset_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO asset (token_address, symbol, name, decimals,"
+                        " source)"
+                        " VALUES (:addr, 'TKN', 'Token', 18, 'manual')"
+                        " RETURNING id"
+                    ),
+                    {"addr": _TOKEN_ADDR},
+                )
+            ).scalar_one()
+            snapshot_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO valuation_snapshot (quality, input_key)"
+                        " VALUES ('complete', :key) RETURNING id"
+                    ),
+                    {"key": f"aud394-shared-{doomed_id}"},
+                )
+            ).scalar_one()
+            for wid in (doomed_id, keeper_id):
+                observation_id = (
+                    await session.execute(
+                        text(
+                            "INSERT INTO balance_observation (wallet_id, asset_id,"
+                            " raw_amount, block_number)"
+                            " VALUES (:wid, :aid, 1, 1) RETURNING id"
+                        ),
+                        {"wid": wid, "aid": asset_id},
+                    )
+                ).scalar_one()
+                await session.execute(
+                    text(
+                        "INSERT INTO valuation_line (snapshot_id, wallet_id,"
+                        " asset_id, observation_id, raw_amount, block_number)"
+                        " VALUES (:sid, :wid, :aid, :oid, 1, 1)"
+                    ),
+                    {
+                        "sid": snapshot_id,
+                        "wid": wid,
+                        "aid": asset_id,
+                        "oid": observation_id,
+                    },
+                )
+
+    r = await http_client.delete(
+        f"{_WALLETS_URL}/{doomed_id}", headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"]["valuation_snapshot"] == 0
+
+    async with db_session_factory() as session:
+        surviving = await session.execute(
+            text("SELECT wallet_id FROM valuation_line WHERE snapshot_id = :sid"),
+            {"sid": snapshot_id},
+        )
+        assert [str(w) for w in surviving.scalars()] == [keeper_id]
 
 
 @pytest.mark.integration
