@@ -163,7 +163,8 @@ describe('App routing and auth guard', () => {
     expect(container.textContent).toContain('Wallets')
     expect(container.textContent).toContain('Assets')
     expect(container.textContent).toContain('Connections')
-    expect(container.textContent).toContain('Sign out')
+    // "Sign out" lives in the user menu now; it opens from the avatar button in the topbar.
+    expect(container.querySelector('[aria-label="Account menu"]')).toBeTruthy()
   })
 
   it('switches to Wallets page on tab click', async () => {
@@ -276,6 +277,10 @@ describe('App routing and auth guard', () => {
     })
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
 
+    const avatarBtn = container.querySelector('[aria-label="Account menu"]') as HTMLButtonElement
+    await act(async () => {
+      avatarBtn.click()
+    })
     const signOutBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Sign out',
     )!

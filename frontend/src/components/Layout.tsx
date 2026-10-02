@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconGrid,
@@ -78,6 +78,82 @@ const PAGE_TITLES: Record<MainPage, string> = {
   assistant: 'Assistant',
 }
 
+// ---- User menu ----
+
+interface UserMenuProps {
+  onOpenAccount: () => void
+  onSignOut: () => void
+}
+
+function UserMenu({ onOpenAccount, onSignOut }: UserMenuProps) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+
+    function handlePointerDown(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="user-menu" ref={rootRef}>
+      <button
+        type="button"
+        className="avatar-button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account menu"
+      >
+        O
+      </button>
+      {open && (
+        <div className="user-menu-dropdown" role="menu">
+          <button
+            type="button"
+            className="user-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              onOpenAccount()
+            }}
+          >
+            <IconSettings className="nav-item-icon" />
+            <span>Account &amp; Data</span>
+          </button>
+          <button
+            type="button"
+            className="user-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              onSignOut()
+            }}
+          >
+            <IconSignOut className="nav-item-icon" />
+            <span>Sign out</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---- Layout component ----
 
 interface LayoutProps {
@@ -113,10 +189,12 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
     <ThemeCtx.Provider value={{ theme, toggle }}>
       <div className="app-shell">
         <aside className="sidebar" role="navigation" aria-label="Main navigation">
-          <div className="sidebar-logo">
-            <div className="sidebar-logo-mark">A</div>
-            <span className="sidebar-logo-name">audr</span>
+          <div className="space-card">
+            <span className="space-card-name">Personal portfolio</span>
+            <span className="space-card-type">Local space</span>
           </div>
+
+          <span className="nav-section-label">Navigation</span>
 
           <nav className="sidebar-nav">
             {NAV_ITEMS.map(({ page: p, label, Icon }) => (
@@ -134,14 +212,10 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
           </nav>
 
           <div className="sidebar-footer">
-            <button
-              type="button"
-              className="nav-item"
-              onClick={onSignOut}
-            >
-              <IconSignOut className="nav-item-icon" />
-              <span>Sign out</span>
-            </button>
+            <span className="sidebar-status">
+              <span className="status-dot status-dot-ok" />
+              Self-hosted · your data stays yours
+            </span>
           </div>
         </aside>
 
@@ -158,6 +232,7 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
               >
                 {theme === 'dark' ? <IconSun width={17} height={17} /> : <IconMoon width={17} height={17} />}
               </button>
+              <UserMenu onOpenAccount={() => setPage('account')} onSignOut={onSignOut} />
             </div>
           </header>
 
