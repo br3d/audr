@@ -237,3 +237,79 @@ Expected response shape:
    points.  A portfolio with gaps (e.g., downtime) will show discontinuities
    in the chart rather than interpolated values.  This is intentional: unknown
    history is never coerced to zero or a last-known value.
+
+---
+
+# Verification: Encrypted backup/restore drill (AUD-390)
+
+**Date**: 2026-10-02
+**Branch**: feat/aud-390-encrypted-backups
+**Author**: Backend Developer
+
+## Scope
+
+AUD-390 added `scripts/backup.sh` and `scripts/restore.sh` (encrypted Postgres
+dumps via `age`, with a `gpg --symmetric` fallback). This drill proves the
+full cycle — backup, total data loss, restore — actually works, per the
+acceptance criteria ("a restore drill is actually executed once against a
+throwaway compose stack").
+
+## Setup
+
+A throwaway Compose project (`audr-backup-drill`, isolated secrets dir, own
+named volume, own Docker network — no port or state shared with the real
+`audr` project or any other running stack) was built from this repo's
+`Dockerfile` (`db`, `migrate`, `api` services only; `web`/`worker` are not
+needed to verify the data path). The owner was set up and one wallet added
+through the real HTTP API (`POST /api/v1/setup`, `POST /api/v1/wallets`) —
+not a raw SQL insert — so the drill exercises the same Argon2 password hash,
+session/CSRF plumbing, and envelope-encrypted `key_state` row that a real
+deployment would have.
+
+## Steps and results
+
+| Step | Command | Result |
+|---|---|---|
+| 1. Seed data | `setup` + `wallets` via API | Owner created, wallet `drill-wallet` (`0xd8dA6...a96045`) added |
+| 2. Backup | `scripts/backup.sh` | Generated `secrets/backup_key.txt` (age identity) on first run, printed the public key, wrote `audr-<ts>.sql.age`, copied `master_key.hex` to a **separate** file |
+| 3. Confirm ciphertext | `head -c200 *.sql.age` | Binary `age-encryption.org/v1` header — not readable SQL |
+| 4. Confirm decryptable | `age -d -i backup_key.txt < dump` | Produces the plaintext `pg_dump` SQL header |
+| 5. Destroy data | `docker compose down -v` | Named volume removed — full data loss, not just a schema wipe |
+| 6. Restore refusal | `scripts/restore.sh dump.sql.age` (fresh DB, schema already migrated, no `--force`) | **Refused**: `"already has 32 table(s) ... Refusing to restore"`, exit 1 |
+| 7. Forced restore | `scripts/restore.sh --force dump.sql.age` | Dropped/recreated `public` schema, restored cleanly with zero errors |
+| 8. API healthy | `GET /health/live`, `GET /health/ready` | `{"status":"ok"}`; readiness reports `"key":"ok"` — the restored `key_state` row unwraps correctly under the unchanged `SECRET_KEY` |
+| 9. Data intact | `POST /auth/login` (original password) + `GET /wallets` | Login succeeds; the same wallet (same id, address, label, `created_at`) is present |
+| 10. gpg fallback | `backup.sh` with `age` removed from `PATH` | Falls back to `gpg --symmetric --cipher-algo AES256`, writes `.sql.gpg`, round-trips correctly with `gpg --decrypt` |
+
+## Bug found and fixed during the drill
+
+The first restore attempt (step 6) initially **did not refuse** on a non-empty
+database — `scripts/restore.sh` read `0` tables immediately after
+`docker compose up -d --wait db migrate` returned, even though `migrate` had
+already applied all 16 Alembic revisions. Root cause: for a one-shot service
+with `restart: "no"` and no `healthcheck`, `docker compose up --wait` is
+satisfied once the container is **running**, not once it **exits** — so the
+wait returned before `alembic upgrade head` had committed. This is a drill
+artifact, not a bug in `backup.sh`/`restore.sh` themselves (in real use,
+`migrate` always runs to completion before `api`/`worker` start, via
+`depends_on: condition: service_completed_successfully`). Re-running the
+drill with `docker compose run --rm migrate` (which blocks until the
+container exits) instead of `up -d --wait` eliminated the race, and the
+refuse-without-`--force` check then worked exactly as intended. Noted here so
+nobody re-discovers this the hard way while scripting a restore runbook.
+
+## Cleanup
+
+`docker compose down -v --rmi local` removed all drill containers, the named
+volume, and the two locally-built images. The drill ran entirely under
+`$PAPERCLIP_RUN_SCRATCH_DIR` with its own `secrets/` directory — the repo's
+real `secrets/db_password.txt` / `master_key.hex` were never read or written
+by the drill.
+
+## Conclusion
+
+The encrypted backup → total volume loss → encrypted restore path is proven
+end to end, including the safety refusal and the `gpg` fallback. See
+[operations.md#backups](operations.md#backups) for the operator-facing
+procedure and [security-at-rest.md](security-at-rest.md#e-encrypted-backups-separate--and-we-have-no-backup-path-at-all)
+for why this closes item 2 of the AUD-389 recommendation.

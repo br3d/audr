@@ -127,12 +127,21 @@ path should be defined *and* encrypted in one go — `pg_dump` piped through
 `age` or `gpg`, with the recipient key held to the same discipline as
 `master_key.hex`.
 
+**Update (AUD-390, done):** `scripts/backup.sh` / `scripts/restore.sh` now
+implement exactly this — `pg_dump` piped through `age` (or `gpg --symmetric`
+if `age` is unavailable), never touching disk unencrypted, with a
+zero-config recipient key generated on first run and `master_key.hex`
+captured in a separate, un-bundled file. See
+[operations.md#backups](operations.md#backups) for the operator procedure and
+[verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390)
+for the executed restore drill.
+
 ## 4. Recommendation
 
 | # | Action | Layer | Effort | Owner |
 | --- | --- | --- | --- | --- |
 | 1 | Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance | A | S | infra |
-| 2 | Define a backup procedure at all, with `pg_dump` output encrypted by default | E | S | infra |
+| 2 | ~~Define a backup procedure at all, with `pg_dump` output encrypted by default~~ — **done, AUD-390** | E | S | infra |
 | 3 | Extend envelope encryption to wallet labels/addresses + manual-asset notes, with an HMAC blind index for address lookup | D | M | backend |
 | 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on a product decision**, see §5 | — | L | founder |
