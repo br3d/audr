@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     cmc_rate_limit_per_second: float = 0.5
     cmc_rate_limit_burst: int = 1
 
+    # Keyless asset icon cache (AUD-385): the worker resolves a token logo
+    # once from Trust Wallet's GitHub asset repo or, failing that, CoinGecko's
+    # keyless contract-lookup endpoint, and caches it in `asset_icon` so a
+    # self-hosted install never leaks wallet holdings to a third-party CDN on
+    # every dashboard render. An operator who does not want the backend
+    # reaching out to GitHub/CoinGecko at all can turn this off; the UI then
+    # degrades to generated monograms only.
+    asset_icons_remote_fetch: bool = True
+
+    # Rate limit for the keyless CoinGecko contract-lookup fallback used by
+    # the asset icon cache (AUD-385) — mirrors cmc_rate_limit_per_second since
+    # both hit unauthenticated CoinGecko/CoinMarketCap endpoints with tight,
+    # unpublished per-IP quotas.
+    asset_icon_cg_rate_limit_per_second: float = 0.5
+    asset_icon_cg_rate_limit_burst: int = 1
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:

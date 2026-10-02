@@ -62,6 +62,7 @@ class HoldingOut(BaseModel):
     block_time: str | None
     observed_at: str | None
     last_success_at: str | None
+    logo_url: str | None
 
 
 class AllocationItemOut(BaseModel):
@@ -69,6 +70,7 @@ class AllocationItemOut(BaseModel):
     symbol: str
     value_usd: str
     percentage: str
+    logo_url: str | None = None
 
 
 class PortfolioResponseOut(BaseModel):
@@ -118,6 +120,17 @@ def _map_quality(quality_str: str, *, total_is_null: bool) -> PortfolioQualityOu
         verification_pending=False,
         invalidated=False,
     )
+
+
+def _icon_url(asset_id: str) -> str:
+    """Build the icon proxy URL for *asset_id* (AUD-385).
+
+    Emitted unconditionally — the icon cache is populated out-of-band by
+    asset_icon_refresh, and the frontend's AssetEmblem already falls back to
+    a monogram on a 404/image error, so there is no need to check
+    resolvability here and no extra latency on this endpoint.
+    """
+    return f"/api/v1/assets/{asset_id}/icon"
 
 
 _EMPTY_QUALITY = PortfolioQualityOut(
@@ -315,6 +328,7 @@ async def get_portfolio(
                 block_time=block_time_str,
                 observed_at=observed_str,
                 last_success_at=observed_str,
+                logo_url=_icon_url(str(line["asset_id"])),
             )
         )
 
@@ -351,6 +365,7 @@ async def get_portfolio(
                             symbol=symbol,
                             value_usd=holding.value_usd,
                             percentage=str(pct),
+                            logo_url=_icon_url(holding.asset_id),
                         )
                     )
                 except Exception:

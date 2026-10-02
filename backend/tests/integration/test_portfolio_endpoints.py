@@ -254,6 +254,11 @@ async def test_portfolio_returns_snapshot_with_holdings(
     assert alloc["symbol"] == "WETH"
     assert alloc["percentage"] == "100.00"
 
+    # Icon proxy URL (AUD-385): emitted unconditionally, regardless of
+    # whether the icon cache actually has an entry for this asset yet.
+    assert holding["logo_url"] == f"/api/v1/assets/{asset_id}/icon"
+    assert alloc["logo_url"] == f"/api/v1/assets/{asset_id}/icon"
+
 
 @pytest.mark.integration
 async def test_portfolio_partial_quality_sets_incomplete_flag(

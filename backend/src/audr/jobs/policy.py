@@ -106,6 +106,24 @@ def get_shared_cmc_rate_limiter() -> RateLimiter:
     )
 
 
+@lru_cache
+def get_shared_asset_icon_rate_limiter() -> RateLimiter:
+    """Process-wide rate limiter for the keyless CoinGecko icon fallback (AUD-385).
+
+    The contract-lookup endpoint this backs is unauthenticated and enforces
+    the same kind of tight, unpublished per-IP quota as the CoinMarketCap
+    limiter above — one instance per worker process, shared by every
+    asset_icon_refresh fetch.
+    """
+    from audr.config import get_settings
+
+    settings = get_settings()
+    return RateLimiter(
+        calls_per_second=settings.asset_icon_cg_rate_limit_per_second,
+        burst=settings.asset_icon_cg_rate_limit_burst,
+    )
+
+
 class CancellationCheckpoint:
     """Async context manager that raises asyncio.CancelledError at safe points."""
 

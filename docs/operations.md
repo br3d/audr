@@ -85,6 +85,22 @@ Consequences for operators:
   limits. A sustained 402 on the configured provider is worth fixing, not
   living on.
 
+### Keyless asset icon cache (AUD-385)
+
+Token logos are resolved the same keyless-by-default way as RPC and quotes:
+the worker tries Trust Wallet's public GitHub asset repo first, then falls
+back to CoinGecko's keyless contract-lookup endpoint, and caches whichever
+image it finds in the `asset_icon` table. `GET /assets/{id}/icon` only ever
+serves what is already cached — the frontend falls back to a generated
+monogram for anything not yet resolved, so a cold cache never slows down the
+dashboard.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `ASSET_ICONS_REMOTE_FETCH` | `true` | Set to `false` to stop the backend from ever contacting GitHub or CoinGecko for icons; the UI then shows monograms only. |
+| `ASSET_ICON_CG_RATE_LIMIT_PER_SECOND` | `0.5` | Request budget for the keyless CoinGecko fallback (shared with the CoinMarketCap quote limiter's caution — this endpoint has a tight, unpublished per-IP quota too). |
+| `ASSET_ICON_CG_RATE_LIMIT_BURST` | `1` | Burst allowance for the same limiter. |
+
 ### Subsequent starts
 
 ```bash
