@@ -1,34 +1,36 @@
 # Containers: what each one is for, and whether we need it
 
 Written for AUD-386 — "мне не нравится, что у нас такое большое количество
-контейнеров". The short answer: the number is smaller than it looks, one
-service was genuinely redundant and has been removed, and one more could go if
-we accept a trade-off that is spelled out at the bottom.
+контейнеров". Two services have since been removed: `init` (folded into
+`migrate`, AUD-386) and `web` (folded into `api`, AUD-388). What is left is
+three running containers, and the one remaining consolidation candidate is
+argued against at the bottom.
 
 ## What `compose.yaml` defines
 
-Five services, but only **four of them are containers that keep running**.
+Four services, but only **three of them are containers that keep running**.
 
 | Service   | Image            | Lifetime        | Why it exists |
 |-----------|------------------|-----------------|---------------|
 | `db`      | `postgres:16-alpine` | long-running | The database. Holds wallets, balances, the asset catalog, price history, job schedules, and the wrapped master key. |
 | `migrate` | `audr-backend`   | **one-shot**    | Bootstrap: `alembic upgrade head`, then `audr.operations.init_key`. Exits 0 and stays exited. |
-| `api`     | `audr-backend`   | long-running    | The FastAPI HTTP API (`uvicorn`) on port 8000. Serves `/api/*` and `/health/*`. Not published to the host — only `web` talks to it. |
+| `api`     | `audr-backend`   | long-running    | The FastAPI app (`uvicorn`). Serves `/api/*`, `/health/*`, **and the built SPA**. The only service with a published port: `80:8000`. |
 | `worker`  | `audr-backend`   | long-running    | The background job runner (`python -m audr.jobs`): token discovery, balance scans, quote refresh, on-chain event indexing, news refresh, RPC/quote validation. |
-| `web`     | `nginx:1.27-alpine` | long-running | Serves the built SPA on port 80 and reverse-proxies `/api/*` and `/health/*` to `api`. This is the only service with a published port. |
 
-So `docker ps` on a healthy deployment shows **four** containers, not five:
+So `docker ps` on a healthy deployment shows **three** containers, plus
+`migrate` sitting in `Exited (0)`:
 
 ```
-audr-web-1      audr-frontend   Up
 audr-worker-1   audr-backend    Up
 audr-api-1      audr-backend    Up (healthy)
 audr-db-1       postgres:16     Up (healthy)
+audr-migrate-1  audr-backend    Exited (0)
 ```
 
-Note also that three of the five services share **one image** (`audr-backend`) —
-they are the same build invoked with three different commands. The image is
-pulled and stored once.
+Note also that three of the four services share **one image** (`audr-backend`)
+— they are the same build invoked with three different commands. The image is
+pulled and stored once. There is one application image in the registry now; the
+second `audr-frontend` image went away with `web`.
 
 ## Why `migrate` is a separate service rather than part of `api` startup
 
@@ -92,35 +94,60 @@ them:
    not as a separate process. That is why they have no `worker`.
 
 A fair comparison is therefore: rotki 1 container because it is SQLite-backed
-and single-process; audr 4 because it is Postgres-backed with a separate job
-runner and a separate static-asset server.
+and single-process; audr 3 because it is Postgres-backed with a separate job
+runner. The static-asset server that used to make it 4 is gone — see below.
 
-## Could we go lower than four?
+## What was removed in AUD-388
 
-Two candidates, in order of how easy they are.
+The `web` container (nginx) served the built SPA on port 80 and
+reverse-proxied `/api/*` and `/health/*` to `api`. It is gone, and the API
+serves the SPA itself. This is now exactly rotki's shape, minus the database
+and worker split.
 
-### `web` → fold into `api` (4 containers → 3)
+The change was cheap because it was already half-built: the `runtime` stage of
+the `Dockerfile` had always copied the built frontend into `/app/static`, and
+nothing read it. We were building the same SPA bundle into two images and
+shipping it twice, with only the nginx copy ever served. That `COPY` is now
+load-bearing and the nginx image is deleted.
 
-This is the cheap one, and it is already half-built: the `runtime` stage of the
-`Dockerfile` **already copies the built frontend into `/app/static`**:
+The implementation is `backend/src/audr/api/spa.py`, mounted last in
+`create_app()` so every API router matches first. Two behaviours nginx provided
+had to be reproduced deliberately, and both have regression tests in
+`backend/tests/unit/test_spa_static.py`:
 
-```dockerfile
-COPY --from=frontend-builder /app/dist/ /app/static/
-```
+- **Index fallback.** nginx had `try_files $uri $uri/ /index.html`, so a hard
+  refresh on a client-side route like `/folio` returned the shell. Starlette's
+  `StaticFiles` 404s there even with `html=True`, so the fallback is explicit.
+- **Not swallowing unknown API paths.** nginx matched `^/(api|health)/` before
+  the SPA fallback. A Starlette `Mount("/")` is a catch-all for everything no
+  earlier route claimed, so `/api` and `/health` are reserved prefixes that
+  404 instead of returning `index.html`. Without that guard a mistyped
+  endpoint would answer `200 text/html` and the SPA would try to parse it.
 
-Nothing mounts it. So today we build the same SPA bundle into two images and
-ship it twice, and only the nginx copy is ever served. Either that `COPY` is
-dead weight and should go, or it is the consolidation path and nginx should go.
+A missing bundle under `assets/` deliberately 404s rather than falling back,
+because handing HTML to a browser that asked for JavaScript surfaces as an
+unrelated-looking parse error.
 
-Serving the SPA from FastAPI (`StaticFiles` + an index fallback for client-side
-routes) would drop the `web` container and the separate `audr-frontend` image,
-and would make the deploy publish `api` on port 80 directly. This is also
-exactly rotki's shape.
+Nothing in the backend read the `X-Forwarded-For` / `X-Forwarded-Proto` /
+`X-Real-IP` headers nginx set, so there was nothing to replace. If a
+TLS-terminating proxy is ever put in front of this, uvicorn's `--proxy-headers`
+is the knob, not application code.
 
-The trade-off: nginx is better at static serving than FastAPI — gzip/brotli,
-cache headers, byte ranges, not occupying an application worker to hand back a
-JS bundle. For a single-user self-hosted instance this is very unlikely to
-matter. For a publicly exposed one it might.
+The static mount is behind `SERVE_SPA` (default on) and `SPA_DIR` (default
+`/app/static`), and is additionally skipped when the directory does not exist —
+which is the normal case in a dev checkout, where the Vite dev server serves
+the UI instead.
+
+### The trade-off, recorded deliberately
+
+nginx is better at static serving than Starlette: gzip/brotli, cache headers,
+byte ranges, and not occupying an application worker to hand back a JS bundle.
+For a single-user self-hosted instance this is acceptable. If we ever expose a
+public multi-user instance, reconsider — or put a reverse proxy in front of it
+externally, which is the better answer anyway because that is also where TLS
+belongs.
+
+## Could we go lower than three?
 
 ### `worker` → fold into `api` (3 containers → 2)
 

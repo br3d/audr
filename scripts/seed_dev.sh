@@ -9,7 +9,7 @@
 # Usage:
 #   ./scripts/seed_dev.sh [BASE_URL]
 #   BASE_URL defaults to http://localhost
-#   (the app is served — SPA + /api + /health — by nginx on port 80)
+#   (the app is served — SPA + /api + /health — by the api container on port 80)
 #
 # Demo wallet (AUDR_SEED_WALLET):
 #   always (default) – register the Buterin wallet; already-present addresses

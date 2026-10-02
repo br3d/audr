@@ -17,16 +17,19 @@ misbehaves after a workflow was edited on the host.
 
 ## Invariants the pipeline depends on
 
-**Images are pinned, never floated.** `compose.yaml` resolves
-`${BACKEND_TAG}` / `${FRONTEND_TAG}` from `~/audr/.env`, and the deploy job pins
-both to the build sha. This is not cosmetic: `docker compose up -d` decides
-whether to recreate a service by comparing the service *definition*, not the
-image ID a floating tag currently resolves to. While the compose file said
-`image: ...:latest`, every deploy retagged `:latest`, ran the migrations, passed
-the health-gate **against the previous containers** and reported `Deploy OK`
-while the running code never changed. Step 5b of the job now asserts that
-`audr-api-1`, `audr-worker-1` and `audr-web-1` really run the new tag before the
-health-gate result is trusted.
+**Images are pinned, never floated.** `compose.yaml` resolves `${BACKEND_TAG}`
+from `~/audr/.env`, and the deploy job pins it to the build sha. This is not
+cosmetic: `docker compose up -d` decides whether to recreate a service by
+comparing the service *definition*, not the image ID a floating tag currently
+resolves to. While the compose file said `image: ...:latest`, every deploy
+retagged `:latest`, ran the migrations, passed the health-gate **against the
+previous containers** and reported `Deploy OK` while the running code never
+changed. Step 5b of the job now asserts that `audr-api-1` and `audr-worker-1`
+really run the new tag before the health-gate result is trusted.
+
+There is one image and one tag variable since AUD-388 removed the
+`audr-frontend` image. A stale `FRONTEND_TAG=` line may still sit in
+`~/audr/.env`; nothing interpolates it, and it is safe to delete or ignore.
 
 **A rollback must restore the schema, not just the images.** Restoring images
 alone is not a restorable state: a deploy that migrated the DB and then failed
@@ -59,7 +62,9 @@ blocks forever instead of failing.
 ## Recovering a schema/image mismatch by hand
 
 Symptom: `migrate` crash-loops with `Can't locate revision identified by 'NNNN'`,
-`api`/`worker`/`init` stuck in `Created`, nginx serves 502.
+`api`/`worker` stuck in `Created`, and port 80 refuses connections (there is no
+proxy container left to answer with a 502 — the thing that publishes :80 *is*
+the `api` container).
 
 ```bash
 # 1. If a deploy job is wedged, kill it — a blocked `compose up` holds the
@@ -76,9 +81,9 @@ docker run --rm --network audr_internal -w /app \
   -e DATABASE_URL="postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr" \
   192.168.1.90:8085/audr-backend:<image-with-the-newer-revisions> \
   python -m alembic downgrade <target-rev>
-# …or roll forward by pinning BACKEND_TAG/FRONTEND_TAG to an image whose
-# migration tree contains the DB's revision. Check the downgrade is safe first
-# (a table the downgrade drops must be empty).
+# …or roll forward by pinning BACKEND_TAG to an image whose migration tree
+# contains the DB's revision. Check the downgrade is safe first (a table the
+# downgrade drops must be empty).
 
 # 4. Bring the stack back and verify with the same three signals as the gate.
 cd ~/audr && timeout --foreground 300 docker compose up -d --remove-orphans
@@ -86,9 +91,11 @@ curl -s http://localhost/health/ready   # must contain "status":"ok"
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/
 ```
 
-`GET /health/ready` is the only trustworthy public signal: nginx proxies just
-`^/(api|health)/` and serves `index.html` for everything else, so a bare `/`
-returns 200 from the SPA fallback even when the API is dead.
+`GET /health/ready` is the trustworthy public signal, because it performs a real
+DB and master-key check inside FastAPI rather than merely proving something is
+listening. Since AUD-388 a 200 on `/` is also meaningful — the SPA is served by
+the `api` container, so it cannot answer at all while the API is down — but it
+still says nothing about the database, which is the usual thing broken here.
 
 ## Registry tag retention
 
@@ -119,13 +126,17 @@ rules. Three of those deserve explaining, because each one is load-bearing:
   `rollback()` restores the previous release by `docker pull`ing the immutable
   `audr-backend:<prev-sha>` from this registry, falling back to `:rollback`. A
   host prune or rebuild is exactly when that pull matters.
-- **A sha must be kept in both repositories or neither.** A deploy pins
-  `BACKEND_TAG` and `FRONTEND_TAG` to the same sha, so keeping it on one side
-  gives a rollback that half-succeeds. Per-repo age ranking does not deliver
-  that by itself: many tags here share an identical image `created` timestamp
-  (a rebuild of unchanged layers reuses the date) and the resulting ties break
-  differently per repository. The script therefore unions each repository's
-  newest-N and applies that union everywhere.
+- **A sha must be kept in both repositories or neither.** Moot since AUD-388
+  left `audr-backend` as the only pruned repository, but still what makes any
+  multi-repo run safe. Back when a deploy pinned `BACKEND_TAG` and
+  `FRONTEND_TAG` to the same sha, keeping it on one side gave a rollback that
+  half-succeeded. Per-repo age ranking does not deliver symmetry by itself:
+  many tags here share an identical image `created` timestamp (a rebuild of
+  unchanged layers reuses the date) and the resulting ties break differently
+  per repository. The script therefore unions each repository's newest-N and
+  applies that union everywhere. The orphaned `audr-frontend` repository is no
+  longer pruned by default; clear it deliberately with
+  `--repo audr-frontend` if you want the catalog tidy.
 
 The script refuses any repository not named `audr-*`: this registry is shared
 with an unrelated project (`svetu-backend`, `svetu-frontend`, 91 tags each).

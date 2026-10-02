@@ -19,24 +19,37 @@ RETENTION RULES (a tag survives if ANY apply)
 ---------------------------------------------
   * it is `latest` or `rollback` — the two aliases the deploy pipeline moves;
   * it looks like a release tag (`v1.2.3`);
-  * it is the tag currently pinned in the deploy host's .env (BACKEND_TAG /
-    FRONTEND_TAG), or was passed via --protect;
+  * it is the tag currently pinned in the deploy host's .env (BACKEND_TAG), or
+    was passed via --protect;
   * it is one of the --keep newest tags by image creation time, in ANY of the
     pruned repositories (see "symmetry" below);
   * it shares a manifest digest with any tag protected by the rules above.
 
 SYMMETRY ACROSS REPOSITORIES
 ----------------------------
-A deploy pins BACKEND_TAG and FRONTEND_TAG to the *same* sha, and rollback pulls
-that one sha from both audr-backend and audr-frontend. So a sha must be present
-in both or be present in neither — keeping it on one side only yields a rollback
-that half-succeeds and leaves the stack mismatched.
+Only of historical interest while DEFAULT_REPOS holds a single repository, but
+the mechanism is kept because it is what makes any multi-repo run safe.
+
+The project used to ship two images: a deploy pinned BACKEND_TAG and
+FRONTEND_TAG to the *same* sha, and rollback pulled that one sha from both
+audr-backend and audr-frontend. A sha therefore had to be present in both or in
+neither — keeping it on one side only yielded a rollback that half-succeeded
+and left the stack mismatched.
 
 Per-repo age ranking cannot deliver that on its own: many tags here share an
 identical image `created` timestamp (a rebuild of unchanged layers reuses the
 date), so "newest N" hits ties that break differently in each repository. The
 keep-set is therefore computed as the UNION of each repository's newest-N and
 applied to every repository.
+
+THE ORPHANED audr-frontend REPOSITORY
+-------------------------------------
+AUD-388 folded SPA serving into the API and deleted the `audr-frontend` image,
+so it is no longer in DEFAULT_REPOS and a normal run leaves it alone. The tags
+already pushed there are dead weight; clear them deliberately with
+`--repo audr-frontend --keep 1 --apply` (--keep must be >= 1) rather than by
+widening the default. Note that `latest` there is an alias and so survives any
+--keep; deleting the repository outright is a registry-host operation.
 
 That last rule is not a nicety. Deletion in the /v2 API is BY DIGEST, and a
 digest delete removes *every* tag pointing at it — so pruning a stale sha tag
@@ -67,7 +80,9 @@ DEFAULT_REGISTRY = "http://192.168.1.90:8085"
 # The registry is shared with an unrelated project (svetu-*). Scope every run to
 # repositories we own so a typo or a future --repo flag cannot reach them.
 REPO_PREFIX = "audr-"
-DEFAULT_REPOS = ["audr-backend", "audr-frontend"]
+# Single-entry since AUD-388 removed the `audr-frontend` image. See the
+# "orphaned audr-frontend repository" note in the module docstring.
+DEFAULT_REPOS = ["audr-backend"]
 
 # Aliases the deploy pipeline itself moves; never prunable.
 ALIAS_TAGS = {"latest", "rollback"}
@@ -178,13 +193,18 @@ def delete_digest(registry, repo, digest):
 
 
 def read_env_tags(path):
-    """Pull BACKEND_TAG / FRONTEND_TAG out of the deploy host's .env."""
+    """Pull BACKEND_TAG out of the deploy host's .env.
+
+    FRONTEND_TAG is deliberately ignored since AUD-388. Deploys no longer set
+    it, but a stale line from before that change can still be sitting in the
+    live .env, and honouring it would protect whatever old sha it names.
+    """
     tags = set()
     try:
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 key, _, value = line.strip().partition("=")
-                if key in ("BACKEND_TAG", "FRONTEND_TAG") and value:
+                if key == "BACKEND_TAG" and value:
                     tags.add(value)
     except OSError:
         return None
@@ -274,7 +294,7 @@ def main(argv=None):
     parser.add_argument("--protect", action="append", default=[], metavar="TAG",
                         help="never prune this tag (repeatable)")
     parser.add_argument("--env-file", default="/home/codex/audr/.env", metavar="PATH",
-                        help="deploy .env to read the live BACKEND_TAG/FRONTEND_TAG from")
+                        help="deploy .env to read the live BACKEND_TAG from")
     parser.add_argument("--apply", action="store_true",
                         help="actually delete; without it the run is a dry run")
     args = parser.parse_args(argv)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Deploy the application to the remote host via SSH.
-# Pulls the latest images from the registry, runs migrations, restarts services.
+# Pulls the latest image from the registry, runs migrations, restarts services.
 # Usage: ./scripts/deploy.sh [TAG]
 #   TAG — image tag to deploy (as produced by scripts/build.sh). Defaults to the
-#         BACKEND_TAG/FRONTEND_TAG already pinned in the remote .env.
+#         BACKEND_TAG already pinned in the remote .env.
 # Requires: SSH key at ./id_ed25519 (mode 600) or AUDR_SSH_KEY env var.
 # Exits non-zero on any failure.
 set -euo pipefail
@@ -12,9 +12,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # scripts/ci.sh has always called `deploy.sh "${TAG}"`, but this script used to
 # ignore positional arguments entirely — so the tag CI had just built was
-# dropped and the deploy silently redeployed whatever BACKEND_TAG/FRONTEND_TAG
-# the remote .env happened to pin. That is how AUD-360's first deploy pulled a
-# stale image and advanced the database underneath it (2026-10-01).
+# dropped and the deploy silently redeployed whatever BACKEND_TAG the remote
+# .env happened to pin. That is how AUD-360's first deploy pulled a stale image
+# and advanced the database underneath it (2026-10-01).
 DEPLOY_TAG="${1:-}"
 
 DEPLOY_HOST="${DEPLOY_HOST:-codex@192.168.1.228}"
@@ -48,23 +48,26 @@ cd "${REMOTE_DIR}"
 # Pin the requested tag before pulling so every later step — pull, migrate,
 # up -d, and the image verification below — agrees on what is being deployed.
 if [ -n "${DEPLOY_TAG}" ]; then
-  echo "  -> Pinning BACKEND_TAG/FRONTEND_TAG to ${DEPLOY_TAG}"
-  # Deliberately no .env backup here: only the two tag lines change, and .env
-  # also holds DB_PASSWORD and SECRET_KEY — a copy per deploy would scatter the
+  echo "  -> Pinning BACKEND_TAG to ${DEPLOY_TAG}"
+  # Only BACKEND_TAG since AUD-388: there is one image now. A stale FRONTEND_TAG
+  # line may still sit in the remote .env from before that change; it is inert,
+  # because no service in compose.yaml interpolates it any more.
+  #
+  # Deliberately no .env backup here: only the tag line changes, and .env also
+  # holds DB_PASSWORD and SECRET_KEY — a copy per deploy would scatter the
   # secrets across the host for no recovery value.
   touch .env
-  for key in BACKEND_TAG FRONTEND_TAG; do
-    if grep -q "^${key}=" .env; then
-      sed -i "s|^${key}=.*|${key}=${DEPLOY_TAG}|" .env
-    else
-      printf '%s=%s\n' "${key}" "${DEPLOY_TAG}" >> .env
-    fi
-  done
+  if grep -q "^BACKEND_TAG=" .env; then
+    sed -i "s|^BACKEND_TAG=.*|BACKEND_TAG=${DEPLOY_TAG}|" .env
+  else
+    printf 'BACKEND_TAG=%s\n' "${DEPLOY_TAG}" >> .env
+  fi
 fi
 
-echo "  -> Pulling latest images"
-# `migrate` shares the backend image with api/worker, so pulling those covers it.
-docker compose pull api web worker </dev/null
+echo "  -> Pulling latest image"
+# All three services share the backend image, so this one pull covers `migrate`
+# too.
+docker compose pull api worker </dev/null
 
 echo "  -> Running migrations"
 # `-T` and `</dev/null` are both load-bearing. This whole script is fed to the
@@ -73,7 +76,7 @@ echo "  -> Running migrations"
 # script. The deploy then ended right here, silently skipping the restart AND
 # the readiness gate below, while still exiting 0 and printing "Deploy
 # complete". Observed on 2026-10-01 (AUD-360): migrations advanced the database
-# to a new head but api/web/worker kept running the previous image, leaving
+# to a new head but api/worker kept running the previous image, leaving
 # /health/ready at 503 behind a "successful" deploy.
 docker compose run --rm -T migrate </dev/null
 
@@ -84,23 +87,21 @@ docker compose up -d --remove-orphans </dev/null
 # thinks nothing changed, and a deploy that silently keeps serving the previous
 # build is the failure mode this gate exists to catch.
 #
-# Compare against the tags compose resolved rather than `docker compose config
+# Compare against the tag compose resolved rather than `docker compose config
 # --images <svc>`: on compose 5.5.1 that subcommand ignores the service filter
 # and prints every image in the project, so a per-service comparison against its
-# first line matches the wrong image for `web`.
-echo "  -> Verifying services are running the requested images"
+# first line can match the wrong image.
+echo "  -> Verifying services are running the requested image"
 #
-# Read just the two tag keys out of .env rather than sourcing it: the file also
-# holds DB_PASSWORD and SECRET_KEY, and sourcing would both pull secrets into
-# this shell and break on any value containing shell metacharacters.
+# Read just the tag key out of .env rather than sourcing it: the file also holds
+# DB_PASSWORD and SECRET_KEY, and sourcing would both pull secrets into this
+# shell and break on any value containing shell metacharacters.
 env_tag() {
   [ -f .env ] || return 0
   sed -n "s/^$1=//p" .env | tail -n1
 }
 backend_tag="${BACKEND_TAG:-$(env_tag BACKEND_TAG)}"
-frontend_tag="${FRONTEND_TAG:-$(env_tag FRONTEND_TAG)}"
 backend_tag="${backend_tag:-latest}"
-frontend_tag="${frontend_tag:-latest}"
 check_tag() {
   svc="$1"; want_tag="$2"
   cid="$(docker compose ps -q "${svc}" 2>/dev/null || true)"
@@ -119,20 +120,21 @@ check_tag() {
 }
 check_tag api "${backend_tag}"
 check_tag worker "${backend_tag}"
-check_tag web "${frontend_tag}"
 
 echo "  -> Waiting for API readiness gate"
 # Gate on /health/ready, NOT /health (AUD-328).
 #
-# nginx proxies `^/(api|health)/` — note the trailing slash — so a bare
-# `/health` never reaches the API: it falls through to the SPA `try_files`
-# fallback and returns index.html with HTTP 200 even when the api container is
-# dead.  `/health/ready` matches the proxy regex AND performs a real DB +
-# master-key check inside FastAPI, so it cannot be satisfied by the SPA.
+# `/health/ready` performs a real DB + master-key check inside FastAPI, so it
+# cannot be satisfied by anything but a working API. A bare `/health` is not a
+# route at all, and since AUD-388 the API also serves the SPA from a catch-all
+# mount — so the thing to be careful about is a gate URL that the SPA fallback
+# could answer with index.html and HTTP 200 while the app is actually broken.
+# `audr.api.spa` reserves `/health` and `/api` against that fallback, so both
+# 404 honestly rather than returning the shell.
 #
-# Belt and braces: we additionally require the body to be the API's JSON
-# (`"status":"ok"`), so if the nginx location regex is ever loosened, an
-# index.html response still fails the gate instead of silently passing it.
+# Belt and braces regardless: we additionally require the body to be the API's
+# JSON (`"status":"ok"`), so even if the SPA mount ever did answer here, an
+# index.html response fails the gate instead of silently passing it.
 HEALTH_URL="http://localhost/health/ready"
 for i in $(seq 1 30); do
   body="$(curl -s -m 5 -o - -w '\n%{http_code}' "${HEALTH_URL}" 2>/dev/null || true)"

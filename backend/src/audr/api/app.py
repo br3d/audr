@@ -26,7 +26,9 @@ from audr.api.integrations import router as integrations_router
 from audr.api.news import router as news_router
 from audr.api.portfolio import router as portfolio_router
 from audr.api.settings import router as settings_router
+from audr.api.spa import mount_spa
 from audr.api.wallets import router as wallets_router
+from audr.config import get_spa_settings
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,13 @@ def create_app() -> FastAPI:
     app.include_router(settings_router)
     app.include_router(events_router)
     app.include_router(news_router)
+
+    # Last, and only last: this mounts a catch-all at `/` for the built SPA
+    # (AUD-388, replacing the nginx `web` container). Every router above must be
+    # registered first so it keeps winning the route match.
+    spa_settings = get_spa_settings()
+    if spa_settings.serve_spa:
+        mount_spa(app, spa_settings.spa_dir)
 
     return app
 

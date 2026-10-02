@@ -33,7 +33,10 @@ commit resolves to byte-identical bases.
 | --- | --- | --- | --- |
 | `frontend-builder` | `node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage only — not shipped. |
 | `backend-builder`, `runtime` | `python:3.14-slim` | `sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
-| `frontend-server` | `nginx:1.27-alpine` | `sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` | nginx: BSD-2-Clause. Alpine base as above. |
+
+AUD-388 removed a fourth stage, `frontend-server` (`nginx:1.27-alpine`,
+BSD-2-Clause), along with the `audr-frontend` image it produced. nginx is no
+longer redistributed in any form: the API serves the SPA itself.
 
 ### 1.2 Published images
 
@@ -44,9 +47,12 @@ the 12-character git SHA of the source commit and also move `latest`. Registry:
 | Repository | Tag | Manifest digest (as of 2026-10-02) |
 | --- | --- | --- |
 | `192.168.1.90:8085/audr-backend` | `latest` | `sha256:9e9f2dfe31ffb030f1dca8eb6721832f8912e33407e1a1631495146a880f5c0e` |
-| `192.168.1.90:8085/audr-frontend` | `latest` | `sha256:9df861ac78a3a563e2ef6eb02501f01b3d45d656db710bcab346488ba29e1f54` |
 
-These two digests move on every build. To resolve the digest for the image a
+One image since AUD-388. The `192.168.1.90:8085/audr-frontend` repository is no
+longer built or pushed; whatever tags remain in the registry are orphans from
+before that change.
+
+This digest moves on every build. To resolve the digest for the image a
 host is actually running, ask the registry for the manifest of the deployed
 tag — the git SHA tag, not `latest`:
 
@@ -191,8 +197,8 @@ Declared under `[project.optional-dependencies] dev` and used by
 ## 4. Frontend runtime dependencies
 
 The `dependencies` closure from `frontend/package-lock.json` — the packages
-whose code can end up in the built SPA bundle that is copied into both the
-`runtime` and `frontend-server` stages.
+whose code can end up in the built SPA bundle that is copied into the `runtime`
+stage.
 
 | Package | Version | License | Depth |
 | --- | --- | --- | --- |

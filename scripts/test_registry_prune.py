@@ -77,33 +77,39 @@ def test_digest_shared_with_protected_tag_is_kept():
 
 
 def test_keep_set_is_symmetric_across_repositories():
-    """A sha must be kept in both repos or neither.
+    """When more than one repository is pruned, a sha is kept in all or none.
 
-    A deploy pins BACKEND_TAG and FRONTEND_TAG to the same sha and rollback pulls
-    that sha from both repositories, so an asymmetric keep-set yields a rollback
-    that half-succeeds. This is not hypothetical: the same sha carries different
-    image `created` dates in each repository (observed live — 8d52a8f036dc was
-    20:51 in audr-backend and 17:34 in audr-frontend), so per-repo newest-N
-    genuinely disagrees.
+    AUD-388 reduced DEFAULT_REPOS to the single `audr-backend`, so this no
+    longer guards a live deploy invariant — but the union keep-set it exercises
+    is still the mechanism any `--repo a --repo b` run depends on, and it is
+    cheaper to keep the test than to rediscover why the union exists.
+
+    Originally written for the two-image era, where a deploy pinned
+    BACKEND_TAG and FRONTEND_TAG to the same sha and rollback pulled that sha
+    from both repositories, so an asymmetric keep-set yielded a rollback that
+    half-succeeded. The disagreement it models was not hypothetical: the same
+    sha carried different image `created` dates in each repository (observed
+    live — 8d52a8f036dc was 20:51 in audr-backend and 17:34 in audr-frontend),
+    so per-repo newest-N genuinely disagrees.
     """
-    backend = survey(
+    repo_a = survey(
         ("shaA", "2026-01-02T20:51", "sha256:1"), ("shaB", "2026-01-02T17:34", "sha256:2")
     )
-    frontend = survey(
+    repo_b = survey(
         ("shaA", "2026-01-02T17:34", "sha256:3"), ("shaB", "2026-01-02T18:00", "sha256:4")
     )
 
-    per_repo_backend = rp.newest_tags(backend, 1, ALIASES)
-    per_repo_frontend = rp.newest_tags(frontend, 1, ALIASES)
+    per_repo_a = rp.newest_tags(repo_a, 1, ALIASES)
+    per_repo_b = rp.newest_tags(repo_b, 1, ALIASES)
     # Guard the premise: if these ever agree, this test has stopped testing it.
-    assert per_repo_backend != per_repo_frontend
+    assert per_repo_a != per_repo_b
 
     # Ranking each repository on its own would prune, in each, the sha the other keeps.
-    assert set(backend["tags"]) - per_repo_backend != set(frontend["tags"]) - per_repo_frontend
+    assert set(repo_a["tags"]) - per_repo_a != set(repo_b["tags"]) - per_repo_b
 
-    union = per_repo_backend | per_repo_frontend
-    assert prune_set(backend, ALIASES, union, 1) == set()
-    assert prune_set(frontend, ALIASES, union, 1) == set()
+    union = per_repo_a | per_repo_b
+    assert prune_set(repo_a, ALIASES, union, 1) == set()
+    assert prune_set(repo_b, ALIASES, union, 1) == set()
 
 
 def test_ties_break_deterministically():
@@ -178,7 +184,10 @@ def test_read_env_tags():
         path.write_text(
             "DB_PASSWORD=secret\n"
             "BACKEND_TAG=2f1a4c5b2d99\n"
-            "FRONTEND_TAG=2f1a4c5b2d99\n"
+            # A stale line left in the live .env from before AUD-388 dropped the
+            # second image. Deploys no longer write it and it must not protect
+            # the old sha it names — hence a different value to the one above.
+            "FRONTEND_TAG=aaaa1111bbbb\n"
             "# note\n"
             "EMPTY=\n",
             encoding="utf-8",

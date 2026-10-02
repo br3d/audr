@@ -36,18 +36,19 @@ name: Build & Deploy (guarded)
 #          SIGTTOU and is STOPPED, hanging the job forever (the exact thing the
 #          timeout was added to prevent).
 #        * `compose run -T` — never allocate a TTY in a CI job.
-#   3b. Immutable tag pinning — compose.yaml resolves
-#      ${BACKEND_TAG}/${FRONTEND_TAG} from $DEPLOY_DIR/.env and this job pins
-#      them to the build sha. Floating :latest was silently fatal: compose does
-#      not recreate a running service when a floating tag moves, so deploys
-#      migrated the DB, passed the health-gate against the PREVIOUS containers
-#      and reported success while the running code never changed. Step 5b now
-#      asserts each container actually runs the new tag.
+#   3b. Immutable tag pinning — compose.yaml resolves ${BACKEND_TAG} from
+#      $DEPLOY_DIR/.env and this job pins it to the build sha. Floating :latest
+#      was silently fatal: compose does not recreate a running service when a
+#      floating tag moves, so deploys migrated the DB, passed the health-gate
+#      against the PREVIOUS containers and reported success while the running
+#      code never changed. Step 5b now asserts each container actually runs the
+#      new tag.
 #   4. Health-gate — waits for THREE signals: the api container healthcheck
-#      (/health/live inside the container), a public GET /health/ready through
-#      nginx returning `"status":"ok"` (real DB + master-key check — a bare
-#      /health or / would be answered by the SPA fallback even with a dead API,
-#      see AUD-328), and the web port :80 serving the SPA.
+#      (/health/live inside the container), a public GET /health/ready on :80
+#      returning `"status":"ok"` (real DB + master-key check — a bare /health or
+#      / could be answered by the SPA fallback even with a dead API, see
+#      AUD-328), and :80 serving the SPA. Since AUD-388 all three are the same
+#      container: `api` publishes :80 and serves the SPA itself.
 #   5. Auto-rollback — any failure after the snapshot restores the previous
 #      images and brings the stack back up.
 #   6. Harbor :latest is only advanced AFTER the health-gate passes, so a failed
@@ -96,19 +97,17 @@ jobs:
             echo "tag=$sha" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build images
+      # One image since AUD-388 — see the equivalent note in build.yaml.
+      - name: Build image
         run: |
           set -euo pipefail
           docker build --target runtime \
             -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}" .
-          docker build --target frontend-server \
-            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.tag }}" .
 
       - name: Push build tag to Harbor
         run: |
           set -euo pipefail
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}"
-          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.tag }}"
 
       - name: Sync compose file to deploy dir
         run: |
@@ -123,7 +122,6 @@ jobs:
           REGISTRY="192.168.1.90:8085"
           DEPLOY_DIR="/home/codex/audr"
           BACKEND="$REGISTRY/audr-backend"
-          FRONTEND="$REGISTRY/audr-frontend"
           HEALTH_RETRIES="${HEALTH_RETRIES:-40}"
           HEALTH_SLEEP="${HEALTH_SLEEP:-3}"
           log(){ echo "[deploy $(date -u +%FT%TZ)] $*"; }
@@ -187,18 +185,15 @@ jobs:
             export "$1=$2"
           }
           PREV_BACKEND_TAG="$(env_get BACKEND_TAG)";  PREV_BACKEND_TAG="${PREV_BACKEND_TAG:-latest}"
-          PREV_FRONTEND_TAG="$(env_get FRONTEND_TAG)"; PREV_FRONTEND_TAG="${PREV_FRONTEND_TAG:-latest}"
-          log "pre-deploy pinned tags: backend=$PREV_BACKEND_TAG frontend=$PREV_FRONTEND_TAG"
+          log "pre-deploy pinned tag: backend=$PREV_BACKEND_TAG"
 
-          for repo in "$BACKEND" "$FRONTEND"; do
-            if docker image inspect "$repo:latest" >/dev/null 2>&1; then
-              docker tag "$repo:latest" "$repo:rollback"
-              log "snapshot $repo:latest -> :rollback"
-              # Push it: a host-local tag is lost to `docker image prune -a`,
-              # disk-pressure GC or a host rebuild — exactly when we need it.
-              docker push "$repo:rollback" || log "warn: push $repo:rollback failed (rollback is host-local only)"
-            fi
-          done
+          if docker image inspect "$BACKEND:latest" >/dev/null 2>&1; then
+            docker tag "$BACKEND:latest" "$BACKEND:rollback"
+            log "snapshot $BACKEND:latest -> :rollback"
+            # Push it: a host-local tag is lost to `docker image prune -a`,
+            # disk-pressure GC or a host rebuild — exactly when we need it.
+            docker push "$BACKEND:rollback" || log "warn: push $BACKEND:rollback failed (rollback is host-local only)"
+          fi
 
           rollback(){
             log "!! FAILURE — rolling back"
@@ -234,8 +229,7 @@ jobs:
             # per-sha tag in Harbor, then the :rollback tag we pushed in the
             # snapshot step. Only if all three miss is the rollback unarmed,
             # and then we say so loudly rather than failing silently.
-            env_set BACKEND_TAG  "$PREV_BACKEND_TAG"
-            env_set FRONTEND_TAG "$PREV_FRONTEND_TAG"
+            env_set BACKEND_TAG "$PREV_BACKEND_TAG"
             ROLLBACK_ARMED=1
             restore_image(){
               repo="$1"; want="$1:$2"
@@ -253,8 +247,7 @@ jobs:
               fi
               docker tag "$want" "$repo:latest" || true
             }
-            restore_image "$BACKEND"  "$PREV_BACKEND_TAG"
-            restore_image "$FRONTEND" "$PREV_FRONTEND_TAG"
+            restore_image "$BACKEND" "$PREV_BACKEND_TAG"
             if [ "$ROLLBACK_ARMED" -eq 0 ]; then
               log "rollback ABORTED — previous images are unrecoverable; leaving the stack on $TAG."
               log "Manual decision required: rebuild the previous sha, or fix forward."
@@ -262,19 +255,16 @@ jobs:
               return 0
             fi
             timeout --foreground 300 docker compose up -d --remove-orphans || log "warn: rollback compose up timed out"
-            log "rollback complete (backend=$PREV_BACKEND_TAG frontend=$PREV_FRONTEND_TAG, schema at ${PREV_REV:-<none>})"
+            log "rollback complete (backend=$PREV_BACKEND_TAG, schema at ${PREV_REV:-<none>})"
           }
           trap 'rollback; exit 1' ERR
 
           # ---- 3. pull new images, pin them, keep :latest as a human alias --
           log "Pulling $TAG"
           docker pull "$BACKEND:$TAG"
-          docker pull "$FRONTEND:$TAG"
-          env_set BACKEND_TAG  "$TAG"
-          env_set FRONTEND_TAG "$TAG"
-          log "pinned BACKEND_TAG=$TAG FRONTEND_TAG=$TAG in $DEPLOY_DIR/.env"
-          docker tag "$BACKEND:$TAG"  "$BACKEND:latest"
-          docker tag "$FRONTEND:$TAG" "$FRONTEND:latest"
+          env_set BACKEND_TAG "$TAG"
+          log "pinned BACKEND_TAG=$TAG in $DEPLOY_DIR/.env"
+          docker tag "$BACKEND:$TAG" "$BACKEND:latest"
 
           # ---- 4. migrations (alembic upgrade head) -------------------------
           log "Running migrations"
@@ -294,9 +284,8 @@ jobs:
           # Without this, a deploy that fails to replace the containers still
           # sails through the health-gate — the gate would just be re-testing
           # the previous release.
-          for c in audr-api-1 audr-worker-1 audr-web-1; do
+          for c in audr-api-1 audr-worker-1; do
             want="$BACKEND:$TAG"
-            [ "$c" = audr-web-1 ] && want="$FRONTEND:$TAG"
             running="$(docker inspect --format '{{.Config.Image}}' "$c" 2>/dev/null || echo none)"
             if [ "$running" != "$want" ]; then
               log "FATAL: $c runs $running, expected $want — the deploy did not replace the container"
@@ -306,14 +295,20 @@ jobs:
           done
 
           # ---- 6. health-gate ----------------------------------------------
-          # Three independent signals (AUD-328). The old gate paired the api
-          # container healthcheck with `curl http://localhost:80/`, but nginx
-          # proxies only `^/(api|health)/` (trailing slash) and serves
-          # index.html for everything else — so the :80 check passes even with
+          # Three independent signals (AUD-328). The original gate paired the
+          # api container healthcheck with `curl http://localhost:80/`, but
+          # nginx proxied only `^/(api|health)/` (trailing slash) and served
+          # index.html for everything else — so the :80 check passed even with
           # the api container dead, and contributed nothing. The public-path
-          # signal is now /health/ready (matches the proxy regex, does a real
-          # DB + master-key check) with a body assertion, so an SPA fallback
-          # response can never satisfy the gate.
+          # signal is /health/ready (a real DB + master-key check) with a body
+          # assertion, so an SPA response can never satisfy the gate.
+          #
+          # Since AUD-388 the SPA is served by the api container too, which
+          # makes the `spa_code` signal load-bearing rather than decorative: a
+          # 200 on / now additionally proves the image really contains the Vite
+          # build at /app/static. An image built without it still starts and
+          # still passes /health/ready — it just serves no UI — and / returns
+          # 404, so this is the only signal that catches it. Do not drop it.
           log "Health-gate"
           ok=0
           for i in $(seq 1 "$HEALTH_RETRIES"); do
@@ -322,12 +317,12 @@ jobs:
             spa_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:80/ 2>/dev/null || echo 000)"
             case "$ready" in *'"status":"ok"'*) ready_ok=1 ;; *) ready_ok=0 ;; esac
             if [ "$state" = healthy ] && [ "$ready_ok" = 1 ] && [ "$spa_code" = 200 ]; then
-              ok=1; log "healthy on attempt $i (api=$state ready=ok web=$spa_code)"; break
+              ok=1; log "healthy on attempt $i (api=$state ready=ok spa=$spa_code)"; break
             fi
             sleep "$HEALTH_SLEEP"
           done
           if [ "$ok" != 1 ]; then
-            log "health-gate FAILED (api state=$state web=$spa_code ready=${ready:-<none>})"
+            log "health-gate FAILED (api state=$state spa=$spa_code ready=${ready:-<none>})"
             docker compose ps || true
             false
           fi
@@ -335,6 +330,5 @@ jobs:
           trap - ERR
 
           # ---- 7. advance Harbor :latest ONLY after health passes -----------
-          docker push "$BACKEND:latest"  || log "warn: push $BACKEND:latest failed"
-          docker push "$FRONTEND:latest" || log "warn: push $FRONTEND:latest failed"
+          docker push "$BACKEND:latest" || log "warn: push $BACKEND:latest failed"
           log "Deploy OK — tag=$TAG"
