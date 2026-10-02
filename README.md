@@ -90,24 +90,24 @@ reset, troubleshooting — is [docs/operations.md](docs/operations.md).
 ## Architecture at a glance
 
 ```
-[Browser] ──HTTP──► [web / nginx :80] ──/api/* /health/*──► [api / FastAPI :8000]
-                            │                                        │
-                            └── SPA bundle (React)                   ▼
-                                                            [db / PostgreSQL 16]
-                                                                     ▲
-                                            [worker] ──periodic jobs─┘
+[Browser] ──HTTP :80──► [api / FastAPI :8000]
+                           │  SPA bundle (React) + /api/* + /health/*
+                           ▼
+                  [db / PostgreSQL 16]
+                           ▲
+           [worker] ──periodic jobs───┘
 ```
 
-Four long-running containers (`db`, `api`, `worker`, `web`) plus one one-shot
-bootstrap (`migrate`). Three of the five share a single backend image. Only
-`web` publishes a port; everything else talks over a private bridge network.
+Three long-running containers (`db`, `api`, `worker`) plus one one-shot
+bootstrap (`migrate`). Three of the four share a single backend image. Only
+`api` publishes a port; everything else talks over a private bridge network.
 
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.14, FastAPI, SQLAlchemy 2.0 async, psycopg3, Alembic |
 | Database | PostgreSQL 16 |
 | Frontend | React 19, Vite, TanStack Query, Recharts, hash routing (no router library) |
-| Edge | nginx 1.27 — serves the SPA, reverse-proxies `^/(api|health)/` |
+| Static serving | The `api` process itself — `StaticFiles` with an SPA index fallback |
 | Packaging | Docker Compose; multi-stage build with digest-pinned bases |
 
 The API process has no background work in it at all: everything periodic lives
@@ -116,7 +116,7 @@ request handling.
 
 For the component-by-component account — package map, data model, job
 scheduling, the auth and encryption model, provider failover — read
-[docs/architecture.md](docs/architecture.md). For why there are five compose
+[docs/architecture.md](docs/architecture.md). For why there are four compose
 services and not one, read [docs/containers.md](docs/containers.md).
 
 ---
@@ -131,14 +131,13 @@ backend/            FastAPI application, worker, Alembic migrations, pytest suit
   tests/            unit/ contract/ integration/ fixtures/
 frontend/           React SPA (src/pages, src/components, src/api) + Vitest specs
 tests/e2e/          Playwright end-to-end specs (run locally, not in CI)
-nginx/              nginx.conf for the web container
 scripts/            setup-secrets, seed_dev, test, build, deploy, smoke-test,
                     benchmark, registry-prune, gen_third_party, sync-ci-overlay
 ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
 compose.yaml        The production/local stack
 compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
-Dockerfile          4-stage build: frontend-builder, backend-builder, runtime,
-                    frontend-server
+Dockerfile          3-stage build: frontend-builder, backend-builder, runtime
+                    (runtime carries the SPA bundle at /app/static)
 docs/               Everything below
 specs/              Spec Kit artefacts for release 1 (spec, plan, contracts)
 ```

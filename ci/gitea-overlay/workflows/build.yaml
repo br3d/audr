@@ -28,19 +28,16 @@ jobs:
         run: |
           echo "sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
           echo "version=latest" >> "$GITHUB_OUTPUT"
+      # One image since AUD-388: the `runtime` stage contains the Vite build at
+      # /app/static and the API serves the SPA itself, so the separate
+      # nginx-based `audr-frontend` image is gone. The frontend is still built —
+      # in the `frontend-builder` stage that `runtime` copies from.
       - name: Build backend image
         run: |
           docker build --target runtime \
             -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}" \
             -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}" .
-      - name: Build frontend image
-        run: |
-          docker build --target frontend-server \
-            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}" \
-            -t "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}" .
       - name: Push images
         run: |
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}"
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}"
-          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.sha }}"
-          docker push "$REGISTRY/audr-frontend:${{ steps.meta.outputs.version }}"

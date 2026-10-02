@@ -31,7 +31,10 @@ COPY backend/src/ /app/src/
 COPY backend/alembic.ini /app/
 COPY backend/migrations/ /app/migrations/
 
-# Copy built frontend assets
+# Copy built frontend assets. Until AUD-388 this was dead weight — the SPA was
+# served by a separate nginx image and nothing ever read /app/static. The API
+# now serves it from here (audr.api.spa), so this is the only copy of the bundle
+# and `frontend-builder` above is load-bearing for the runtime image.
 COPY --from=frontend-builder /app/dist/ /app/static/
 
 RUN chown -R audr:audr /app
@@ -43,8 +46,3 @@ USER audr
 
 EXPOSE 8000
 CMD ["uvicorn", "audr.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# Stage 4: nginx image serving the frontend SPA
-FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS frontend-server
-COPY --from=frontend-builder /app/dist/ /usr/share/nginx/html/
-COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf

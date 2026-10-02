@@ -15,8 +15,10 @@ cannot drift silently.
 
 ## 1. Conventions
 
-**Base path** is `/api/v1`, same origin as the SPA. Health routes live at
-`/health/*` with no version prefix. Both are proxied by nginx; nothing else is.
+**Base path** is `/api/v1`, same origin as the SPA — in fact the same process,
+which serves the SPA bundle too. Health routes live at `/health/*` with no
+version prefix. `/api` and `/health` are the two prefixes reserved against the
+SPA fallback; nothing else is.
 
 **Auth levels** used in the tables below:
 
@@ -83,8 +85,9 @@ route and are documented inline.
 | POST | `/api/v1/auth/login` | Verify the password, set the `sid` cookie, return `csrf_token`. 429 with `Retry-After: 900` when throttled. |
 
 > `GET /health/ready` is the only trustworthy external health signal, and you
-> must assert on the body. nginx serves `index.html` for anything outside
-> `^/(api|health)/`, so a bare `GET /` returns 200 even when the API is dead.
+> must assert on the body. The SPA fallback serves `index.html` for anything
+> outside `/api` and `/health`, so a bare `GET /` returns 200 whenever the
+> process is up — including when the database behind it is unreachable.
 
 ---
 

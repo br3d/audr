@@ -13,15 +13,18 @@ Companion documents: [api.md](api.md) for the route-by-route HTTP contract,
 
 ## 1. Processes
 
-audr is three application processes and a database, not one monolith.
+audr is two application processes and a database, not one monolith.
 
 | Process | Entrypoint | Role |
 |---|---|---|
-| `api` | `uvicorn audr.api.app:app` | Serves `/api/v1/*` and `/health/*`. **No background work, no startup hooks.** |
+| `api` | `uvicorn audr.api.app:app` | Serves `/api/v1/*`, `/health/*` **and the compiled SPA**. No background work, no startup hooks. The only service with a published port (`80:8000`). |
 | `worker` | `python -m audr.jobs` | Every periodic and on-demand job. Polls the `job_run` queue every 5 s. |
 | `migrate` | `alembic upgrade head && python -m audr.operations.init_key` | One-shot bootstrap. Exits 0 and stays exited. |
-| `web` | nginx | Serves the compiled SPA; reverse-proxies `^/(api|health)/` to `api:8000`. |
 | `db` | PostgreSQL 16 | All persistent state, in the `db_data` named volume. |
+
+There used to be a fifth service, `web` (nginx), which served the SPA and
+reverse-proxied `^/(api|health)/` to `api:8000`. AUD-388 folded it into `api`
+— see [containers.md](containers.md) for the rationale and the trade-off.
 
 The api/worker split is deliberate and load-bearing. `create_app()` installs
 middleware, exception handlers and routers — nothing else. A long RPC scan or a
@@ -34,16 +37,22 @@ reasoning, and the comparison against rotki's single-container design, is in
 ### The request path
 
 ```
-Browser ──► nginx:80
-              ├── ^/(api|health)/  ──proxy──►  api:8000
-              └── everything else  ──────────► index.html (SPA fallback)
+Browser ──► api:8000 (published on :80)
+              ├── /api/v1/*, /health/*  ──► routers
+              └── everything else       ──► index.html (SPA fallback)
+                    except /api, /health  ──► JSON 404
 ```
 
-The SPA fallback is a trap worth knowing: a bare `GET /` returns 200 from
-`index.html` even when the API is dead. **`GET /health/ready` is the only
-trustworthy liveness signal**, and it must be checked for a `"status":"ok"`
-body, not just a 200. Every deploy gate and smoke test in this repository does
-exactly that.
+Routers are registered first and the SPA is mounted last, so the catch-all only
+sees what nothing else claimed. `/api` and `/health` are reserved against the
+fallback so a mistyped endpoint returns the JSON error envelope rather than 200
+`text/html` — see `backend/src/audr/api/spa.py`.
+
+The SPA fallback is still a trap worth knowing: a bare `GET /` returns 200 from
+`index.html` whenever the process is up, regardless of whether the *database*
+is reachable. **`GET /health/ready` is the only trustworthy liveness signal**,
+and it must be checked for a `"status":"ok"` body, not just a 200. Every deploy
+gate and smoke test in this repository does exactly that.
 
 ---
 
@@ -302,8 +311,9 @@ unreadable; recovery is in
 
 ## 7. Frontend
 
-A React 19 SPA built by Vite, served as static files by nginx. No server-side
-rendering and no router library.
+A React 19 SPA built by Vite and served as static files by the `api` process
+from `/app/static` (AUD-388; nginx did this before). No server-side rendering
+and no router library.
 
 - `main.tsx` → `App.tsx`. TanStack Query drives everything. The app gates on
   `fetchSetupStatus` then `fetchSession`, rendering `SetupPage` or `SignInPage`
@@ -312,8 +322,8 @@ rendering and no router library.
   sign-in from anywhere.
 - `routing.ts` implements **hash-based routing** — `#/wallets?period=30d`, where
   the path segment selects the page and the query segment holds per-screen view
-  state. Hash routing was chosen so nginx needs no rewrite rules beyond the
-  existing SPA fallback.
+  state. Hash routing was chosen so the server needs no per-route rewrite rules
+  beyond the single SPA fallback on `/`.
 - `src/pages/` — Dashboard, Holdings, Wallets, Assets, Events, Connections,
   History, Schedules, Status, AccountData, Assistant, Setup, SignIn.
 - `src/components/` — Layout (which owns the nav list), AllocationList,

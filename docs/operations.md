@@ -114,32 +114,32 @@ docker compose ps             # check running services
 ## Service topology
 
 ```
-[Browser] ─── HTTP ──► [nginx :80 / web]
-                              │
-                 ┌────────────┴────────────┐
-          /api/* │                         │ /health/*
-                 ▼                         ▼
-          [FastAPI :8000 / api]    [FastAPI :8000 / api]
-                 │
-                 ▼
-         [PostgreSQL :5432 / db]
-                 ▲
-          [worker] ──── periodic jobs ────┘
+[Browser] ─── HTTP :80 ──► [FastAPI :8000 / api]
+                             │   /                  ──► SPA from /app/static
+                             │   /api/*, /health/*  ──► API routes
+                             ▼
+                     [PostgreSQL :5432 / db]
+                             ▲
+                     [worker] ──── periodic jobs ────┘
 ```
 
-Nginx (`web`) serves the compiled React SPA and reverse-proxies all `/api/*` and `/health/*` paths to the backend (`api`). The worker polls the job queue; it never binds a port.
+The `api` container serves everything on one port: the compiled React SPA for
+`/` and client-side routes, and the API for `/api/*` and `/health/*`. A separate
+nginx `web` container used to do the static serving and reverse-proxy the API;
+AUD-388 removed it — see `docs/containers.md` for the rationale and the
+trade-off. The worker polls the job queue; it never binds a port.
 
 ---
 
 ## Loopback setup
 
-All services communicate over the `internal` Docker bridge network. No service port is exposed except `web:80`. This means:
+All services communicate over the `internal` Docker bridge network. The only published port is `api`'s `80:8000`. This means:
 
-- The backend API is never reachable directly from the host — only via nginx.
+- The database is never reachable from the host.
 - The worker connects to the database using the Docker DNS name `db`.
-- For local development, the API is at `http://localhost/api/` (via nginx).
+- For local development against a compose stack, the API is at `http://localhost/api/`.
 
-To access the backend directly for debugging without nginx:
+To reach the API inside the container, bypassing the published port:
 
 ```bash
 docker compose exec api curl -s http://localhost:8000/health/live
@@ -149,7 +149,7 @@ docker compose exec api curl -s http://localhost:8000/health/live
 
 ## TLS / HTTPS proxy
 
-The current configuration serves HTTP only. For production, place a reverse proxy (Caddy, Traefik, or nginx on the host) in front of the `web` container on port 80 and terminate TLS there.
+The current configuration serves HTTP only. For production, place a reverse proxy (Caddy, Traefik, or nginx on the host) in front of the published port 80 and terminate TLS there. Doing so also recovers the static-serving qualities (gzip/brotli, cache headers) that were lost when the in-stack nginx container was removed in AUD-388.
 
 **Caddy example** (`/etc/caddy/Caddyfile` on the host):
 
@@ -161,7 +161,14 @@ yourdomain.com {
 
 Caddy handles certificate issuance and renewal automatically via Let's Encrypt.
 
-When running behind a TLS-terminating proxy, the backend correctly reads the forwarded protocol from `X-Forwarded-Proto` (set by nginx in `nginx.conf`).
+Note on forwarded headers: no application code reads `X-Forwarded-Proto`,
+`X-Forwarded-For` or `X-Real-IP`. The removed nginx container set them, but
+nothing consumed them, so removing it changed no behaviour. If you put a
+TLS-terminating proxy in front and need the app to know the external scheme or
+the real client IP, that is a uvicorn concern, not application code — add
+`--proxy-headers --forwarded-allow-ips=<proxy-ip>` to the `CMD` in the
+`Dockerfile`. Uvicorn only trusts these headers from `127.0.0.1` by default, so
+a proxy on another host or container IP is ignored until you widen that.
 
 ---
 
@@ -393,4 +400,4 @@ The script:
 | `migrate` exits non-zero | DB not healthy or migration conflict | `docker compose logs migrate`, check DB logs |
 | `api` health returns 503 | Migration not complete | Wait for `migrate` to finish; check `docker compose ps` |
 | `worker` logs `no RPC integration configured` | RPC provider not set | Informational — the keyless public endpoints still work; configure your own RPC URL in Settings → Integrations to upgrade |
-| `GET /` returns 200 but the UI shows no data | API is down; nginx served the SPA fallback | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |
+| `GET /` returns 200 but the UI shows no data | The process is up and served the SPA, but the database behind it is not ready | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |

@@ -61,6 +61,43 @@ class Settings(BaseSettings):
         return v
 
 
+class SpaSettings(BaseSettings):
+    """Knobs for serving the built SPA out of the API process (AUD-388).
+
+    Deliberately a separate class rather than two more fields on `Settings`.
+    `audr.api.app` builds the application at import time (module-level
+    `app = create_app()`), and `Settings` has two *required* fields —
+    `database_url` and `secret_key`. The test images intentionally start
+    without `SECRET_KEY` (conftest injects it per-test via monkeypatch), so
+    reading `Settings` during `create_app()` would turn importing the app into
+    a hard dependency on a fully populated environment and break collection.
+
+    Every field here has a default and nothing is required, so this class
+    always constructs.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # On by default: since the nginx `web` container was removed, the API
+    # process is the only thing serving the UI in a deployment. Dev is
+    # unaffected because the mount is *also* conditional on the directory
+    # existing, and a dev checkout has no `/app/static` — there the Vite dev
+    # server serves the UI and proxies `/api`.
+    serve_spa: bool = True
+
+    # Where the `runtime` Dockerfile stage copies the Vite build to.
+    spa_dir: str = "/app/static"
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_spa_settings() -> SpaSettings:
+    return SpaSettings()

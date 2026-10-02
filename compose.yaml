@@ -68,27 +68,18 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # The only published port in the project. There used to be an nginx `web`
+    # service in front of this one, serving the SPA on :80 and reverse-proxying
+    # /api and /health here; AUD-388 folded that into the API process, which now
+    # serves the built bundle out of /app/static. See docs/containers.md.
+    ports:
+      - "80:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-    networks:
-      - internal
-
-  web:
-    image: 192.168.1.90:8085/audr-frontend:${FRONTEND_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: frontend-server
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      api:
-        condition: service_healthy
     networks:
       - internal
 

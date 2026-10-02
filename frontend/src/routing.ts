@@ -8,7 +8,9 @@
  * view toggles. Keeping both in the URL means a reload or a back/forward
  * navigation restores exactly what the owner was looking at, and the screen
  * stays linkable. The hash is used rather than a path so the SPA needs no
- * server-side rewrite beyond the one nginx already does for `/`.
+ * per-route server-side rewrite — only `/` itself has to serve the shell,
+ * which the API's static mount does (`backend/src/audr/api/spa.py`, AUD-388;
+ * nginx did it before that).
  *
  * AUD-354 (deep links to a specific wallet/asset) is intentionally out of
  * scope here, but the split is chosen so it slots in without a rework: the
