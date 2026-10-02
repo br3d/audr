@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "e2e": "playwright test"
+    "e2e": "NODE_PATH=./node_modules playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.0",
