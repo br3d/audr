@@ -174,6 +174,8 @@ The application uses a two-layer encryption scheme:
 
 The master key is used to encrypt provider credentials (RPC URLs, API keys) stored in the `settings` table.
 
+This scheme covers credentials only — wallet addresses, holdings, and the valuation history are plaintext in Postgres. For the full at-rest picture, the threat model, and the recommended volume encryption for the `db_data` volume, see [security-at-rest.md](security-at-rest.md).
+
 **If SECRET_KEY is lost:**
 
 - The application will refuse to start (startup validation fails).
