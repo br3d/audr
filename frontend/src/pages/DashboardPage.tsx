@@ -154,7 +154,7 @@ export default function DashboardPage({ setPage }: Props) {
   const pricedCount = data.holdings.filter((h) => h.value_usd !== null && h.included).length
 
   const historyChange = history24hQuery.data
-    ? computeHistoryChange(history24hQuery.data.entries)
+    ? computeHistoryChange(history24hQuery.data.items)
     : null
 
   const trackedNote =
@@ -259,7 +259,7 @@ export default function DashboardPage({ setPage }: Props) {
       {!historyQuery.isLoading &&
         !historyQuery.isError &&
         historyQuery.data &&
-        historyQuery.data.entries.length > 0 && (
+        historyQuery.data.items.length > 0 && (
           <section aria-label="Portfolio value history" className="card mb-20">
             <div className="card-header">
               <div className="card-title card-title-chart">Portfolio value</div>
@@ -277,7 +277,7 @@ export default function DashboardPage({ setPage }: Props) {
                 ))}
               </div>
             </div>
-            <HistoryChart points={historyQuery.data.entries} period={historyPeriod} />
+            <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
           </section>
         )}
 

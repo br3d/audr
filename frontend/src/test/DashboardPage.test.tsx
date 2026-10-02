@@ -109,7 +109,13 @@ async function unmount(container: HTMLDivElement, root: Root) {
   document.body.removeChild(container)
 }
 
-const EMPTY_HISTORY = { period: '30d' as const, entries: [], next_cursor: null }
+const EMPTY_HISTORY = {
+  period: '30d' as const,
+  items: [],
+  next_cursor: null,
+  request_id: 'req-1',
+  generated_at: '2026-01-01T00:00:00Z',
+}
 const EMPTY_EVENTS = { total: 0, limit: 7, offset: 0, events: [] }
 
 function historyPoint(overrides: Partial<HistoryPoint> = {}): HistoryPoint {
@@ -130,7 +136,13 @@ function historyPoint(overrides: Partial<HistoryPoint> = {}): HistoryPoint {
 function mockHistoryByPeriod(entries24h: HistoryPoint[]) {
   mockFetchHistory.mockImplementation((period): Promise<HistoryResponse> => {
     if (period === '24h') {
-      return Promise.resolve({ period: '24h', entries: entries24h, next_cursor: null })
+      return Promise.resolve({
+        period: '24h',
+        items: entries24h,
+        next_cursor: null,
+        request_id: 'req-1',
+        generated_at: '2026-01-01T00:00:00Z',
+      })
     }
     return Promise.resolve(EMPTY_HISTORY)
   })
@@ -581,7 +593,7 @@ describe('DashboardPage', () => {
   describe('portfolio value history range switcher', () => {
     const HISTORY_WITH_ENTRIES = {
       period: '30d' as const,
-      entries: [
+      items: [
         {
           snapshot_id: 'h1',
           snapshotted_at: '2026-01-15T00:00:00Z',
@@ -595,6 +607,8 @@ describe('DashboardPage', () => {
         },
       ],
       next_cursor: null,
+      request_id: 'req-1',
+      generated_at: '2026-01-15T00:00:00Z',
     }
 
     it('renders four range segments defaulting to 1M', async () => {

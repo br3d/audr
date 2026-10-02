@@ -13,6 +13,7 @@ GET /api/v1/history/{snapshot_id}
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -55,9 +56,11 @@ class HistoryEntryResponse(BaseModel):
 
 class HistoryResponse(BaseModel):
     period: str
-    entries: list[HistoryEntryResponse]
+    items: list[HistoryEntryResponse]
     # Opaque cursor: pass back to get the next page; null = no more pages.
     next_cursor: str | None = None
+    request_id: str
+    generated_at: str
 
 
 class SnapshotLineResponse(BaseModel):
@@ -119,7 +122,7 @@ async def get_history(
         limit=limit,
     )
 
-    entries = [
+    items = [
         HistoryEntryResponse(
             snapshot_id=str(e.snapshot_id) if not e.is_gap_marker else None,
             snapshotted_at=e.snapshotted_at.isoformat(),
@@ -138,8 +141,10 @@ async def get_history(
 
     return HistoryResponse(
         period=period,
-        entries=entries,
+        items=items,
         next_cursor=str(page.next_cursor) if page.next_cursor is not None else None,
+        request_id=str(uuid.uuid4()),
+        generated_at=datetime.now(tz=UTC).isoformat(),
     )
 
 

@@ -27,11 +27,11 @@ export default function HistoryPage() {
     refetchInterval: 60_000,
   })
 
-  const hasGaps = data?.entries.some((p) => p.is_gap_marker) ?? false
-  const hasStale = data?.entries.some((p) => p.quality === 'stale') ?? false
+  const hasGaps = data?.items.some((p) => p.is_gap_marker) ?? false
+  const hasStale = data?.items.some((p) => p.quality === 'stale') ?? false
   const hasIncomplete =
-    data?.entries.some((p) => p.quality === 'partial' || p.quality === 'gaps') ?? false
-  const hasInvalidated = data?.entries.some((p) => !p.is_canonical) ?? false
+    data?.items.some((p) => p.quality === 'partial' || p.quality === 'gaps') ?? false
+  const hasInvalidated = data?.items.some((p) => !p.is_canonical) ?? false
 
   return (
     <div>
@@ -97,7 +97,7 @@ export default function HistoryPage() {
 
           <div className="card">
             <section aria-label="History chart">
-              <HistoryChart points={data.entries} />
+              <HistoryChart points={data.items} />
             </section>
           </div>
         </>

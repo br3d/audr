@@ -94,7 +94,7 @@ async def test_trigger_job_enqueues_pending_not_in_progress(
         json={"kind": "discovery"},
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 200
+    assert r.status_code == 202
     run_id = r.json()["run_id"]
     assert r.json()["coalesced"] is False
 
@@ -128,7 +128,7 @@ async def test_trigger_job_run_id_is_never_fabricated(
         json={"kind": "discovery"},
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 200
+    assert r.status_code == 202
     run_id = r.json()["run_id"]
 
     get_r = await c.get(f"{_V1}/jobs/{run_id}")
@@ -150,7 +150,7 @@ async def test_trigger_job_coalesces_onto_existing_pending_run(
         json={"kind": "discovery"},
         headers={"x-csrf-token": csrf},
     )
-    assert first.status_code == 200
+    assert first.status_code == 202
     first_run_id = first.json()["run_id"]
     assert first.json()["coalesced"] is False
 
@@ -159,7 +159,7 @@ async def test_trigger_job_coalesces_onto_existing_pending_run(
         json={"kind": "discovery"},
         headers={"x-csrf-token": csrf},
     )
-    assert second.status_code == 200
+    assert second.status_code == 202
     assert second.json()["run_id"] == first_run_id
     assert second.json()["coalesced"] is True
 
@@ -194,7 +194,7 @@ async def test_trigger_job_dispatches_via_worker_claim_pending(
         json={"kind": "discovery"},
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 200
+    assert r.status_code == 202
     run_id = r.json()["run_id"]
 
     executed: list = []

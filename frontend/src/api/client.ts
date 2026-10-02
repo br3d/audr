@@ -565,7 +565,7 @@ export function changePassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  return patch<void>('/auth/password', {
+  return put<void>('/auth/password', {
     current_password: currentPassword,
     new_password: newPassword,
   })
@@ -624,8 +624,10 @@ export interface HistoryPoint {
 
 export interface HistoryResponse {
   period: HistoryPeriod
-  entries: HistoryPoint[]
+  items: HistoryPoint[]
   next_cursor: string | null
+  request_id: string
+  generated_at: string
 }
 
 // --- History API ---

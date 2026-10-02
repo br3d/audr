@@ -10,18 +10,24 @@ Divergences between spec and implementation are marked with SPEC_DRIFT comments
 and also flagged in the AUD-330 issue thread so the Architect can rule.
 
 SPEC_DRIFT entries identified:
-  SD-1: GET /api/v1/networks — not implemented; returns 404.
-  SD-2: GET /api/v1/catalog — not implemented; returns 404.
-  SD-3: PUT /auth/password — spec mandates PUT; impl uses PATCH; PUT returns 405.
-  SD-4: POST /jobs, POST /integrations/{kind}/validate, POST /jobs/{id}/cancel,
-         POST /data/provider-purge — spec says 202; impl returns default 200.
+  SD-1: RESOLVED in AUD-335. GET /api/v1/networks is now implemented.
+  SD-2: RESOLVED in AUD-335. GET /api/v1/catalog is now implemented.
+  SD-3: RESOLVED in AUD-335. PUT /auth/password is now accepted (PATCH still
+         works too, so the existing frontend client keeps working unchanged).
+  SD-4: RESOLVED in AUD-335 for POST /jobs, POST /integrations/{kind}/validate
+         and POST /jobs/{id}/cancel — all three now return 202. (POST
+         /data/provider-purge is out of this issue's scope; it is a
+         synchronous password-gated operation, not queued async work, and has
+         no contract test pinning it to 202.)
   SD-5: Error envelope — RESOLVED in AUD-320. The app now registers handlers for
          HTTPException and RequestValidationError that emit
          {error:{code,message,field_errors,retryable},request_id}; the two shape
          tests below are live assertions, no longer xfail.
-
-The SD-1 through SD-5 tests are written against the *spec*, so they currently FAIL.
-That is the intended enforcement mechanism: drift = red CI.
+  SD-8: RESOLVED in AUD-335. POST /auth/login no longer applies the setup-time
+         password-length floor to the login body, so a wrong password now
+         fails the 401 credential check instead of 422 schema validation.
+  SD-9: RESOLVED in AUD-335. GET /history now returns {items, request_id,
+         generated_at} like every other collection route, instead of {entries}.
 """
 
 from __future__ import annotations
@@ -193,9 +199,13 @@ async def test_auth_login_200(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-8: /auth/login returns 422 on wrong password; spec mandates 401; see AUD-335")
 async def test_auth_login_401_wrong_password(client: httpx.AsyncClient) -> None:
-    """POST /auth/login → 401 for wrong password."""
+    """POST /auth/login → 401 for wrong password.
+
+    SPEC_DRIFT SD-8 resolved in AUD-335: login no longer applies the
+    setup-time password-complexity floor to the login body, so a short wrong
+    password now fails the 401 credential check instead of 422 validation.
+    """
     await client.post(f"{_V1}/setup", json={"password": _PASSWORD})
     r = await client.post(f"{_V1}/auth/login", json={"password": "wrong"})
     assert r.status_code == 401
@@ -231,14 +241,12 @@ async def test_auth_logout_204(auth_client: tuple[httpx.AsyncClient, str]) -> No
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-3: spec mandates PUT; impl uses PATCH; see AUD-335")
 async def test_auth_password_change_204(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
     """PUT /auth/password → 204; revoke every session.
 
-    SPEC_DRIFT SD-3: spec mandates PUT; impl uses PATCH.
-    This test uses PUT per the spec and will FAIL until the impl is aligned.
+    SPEC_DRIFT SD-3 resolved in AUD-335: PUT is now accepted per the spec.
     """
     c, csrf = auth_client
     r = await c.put(
@@ -246,7 +254,7 @@ async def test_auth_password_change_204(
         json={"current_password": _PASSWORD, "new_password": _PASSWORD + "_new123"},
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 204  # SD-3: will return 405 until PUT is implemented
+    assert r.status_code == 204
 
 
 # ===========================================================================
@@ -255,17 +263,16 @@ async def test_auth_password_change_204(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-1: GET /networks not implemented; see AUD-335")
 async def test_networks_returns_200(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
     """GET /networks → [{chain_id:1,name:"Ethereum",native_symbol:"ETH"}].
 
-    SPEC_DRIFT SD-1: route not implemented; currently returns 404.
+    SPEC_DRIFT SD-1 resolved in AUD-335: route is now implemented.
     """
     c, _ = auth_client
     r = await c.get(f"{_V1}/networks")
-    assert r.status_code == 200  # SD-1: will be 404 until route is added
+    assert r.status_code == 200
     items = r.json()
     assert isinstance(items, list)
     assert any(n["chain_id"] == 1 for n in items)
@@ -297,13 +304,12 @@ async def test_integrations_requires_session(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-4: spec says 202; impl returns 200; see AUD-335")
 async def test_integrations_validate_202(
     auth_client: tuple[httpx.AsyncClient, str],
 ) -> None:
     """POST /integrations/{kind}/validate → 202 validation job.
 
-    SPEC_DRIFT SD-4: spec says 202; impl returns 200.
+    SPEC_DRIFT SD-4 resolved in AUD-335: route now returns 202.
     """
     c, csrf = auth_client
     # Seed minimal RPC config first so validate has something to check
@@ -316,7 +322,7 @@ async def test_integrations_validate_202(
         f"{_V1}/integrations/rpc/validate",
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 202  # SD-4: currently 200
+    assert r.status_code == 202
     data = r.json()
     assert "run_id" in data
 
@@ -550,15 +556,14 @@ async def test_assets_patch_404_unknown(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-2: GET /catalog not implemented; see AUD-335")
 async def test_catalog_returns_200(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """GET /catalog → source, pinned version/hash, count, bundled time, coverage.
 
-    SPEC_DRIFT SD-2: route not implemented; currently returns 404.
+    SPEC_DRIFT SD-2 resolved in AUD-335: route is now implemented.
     """
     c, _ = auth_client
     r = await c.get(f"{_V1}/catalog")
-    assert r.status_code == 200  # SD-2: will be 404 until route is added
+    assert r.status_code == 200
 
 
 # ===========================================================================
@@ -567,11 +572,10 @@ async def test_catalog_returns_200(auth_client: tuple[httpx.AsyncClient, str]) -
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-4: spec says 202; impl returns 200; see AUD-335")
 async def test_jobs_post_202(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """POST /jobs → 202 run_id and coalesced boolean.
 
-    SPEC_DRIFT SD-4: spec says 202; impl returns 200.
+    SPEC_DRIFT SD-4 resolved in AUD-335: route now returns 202.
     """
     c, csrf = auth_client
     r = await c.post(
@@ -579,7 +583,7 @@ async def test_jobs_post_202(auth_client: tuple[httpx.AsyncClient, str]) -> None
         json={"kind": "balances"},
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 202  # SD-4: currently 200
+    assert r.status_code == 202
     data = r.json()
     assert "run_id" in data
     assert "coalesced" in data
@@ -614,11 +618,10 @@ async def test_jobs_get_by_id_404_unknown(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-4: spec says 202; impl returns 200; see AUD-335")
 async def test_jobs_cancel_202(auth_client: tuple[httpx.AsyncClient, str]) -> None:
     """POST /jobs/{id}/cancel → 202 cancel_requested.
 
-    SPEC_DRIFT SD-4: spec says 202; impl returns 200.
+    SPEC_DRIFT SD-4 resolved in AUD-335: route now returns 202.
     Seeds a job first so the cancel route can find it.
     """
     c, csrf = auth_client
@@ -628,15 +631,14 @@ async def test_jobs_cancel_202(auth_client: tuple[httpx.AsyncClient, str]) -> No
         json={"kind": "balances"},
         headers={"x-csrf-token": csrf},
     )
-    # Accept 200 or 202 from POST /jobs (SD-4 covers both)
-    assert post_r.status_code in (200, 202)
+    assert post_r.status_code == 202
     run_id = post_r.json()["run_id"]
 
     r = await c.post(
         f"{_V1}/jobs/{run_id}/cancel",
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 202  # SD-4: currently 200
+    assert r.status_code == 202
 
 
 # ===========================================================================
@@ -674,9 +676,13 @@ async def test_portfolio_401_unauthenticated(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(strict=True, reason="SD-9: GET /history returns {entries} not {items} per spec; see AUD-335")
 async def test_history_get_200(auth_client: tuple[httpx.AsyncClient, str]) -> None:
-    """GET /history → 200 chart summaries."""
+    """GET /history → 200 chart summaries.
+
+    SPEC_DRIFT SD-9 resolved in AUD-335: the collection key is now `items`
+    per the shared response-metadata rule, with request_id/generated_at
+    added to match every other collection route.
+    """
     c, _ = auth_client
     r = await c.get(f"{_V1}/history", params={"range": "24h"})
     assert r.status_code == 200
