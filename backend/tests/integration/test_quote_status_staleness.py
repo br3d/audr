@@ -62,10 +62,10 @@ async def _insert_priced_snapshot(
     snapshot_id = uuid.uuid4()
     await session.execute(
         text(
-            "INSERT INTO valuation_snapshot (id, quality, published_at)"
-            " VALUES (:id, 'complete', now())"
+            "INSERT INTO valuation_snapshot (id, quality, published_at, input_key)"
+            " VALUES (:id, 'complete', now(), :input_key)"
         ),
-        {"id": str(snapshot_id)},
+        {"id": str(snapshot_id), "input_key": str(snapshot_id)},
     )
     await session.execute(
         text(

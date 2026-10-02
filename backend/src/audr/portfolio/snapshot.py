@@ -4,19 +4,25 @@ publish_valuation_snapshot() atomically:
   1. Reads current holdings (latest balance per wallet/asset).
   2. Reads the most recent complete quote_set's observations.
   3. Computes quality: complete / partial / stale / unknown.
-  4. Inserts a valuation_snapshot row.
-  5. Inserts one valuation_line per holding, with price/value where available.
-  6. Marks the snapshot published.
+  4. Computes a deterministic input_key from the exact inputs (holding
+     observation ids + quote_set ids) and returns the existing snapshot for
+     that key if one was already published, instead of inserting a duplicate.
+  5. Inserts a valuation_snapshot row.
+  6. Inserts one valuation_line per holding, with price/value where available.
+  7. Marks the snapshot published.
 
 Rules:
 - Unknown ≠ zero: holdings without prices get NULL price_usd/value_usd lines.
 - Excluded assets are excluded from the snapshot (neither line nor quality count).
 - All arithmetic uses Python Decimal — never float.
 - The snapshot is immutable once published_at is set.
+- Publication is idempotent by exact input key: the same observation set and
+  quote data always produce the same snapshot, never a new one.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -52,10 +58,16 @@ class SnapshotResult:
     quality: str
     line_count: int
     priced_count: int
+    created: bool = True  # False when an identical input key was already published
 
 
 async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
     """Create and persist a new published valuation snapshot.
+
+    Idempotent by exact input key: if the current holdings (by observation
+    id) and quote data (by quote_set id) match an already-published
+    snapshot, that snapshot is returned with created=False instead of
+    inserting a duplicate.
 
     Returns the snapshot metadata.  Raises if there are no holdings at all.
     """
@@ -63,20 +75,26 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
     if not holdings:
         raise ValueError("no holdings available — cannot publish empty snapshot")
 
-    latest_prices = await _get_latest_prices(session)
+    latest_prices, quote_set_ids = await _get_latest_prices(session)
 
     quality, priced_count = _compute_quality(holdings, latest_prices)
+
+    input_key = _compute_input_key(holdings, quote_set_ids)
+
+    existing = await _get_snapshot_by_input_key(session, input_key)
+    if existing is not None:
+        return existing
 
     snapshot_id = uuid.uuid4()
     now = datetime.now(tz=UTC)
     await session.execute(
         sa.text(
             """
-            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, created_at)
-            VALUES (:id, :now, :quality, :now, :now)
+            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, created_at, input_key)
+            VALUES (:id, :now, :quality, :now, :now, :input_key)
             """
         ),
-        {"id": str(snapshot_id), "now": now, "quality": quality},
+        {"id": str(snapshot_id), "now": now, "quality": quality, "input_key": input_key},
     )
 
     for holding in holdings:
@@ -127,6 +145,7 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
         quality=quality,
         line_count=len(holdings),
         priced_count=priced_count,
+        created=True,
     )
 
 
@@ -232,12 +251,14 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
     ]
 
 
-async def _get_latest_prices(session: AsyncSession) -> dict[uuid.UUID, Decimal]:
-    """Return {asset_id: price_usd} from the most recent complete quote_set."""
+async def _get_latest_prices(
+    session: AsyncSession,
+) -> tuple[dict[uuid.UUID, Decimal], set[uuid.UUID]]:
+    """Return ({asset_id: price_usd}, {quote_set_id}) from the most recent complete quote_set."""
     result = await session.execute(
         sa.text(
             """
-            SELECT qo.asset_id, qo.price_usd::text
+            SELECT qo.asset_id, qo.price_usd::text, qo.quote_set_id
             FROM quote_observation qo
             JOIN quote_set qs ON qs.id = qo.quote_set_id
             WHERE qs.status = 'complete'
@@ -250,10 +271,63 @@ async def _get_latest_prices(session: AsyncSession) -> dict[uuid.UUID, Decimal]:
             """
         )
     )
-    return {
-        uuid.UUID(str(row[0])): Decimal(str(row[1]))
-        for row in result
-    }
+    prices: dict[uuid.UUID, Decimal] = {}
+    quote_set_ids: set[uuid.UUID] = set()
+    for row in result:
+        prices[uuid.UUID(str(row[0]))] = Decimal(str(row[1]))
+        quote_set_ids.add(uuid.UUID(str(row[2])))
+    return prices, quote_set_ids
+
+
+def _compute_input_key(
+    holdings: list[HoldingRow],
+    quote_set_ids: set[uuid.UUID],
+) -> str:
+    """Deterministic hash of the exact inputs a snapshot was built from.
+
+    The key is the sorted set of included holdings' observation ids plus the
+    sorted set of quote_set ids the prices came from. Two publish calls with
+    the same key always describe the same snapshot: the same holdings (an
+    exclusion change removes/adds an observation id, changing the key) priced
+    from the same quote data.
+    """
+    obs_part = ",".join(sorted(str(h.observation_id) for h in holdings))
+    qs_part = ",".join(sorted(str(qs_id) for qs_id in quote_set_ids))
+    payload = f"obs:{obs_part}|qs:{qs_part}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _get_snapshot_by_input_key(
+    session: AsyncSession,
+    input_key: str,
+) -> SnapshotResult | None:
+    """Return the already-published snapshot for this input key, if any."""
+    result = await session.execute(
+        sa.text(
+            """
+            SELECT
+                vs.id,
+                vs.quality,
+                COUNT(vl.id) AS line_count,
+                COUNT(vl.id) FILTER (WHERE vl.price_usd IS NOT NULL) AS priced_count
+            FROM valuation_snapshot vs
+            LEFT JOIN valuation_line vl ON vl.snapshot_id = vs.id
+            WHERE vs.input_key = :input_key
+            GROUP BY vs.id, vs.quality
+            """
+        ),
+        {"input_key": input_key},
+    )
+    row = result.first()
+    if row is None:
+        return None
+    return SnapshotResult(
+        snapshot_id=uuid.UUID(str(row[0])),
+        quality=str(row[1]),
+        line_count=int(row[2]),
+        priced_count=int(row[3]),
+        created=False,
+    )
 
 
 def _compute_quality(

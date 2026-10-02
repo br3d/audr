@@ -33,7 +33,8 @@ async def _bulk_insert_history_points(
     than the full chain for tests that need many points."""
     ids = [uuid.uuid4() for _ in timestamps]
     snap_rows = [
-        {"id": str(sid), "ts": ts} for sid, ts in zip(ids, timestamps, strict=True)
+        {"id": str(sid), "ts": ts, "input_key": str(sid)}
+        for sid, ts in zip(ids, timestamps, strict=True)
     ]
     hp_rows = [
         {"id": str(uuid.uuid4()), "sid": str(sid), "ts": ts}
@@ -41,8 +42,8 @@ async def _bulk_insert_history_points(
     ]
     await session.execute(
         sa.text(
-            "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)"
-            " VALUES (:id, :ts, 'complete', :ts)"
+            "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+            " VALUES (:id, :ts, 'complete', :ts, :input_key)"
         ),
         snap_rows,
     )

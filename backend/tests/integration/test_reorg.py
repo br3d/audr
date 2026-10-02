@@ -107,11 +107,11 @@ async def _insert_snapshot(
     await session.execute(
         sa.text(
             """
-            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)
-            VALUES (:id, :ts, :quality, :ts)
+            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)
+            VALUES (:id, :ts, :quality, :ts, :input_key)
             """
         ),
-        {"id": str(sid), "ts": now, "quality": quality},
+        {"id": str(sid), "ts": now, "quality": quality, "input_key": str(sid)},
     )
     return sid
 

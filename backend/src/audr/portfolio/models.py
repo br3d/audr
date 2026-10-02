@@ -64,6 +64,10 @@ class ValuationSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # sha256 of the exact inputs (observation ids + quote_set ids) this
+    # snapshot was built from — unique so publish_valuation_snapshot can
+    # dedupe a retry of the same inputs instead of publishing a duplicate.
+    input_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
 
 class ValuationLine(Base):

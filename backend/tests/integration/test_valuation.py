@@ -13,6 +13,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.portfolio.history import materialize_history_point
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
 from audr.portfolio.snapshot import _compute_quality, publish_valuation_snapshot
 
@@ -98,13 +99,15 @@ async def _insert_quote_set(
     asset_id: uuid.UUID,
     price_usd: Decimal,
     status: str = "complete",
+    offset_minutes: int = 0,
 ) -> uuid.UUID:
     qset_id = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO quote_set (id, provider, fetched_at, status) VALUES (:id, 'coingecko', now(), :status)"
+            "INSERT INTO quote_set (id, provider, fetched_at, status)"
+            " VALUES (:id, 'coingecko', now() + (:offset * interval '1 minute'), :status)"
         ),
-        {"id": str(qset_id), "status": status},
+        {"id": str(qset_id), "status": status, "offset": offset_minutes},
     )
     await session.execute(
         sa.text(
@@ -503,3 +506,94 @@ async def test_empty_complete_set_does_not_shadow_prior_prices(
         "empty complete set must not shadow valid prices from an earlier set"
     )
     assert result.priced_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Input-key deduplication (AUD-70)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_publish_snapshot_retry_same_inputs_does_not_add_history(
+    db_session: AsyncSession,
+) -> None:
+    """Retrying publish with the exact same observation/quote inputs must not add history."""
+    wallet_id = await _insert_wallet(db_session, "0x" + "e1" * 20)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "e2" * 20, decimals=18)
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=10**18)
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("2000"))
+    await db_session.flush()
+
+    first = await publish_valuation_snapshot(db_session)
+    assert first.created is True
+    await materialize_history_point(db_session, snapshot_id=first.snapshot_id)
+
+    # Retry with no new observations or quotes at all.
+    second = await publish_valuation_snapshot(db_session)
+    assert second.created is False
+    assert second.snapshot_id == first.snapshot_id
+    await materialize_history_point(db_session, snapshot_id=second.snapshot_id)
+
+    snapshot_count = await db_session.execute(
+        sa.text("SELECT COUNT(*) FROM valuation_snapshot")
+    )
+    assert snapshot_count.scalar_one() == 1
+
+    history_count = await db_session.execute(
+        sa.text("SELECT COUNT(*) FROM history_point")
+    )
+    assert history_count.scalar_one() == 1
+
+
+@pytest.mark.integration
+async def test_publish_snapshot_later_verified_block_adds_history(
+    db_session: AsyncSession,
+) -> None:
+    """A later verified block with unchanged quantities still has a new observation id,
+    so it adds a new snapshot and history point (the input key differs by block)."""
+    wallet_id = await _insert_wallet(db_session, "0x" + "e3" * 20)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "e4" * 20, decimals=18)
+    await session_execute_with_delay(
+        db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=10**18, block_number=100
+    )
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("2000"))
+    await db_session.flush()
+
+    first = await publish_valuation_snapshot(db_session)
+    assert first.created is True
+
+    # Same quantity, later verified block — a new observation row, same raw_amount.
+    await session_execute_with_delay(
+        db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=10**18, block_number=200
+    )
+    await db_session.flush()
+
+    second = await publish_valuation_snapshot(db_session)
+    assert second.created is True
+    assert second.snapshot_id != first.snapshot_id
+
+
+@pytest.mark.integration
+async def test_publish_snapshot_quote_set_change_adds_history(
+    db_session: AsyncSession,
+) -> None:
+    """Changing only the quote set (holdings unchanged) still adds a new snapshot."""
+    wallet_id = await _insert_wallet(db_session, "0x" + "e5" * 20)
+    asset_id = await _insert_asset(db_session, token_address="0x" + "e6" * 20, decimals=18)
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=10**18)
+    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("2000"))
+    await db_session.flush()
+
+    first = await publish_valuation_snapshot(db_session)
+    assert first.created is True
+
+    # A fresh quote_set, strictly newer, same price — holdings are unchanged but
+    # the quote data's provenance (quote_set id) is new.
+    await _insert_quote_set(
+        db_session, asset_id=asset_id, price_usd=Decimal("2100"), offset_minutes=10
+    )
+    await db_session.flush()
+
+    second = await publish_valuation_snapshot(db_session)
+    assert second.created is True
+    assert second.snapshot_id != first.snapshot_id
