@@ -143,8 +143,8 @@ async def _insert_snapshot(
     await session.execute(
         text(
             """
-            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)
-            VALUES (:id, :ts, :quality, :pub)
+            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)
+            VALUES (:id, :ts, :quality, :pub, :input_key)
             """
         ),
         {
@@ -152,6 +152,7 @@ async def _insert_snapshot(
             "ts": snapshotted_at or now,
             "quality": quality,
             "pub": published_at or now,
+            "input_key": str(sid),
         },
     )
     return sid

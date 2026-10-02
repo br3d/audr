@@ -92,10 +92,10 @@ async def _seed_snapshot(
             published_clause = "NOW()" if published else "NULL"
             await session.execute(
                 text(
-                    f"INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)"
-                    f" VALUES (:id, NOW(), :quality, {published_clause})"
+                    f"INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+                    f" VALUES (:id, NOW(), :quality, {published_clause}, :input_key)"
                 ),
-                {"id": snap_id, "quality": quality},
+                {"id": snap_id, "quality": quality, "input_key": snap_id},
             )
 
             for h in holdings or []:
