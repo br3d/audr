@@ -11,7 +11,7 @@ const POINTS: HistoryPoint[] = [
     snapshot_id: 'abc-1',
     snapshotted_at: '2026-01-15T00:00:00Z',
     total_value_usd: '5000.00',
-    quality: 'ok',
+    quality: 'complete',
     included_wallet_count: 1,
     included_asset_count: 1,
     has_gap: false,
@@ -22,7 +22,7 @@ const POINTS: HistoryPoint[] = [
     snapshot_id: 'abc-2',
     snapshotted_at: '2026-01-16T00:00:00Z',
     total_value_usd: '5200.00',
-    quality: 'ok',
+    quality: 'complete',
     included_wallet_count: 1,
     included_asset_count: 1,
     has_gap: false,
@@ -47,7 +47,7 @@ const POINTS_NO_GAPS: HistoryPoint[] = [
     snapshot_id: 'abc-3',
     snapshotted_at: '2026-01-15T00:00:00Z',
     total_value_usd: '5000.00',
-    quality: 'ok',
+    quality: 'complete',
     included_wallet_count: 1,
     included_asset_count: 1,
     has_gap: false,
@@ -58,7 +58,7 @@ const POINTS_NO_GAPS: HistoryPoint[] = [
     snapshot_id: 'abc-4',
     snapshotted_at: '2026-01-16T00:00:00Z',
     total_value_usd: '5100.00',
-    quality: 'ok',
+    quality: 'complete',
     included_wallet_count: 1,
     included_asset_count: 1,
     has_gap: false,
@@ -159,7 +159,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'n1',
         snapshotted_at: '2026-03-03T00:00:00Z',
         total_value_usd: '3000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -170,7 +170,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'n2',
         snapshotted_at: '2026-03-02T00:00:00Z',
         total_value_usd: '2000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -181,7 +181,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'n3',
         snapshotted_at: '2026-03-01T00:00:00Z',
         total_value_usd: '1000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -200,7 +200,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'x1',
         snapshotted_at: '2026-03-02T00:00:00Z',
         total_value_usd: '2000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -211,7 +211,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'x2',
         snapshotted_at: '2026-03-01T00:00:00Z',
         total_value_usd: '1000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -223,13 +223,13 @@ describe('HistoryChart', () => {
     expect(newestFirst[0].snapshotted_at).toBe('2026-03-02T00:00:00Z')
   })
 
-  it('buildChartData breaks the line at has_gap points instead of keeping a value', () => {
+  it('buildChartData keeps the value of a has_gap point and only breaks on a null total', () => {
     const withGapValue: HistoryPoint[] = [
       {
         snapshot_id: 'g1',
         snapshotted_at: '2026-01-01T00:00:00Z',
         total_value_usd: '191000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -237,22 +237,66 @@ describe('HistoryChart', () => {
         is_gap_marker: false,
       },
       {
-        // A real row can carry both a value and has_gap=true (degraded 'gaps' quality) —
-        // the chart must still render it as a break, not a connected point.
+        // A real row can carry both a value and has_gap=true (degraded 'gaps'
+        // quality). has_gap annotates data quality — it does not mean "no
+        // value" — so the point must stay on the line. Nulling it here blanked
+        // the entire chart on the live stand, where every snapshot is partial
+        // and therefore every point had has_gap=true (AUD-371).
         snapshot_id: 'g2',
         snapshotted_at: '2026-01-02T00:00:00Z',
         total_value_usd: '189000.00',
-        quality: 'incomplete',
+        quality: 'gaps',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: true,
         is_canonical: true,
         is_gap_marker: false,
       },
+      {
+        // A synthetic gap marker has no value at all — this is the real break.
+        snapshot_id: null,
+        snapshotted_at: '2026-01-03T00:00:00Z',
+        total_value_usd: null,
+        quality: 'unknown',
+        included_wallet_count: 0,
+        included_asset_count: 0,
+        has_gap: true,
+        is_canonical: true,
+        is_gap_marker: true,
+      },
     ]
     const data = buildChartData(withGapValue)
     expect(data[1].has_gap).toBe(true)
-    expect(data[1].value).toBeNull()
+    expect(data[1].value).toBe(189000)
+    expect(data[2].value).toBeNull()
+  })
+
+  it('renders a line for a range where every point is partial (has_gap=true)', async () => {
+    // Regression guard for AUD-371: the stand had 94 consecutive has_gap=true
+    // points and rendered an entirely empty chart.
+    const allPartial: HistoryPoint[] = Array.from({ length: 5 }, (_, i) => ({
+      snapshot_id: `p${i}`,
+      snapshotted_at: `2026-01-0${i + 1}T00:00:00Z`,
+      total_value_usd: `${191000 + i * 500}.00`,
+      quality: 'gaps' as const,
+      included_wallet_count: 2,
+      included_asset_count: 79,
+      has_gap: true,
+      is_canonical: true,
+      is_gap_marker: false,
+    }))
+    const data = buildChartData(allPartial)
+    expect(data.every((d) => d.value !== null)).toBe(true)
+
+    const { container, root } = mount(
+      React.createElement(HistoryChart, { points: allPartial }),
+    )
+    // No "breaks in the line" claim when the line is in fact continuous.
+    const breakNote = Array.from(container.querySelectorAll('[role="note"]')).find((el) =>
+      el.textContent?.toLowerCase().includes('breaks in the line'),
+    )
+    expect(breakNote).toBeUndefined()
+    await unmount(container, root)
   })
 
   describe('computeYDomain', () => {
@@ -295,7 +339,7 @@ describe('HistoryChart', () => {
       snapshot_id: i % 2 === 0 ? `p${i}` : null,
       snapshotted_at: new Date(2026, 0, i + 1).toISOString(),
       total_value_usd: i % 2 === 0 ? '191000.00' : null,
-      quality: i % 2 === 0 ? 'ok' : 'stale',
+      quality: i % 2 === 0 ? 'complete' : 'stale',
       included_wallet_count: i % 2 === 0 ? 1 : 0,
       included_asset_count: i % 2 === 0 ? 1 : 0,
       has_gap: i % 2 !== 0,
@@ -315,7 +359,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'inv-1',
         snapshotted_at: '2026-01-15T00:00:00Z',
         total_value_usd: '5000.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,
@@ -326,7 +370,7 @@ describe('HistoryChart', () => {
         snapshot_id: 'inv-2',
         snapshotted_at: '2026-01-16T00:00:00Z',
         total_value_usd: '5200.00',
-        quality: 'ok',
+        quality: 'complete',
         included_wallet_count: 1,
         included_asset_count: 1,
         has_gap: false,

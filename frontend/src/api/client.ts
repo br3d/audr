@@ -602,7 +602,11 @@ export function submitPurge(input: PurgeInput): Promise<JobRef> {
 
 export type HistoryPeriod = '24h' | '7d' | '30d' | '90d' | '1y' | 'all'
 
-export type HistoryQuality = 'ok' | 'stale' | 'incomplete'
+// Mirrors the backend vocabulary emitted by valuation_snapshot.quality
+// (see backend/src/audr/portfolio/snapshot.py). The previous
+// 'ok' | 'stale' | 'incomplete' triple never matched the wire format, so every
+// quality label fell through to a default and no quality notice ever rendered.
+export type HistoryQuality = 'complete' | 'partial' | 'stale' | 'gaps' | 'unknown'
 
 export interface HistoryPoint {
   snapshot_id: string | null

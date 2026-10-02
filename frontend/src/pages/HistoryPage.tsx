@@ -27,9 +27,10 @@ export default function HistoryPage() {
     refetchInterval: 60_000,
   })
 
-  const hasGaps = data?.entries.some((p) => p.has_gap) ?? false
+  const hasGaps = data?.entries.some((p) => p.is_gap_marker) ?? false
   const hasStale = data?.entries.some((p) => p.quality === 'stale') ?? false
-  const hasIncomplete = data?.entries.some((p) => p.quality === 'incomplete') ?? false
+  const hasIncomplete =
+    data?.entries.some((p) => p.quality === 'partial' || p.quality === 'gaps') ?? false
   const hasInvalidated = data?.entries.some((p) => !p.is_canonical) ?? false
 
   return (

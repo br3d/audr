@@ -7,13 +7,16 @@ interface Props {
 
 function qualityLabel(quality: HistoryPoint['quality']): string {
   if (quality === 'stale') return 'Stale'
-  if (quality === 'incomplete') return 'Incomplete'
-  return 'OK'
+  if (quality === 'partial') return 'Partial'
+  if (quality === 'gaps') return 'Gaps'
+  if (quality === 'unknown') return 'Unknown'
+  return 'Complete'
 }
 
 function rowAriaLabel(point: HistoryPoint): string | undefined {
   const parts: string[] = []
-  if (point.has_gap) parts.push('Gap — data missing before this point')
+  if (point.is_gap_marker) parts.push('Gap — no data recorded for this period')
+  else if (point.has_gap) parts.push('Partial — some asset values were unknown')
   if (!point.is_canonical) {
     parts.push('Invalidated — recalculated after a reorg or failed block verification')
   }
@@ -42,7 +45,7 @@ export default function HistoryTable({ points }: Props) {
               <MoneyValue value={point.total_value_usd} />
             </td>
             <td>
-              {point.has_gap && (
+              {point.is_gap_marker && (
                 <span aria-label="Gap marker" role="note" data-testid="gap-marker">
                   Gap ·{' '}
                 </span>
