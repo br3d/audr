@@ -11,6 +11,15 @@ function qualityLabel(quality: HistoryPoint['quality']): string {
   return 'OK'
 }
 
+function rowAriaLabel(point: HistoryPoint): string | undefined {
+  const parts: string[] = []
+  if (point.has_gap) parts.push('Gap — data missing before this point')
+  if (!point.is_canonical) {
+    parts.push('Invalidated — recalculated after a reorg or failed block verification')
+  }
+  return parts.length > 0 ? parts.join('; ') : undefined
+}
+
 export default function HistoryTable({ points }: Props) {
   if (points.length === 0) {
     return <p role="note">No history data available for this range.</p>
@@ -27,7 +36,7 @@ export default function HistoryTable({ points }: Props) {
       </thead>
       <tbody>
         {points.map((point) => (
-          <tr key={point.snapshotted_at} aria-label={point.has_gap ? 'Gap — data missing before this point' : undefined}>
+          <tr key={point.snapshotted_at} aria-label={rowAriaLabel(point)}>
             <td>{point.snapshotted_at}</td>
             <td>
               <MoneyValue value={point.total_value_usd} />
@@ -36,6 +45,15 @@ export default function HistoryTable({ points }: Props) {
               {point.has_gap && (
                 <span aria-label="Gap marker" role="note" data-testid="gap-marker">
                   Gap ·{' '}
+                </span>
+              )}
+              {!point.is_canonical && (
+                <span
+                  aria-label="Invalidated marker"
+                  role="note"
+                  data-testid="invalidated-marker"
+                >
+                  Invalidated ·{' '}
                 </span>
               )}
               {qualityLabel(point.quality)}

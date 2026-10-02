@@ -309,6 +309,48 @@ describe('HistoryChart', () => {
     await unmount(container, root)
   })
 
+  it('renders a hollow marker for non-canonical points and an explanation note', async () => {
+    const withInvalidated: HistoryPoint[] = [
+      {
+        snapshot_id: 'inv-1',
+        snapshotted_at: '2026-01-15T00:00:00Z',
+        total_value_usd: '5000.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: false,
+        is_gap_marker: false,
+      },
+      {
+        snapshot_id: 'inv-2',
+        snapshotted_at: '2026-01-16T00:00:00Z',
+        total_value_usd: '5200.00',
+        quality: 'ok',
+        included_wallet_count: 1,
+        included_asset_count: 1,
+        has_gap: false,
+        is_canonical: true,
+        is_gap_marker: false,
+      },
+    ]
+    const { container, root } = mount(
+      React.createElement(HistoryChart, { points: withInvalidated }),
+    )
+    expect(container.querySelector('[data-testid="invalidated-point"]')).toBeTruthy()
+    expect(container.textContent?.toLowerCase()).toContain('invalidated')
+    await unmount(container, root)
+  })
+
+  it('does not render a hollow marker or note when all points are canonical', async () => {
+    const { container, root } = mount(
+      React.createElement(HistoryChart, { points: POINTS_NO_GAPS }),
+    )
+    expect(container.querySelector('[data-testid="invalidated-point"]')).toBeNull()
+    expect(container.textContent?.toLowerCase()).not.toContain('invalidated')
+    await unmount(container, root)
+  })
+
   it('renders an area chart (filled series), not a bare line chart', async () => {
     const { container, root } = mount(
       React.createElement(HistoryChart, { points: POINTS }),

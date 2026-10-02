@@ -600,7 +600,7 @@ export function submitPurge(input: PurgeInput): Promise<JobRef> {
 
 // --- History types ---
 
-export type HistoryPeriod = '24h' | '7d' | '30d' | 'all'
+export type HistoryPeriod = '24h' | '7d' | '30d' | '90d' | '1y' | 'all'
 
 export type HistoryQuality = 'ok' | 'stale' | 'incomplete'
 
