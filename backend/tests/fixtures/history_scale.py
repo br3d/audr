@@ -25,6 +25,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -46,9 +47,27 @@ def _db_url() -> str:
     return os.environ.get("TEST_DATABASE_URL", _DEFAULT_DB_URL)
 
 
-async def generate(session: AsyncSession) -> dict[str, float | int]:
-    """Populate the scale fixture.  Returns timing stats."""
-    stats: dict[str, float | int] = {}
+async def generate(
+    session: AsyncSession,
+    *,
+    hourly_points: int = HOURLY_POINTS,
+    base_time: datetime = _BASE_TIME,
+) -> dict[str, Any]:
+    """Populate the scale fixture.  Returns timing stats.
+
+    *hourly_points* exists so `scripts/benchmark.py` can run a reduced-scale
+    pass on a host that cannot hold the full reference fixture (500 pairs ×
+    8,760 snapshots = 4.38M valuation_line rows). Leave it at the default for
+    any run whose numbers are published as reference results.
+
+    *base_time* is the timestamp of the first (oldest) snapshot; points run
+    forward hourly from there. The default is the fixed 2025-01-01 epoch that
+    keeps SQL spot-checks reproducible. `scripts/benchmark.py` passes a
+    now-anchored value instead, because `GET /api/v1/history` selects relative
+    to wall-clock time and a fixture dated in the past returns zero entries
+    for every period but `all`.
+    """
+    stats: dict[str, Any] = {}
     t0 = time.monotonic()
 
     wallets = await _generate_wallets(session)
@@ -60,11 +79,11 @@ async def generate(session: AsyncSession) -> dict[str, float | int]:
 
     # Build 8,760 hourly snapshots.
     snapshot_ids: list[uuid.UUID] = []
-    ts_list = [_BASE_TIME + timedelta(hours=h) for h in range(HOURLY_POINTS)]
+    ts_list = [base_time + timedelta(hours=h) for h in range(hourly_points)]
 
     snap_rows = [
         {
-            "id": str(uid := uuid.uuid4()),
+            "id": str(uuid.uuid4()),
             "ts": ts,
             "quality": "complete",
         }
@@ -72,54 +91,47 @@ async def generate(session: AsyncSession) -> dict[str, float | int]:
     ]
     snapshot_ids = [uuid.UUID(r["id"]) for r in snap_rows]
 
-    await _batch_insert(
-        session,
+    # valuation_snapshot.input_key (migration 0014) is NOT NULL UNIQUE, but it
+    # arrived after this fixture did and the fixture has to work against a
+    # database migrated to either side of it. Probing the column keeps the
+    # generator independent of migration ordering. The snapshot id is a
+    # trivially unique filler, which is exactly what 0014's own backfill uses.
+    if await _has_column(session, "valuation_snapshot", "input_key"):
+        for row in snap_rows:
+            row["input_key"] = row["id"]
+        insert_snapshot = """
+            INSERT INTO valuation_snapshot
+              (id, snapshotted_at, quality, published_at, input_key)
+            VALUES (:id, :ts, :quality, :ts, :input_key)
         """
-        INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)
-        VALUES (:id, :ts, :quality, :ts)
-        """,
-        snap_rows,
-    )
+    else:
+        insert_snapshot = """
+            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at)
+            VALUES (:id, :ts, :quality, :ts)
+        """
+
+    await _batch_insert(session, insert_snapshot, snap_rows)
 
     t_snap = time.monotonic()
     stats["snapshot_insert_s"] = round(t_snap - t0, 2)
-    logger.info("inserted %d snapshots in %.2fs", HOURLY_POINTS, stats["snapshot_insert_s"])
+    logger.info("inserted %d snapshots in %.2fs", hourly_points, stats["snapshot_insert_s"])
 
     # Build valuation_lines: for each snapshot, include all held pairs.
-    line_rows = []
-    for sid in snapshot_ids:
-        for wallet_id, asset_id, decimals in pairs:
-            raw_amount = 1_000_000 * (10**decimals)
-            price = Decimal("1.50")
-            value = Decimal(str(raw_amount)) / Decimal(10**decimals) * price
-            line_rows.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "sid": str(sid),
-                    "wid": str(wallet_id),
-                    "aid": str(asset_id),
-                    "raw": str(raw_amount),
-                    "block": 18_000_000,
-                    "price": str(price),
-                    "value": str(value),
-                }
-            )
+    #
+    # Server-side CROSS JOIN rather than client-side parameter rows. At the
+    # reference scale this table holds 500 × 8,760 = 4.38M rows; materialising
+    # that many bound-parameter dicts in Python cost ~1.7 GB of RSS and ran at
+    # roughly 500 rows/s, which put a full-scale seed hours away and polluted
+    # the benchmark's own peak-memory figure. Generating the rows in Postgres
+    # keeps memory flat and the throughput disk-bound.
+    line_count = await _generate_lines(session, snapshot_ids, pairs)
 
-    await _batch_insert(
-        session,
-        """
-        INSERT INTO valuation_line
-          (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, price_usd, value_usd)
-        VALUES (:id, :sid, :wid, :aid, :raw, :block, :price, :value)
-        """,
-        line_rows,
-    )
     t_lines = time.monotonic()
     stats["line_insert_s"] = round(t_lines - t_snap, 2)
-    stats["line_count"] = len(line_rows)
+    stats["line_count"] = line_count
     logger.info(
         "inserted %d valuation_lines in %.2fs",
-        len(line_rows),
+        line_count,
         stats["line_insert_s"],
     )
 
@@ -129,7 +141,7 @@ async def generate(session: AsyncSession) -> dict[str, float | int]:
         {
             "id": str(uuid.uuid4()),
             "sid": str(sid),
-            "ts": _BASE_TIME + timedelta(hours=i),
+            "ts": base_time + timedelta(hours=i),
             "total": str(total_value_per_snap),
             "quality": "complete",
             "wc": WALLET_COUNT,
@@ -154,10 +166,13 @@ async def generate(session: AsyncSession) -> dict[str, float | int]:
     stats["history_point_insert_s"] = round(t_hp - t_lines, 2)
     logger.info(
         "inserted %d history_points in %.2fs",
-        HOURLY_POINTS,
+        hourly_points,
         stats["history_point_insert_s"],
     )
 
+    stats["hourly_points"] = hourly_points
+    stats["first_point_at"] = ts_list[0].isoformat() if ts_list else None
+    stats["last_point_at"] = ts_list[-1].isoformat() if ts_list else None
     stats["total_s"] = round(time.monotonic() - t0, 2)
     return stats
 
@@ -209,6 +224,81 @@ async def _generate_assets(session: AsyncSession) -> list[tuple[uuid.UUID, int]]
         rows,
     )
     return ids_dec
+
+
+async def _has_column(session: AsyncSession, table: str, column: str) -> bool:
+    result = await session.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns"
+            " WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
+        ),
+        {"t": table, "c": column},
+    )
+    return result.first() is not None
+
+
+_LINE_SNAPSHOT_CHUNK = 200  # 200 snapshots × 500 pairs = 100k rows per statement
+
+
+async def _generate_lines(
+    session: AsyncSession,
+    snapshot_ids: list[uuid.UUID],
+    pairs: list[tuple[uuid.UUID, uuid.UUID, int]],
+) -> int:
+    """Insert one valuation_line per (snapshot, held pair), generated in Postgres.
+
+    The held pairs go into a temporary table once; each chunk of snapshots is
+    then one INSERT ... SELECT that cross-joins them. Returns the row count.
+    """
+    await session.execute(
+        sa.text(
+            """
+            CREATE TEMPORARY TABLE _scale_pairs (
+                wallet_id uuid NOT NULL,
+                asset_id  uuid NOT NULL,
+                decimals  smallint NOT NULL
+            ) ON COMMIT DROP
+            """
+        )
+    )
+    await _batch_insert(
+        session,
+        "INSERT INTO _scale_pairs (wallet_id, asset_id, decimals) VALUES (:wid, :aid, :dec)",
+        [
+            {"wid": str(wallet_id), "aid": str(asset_id), "dec": decimals}
+            for wallet_id, asset_id, decimals in pairs
+        ],
+    )
+
+    # Every pair holds 1,000,000 whole units at $1.50 — the same values the
+    # previous client-side generator produced, so published row totals and
+    # per-snapshot portfolio totals are unchanged.
+    for start in range(0, len(snapshot_ids), _LINE_SNAPSHOT_CHUNK):
+        chunk = snapshot_ids[start : start + _LINE_SNAPSHOT_CHUNK]
+        await session.execute(
+            sa.text(
+                """
+                INSERT INTO valuation_line
+                  (id, snapshot_id, wallet_id, asset_id, raw_amount,
+                   block_number, price_usd, value_usd)
+                SELECT
+                    gen_random_uuid(),
+                    s.id,
+                    p.wallet_id,
+                    p.asset_id,
+                    1000000 * (10::numeric ^ p.decimals),
+                    18000000,
+                    1.50,
+                    1500000
+                FROM valuation_snapshot s
+                CROSS JOIN _scale_pairs p
+                WHERE s.id = ANY(:ids)
+                """
+            ),
+            {"ids": [str(sid) for sid in chunk]},
+        )
+
+    return len(snapshot_ids) * len(pairs)
 
 
 def _choose_pairs(

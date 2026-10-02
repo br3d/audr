@@ -83,6 +83,39 @@ services:
     profiles:
       - backend
 
+  # Warm dashboard/history p50/p95 benchmark + catalog logical-call report
+  # (AUD-108). Re-added after AUD-329 removed the earlier placeholder, which
+  # invoked pytest --benchmark-only against a suite that had neither
+  # pytest-benchmark nor a `benchmark` marker. This one runs
+  # scripts/benchmark.py, which needs no extra dependencies beyond the dev
+  # extra Dockerfile.test already installs, and exits non-zero when a measured
+  # p95 breaks the SC-004 3s budget.
+  #
+  # No provider-mock dependency: the logical-call report replaces
+  # RpcReader._call with a counter, so the run makes no outbound HTTP calls.
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    command: ["python", "/workspace/scripts/benchmark.py"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+      SECRET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      # Without this, stdout is block-buffered (the run has no tty) and a
+      # full-scale seed shows no output at all for tens of minutes, which
+      # is indistinguishable from a hang.
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+    networks:
+      - test-net
+    volumes:
+      - ./backend:/workspace/backend:ro
+      - ./scripts:/workspace/scripts:ro
+    profiles:
+      - benchmark
+
   frontend-tests:
     image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
     working_dir: /workspace
@@ -111,7 +144,8 @@ services:
 #     only alongside a real Dockerfile.e2e and a correctly wired app service.
 #   benchmark — passed --benchmark-only, but pytest-benchmark is not a dev
 #     dependency and no test carries a `benchmark` marker, so the profile
-#     always failed at collection.
+#     always failed at collection. Re-added above in AUD-108 as a real
+#     service that runs scripts/benchmark.py.
 
 volumes:
   frontend_node_modules:
