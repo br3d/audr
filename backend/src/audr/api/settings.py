@@ -436,7 +436,7 @@ async def resume_schedule_route(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/jobs", response_model=JobRef)
+@router.post("/jobs", response_model=JobRef, status_code=http_status.HTTP_202_ACCEPTED)
 async def trigger_job(
     body: TriggerJobInput,
     _session: Annotated[Any, Depends(_require_csrf)],
@@ -572,7 +572,7 @@ async def get_job(
     return _map_job_row(row)
 
 
-@router.post("/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel", status_code=http_status.HTTP_202_ACCEPTED)
 async def cancel_job(
     job_id: uuid.UUID,
     _session: Annotated[Any, Depends(_require_csrf)],

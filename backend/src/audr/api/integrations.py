@@ -271,7 +271,11 @@ async def put_integration_quotes(
     return await _build_entry(db, "quotes", "coingecko")
 
 
-@router.post("/integrations/{kind}/validate", response_model=JobRef)
+@router.post(
+    "/integrations/{kind}/validate",
+    response_model=JobRef,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
 async def post_integration_validate(
     kind: str,
     _session: Annotated[Session, Depends(_require_csrf)],

@@ -300,7 +300,7 @@ async def test_validate_rpc_queues_job(http_client: httpx.AsyncClient) -> None:
         f"{_INTEGRATIONS_URL}/rpc/validate",
         headers={"x-csrf-token": csrf},
     )
-    assert r.status_code == 200
+    assert r.status_code == 202
     data = r.json()
     assert "run_id" in data
     assert data["coalesced"] is False

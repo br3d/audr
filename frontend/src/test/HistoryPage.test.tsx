@@ -28,7 +28,14 @@ import type { HistoryResponse, HistoryPoint } from '../api/client'
 const mockFetchHistory = vi.mocked(fetchHistory)
 
 function makeHistoryResponse(overrides: Partial<HistoryResponse> = {}): HistoryResponse {
-  return { period: '7d', entries: [], next_cursor: null, ...overrides }
+  return {
+    period: '7d',
+    items: [],
+    next_cursor: null,
+    request_id: 'req-1',
+    generated_at: '2026-01-15T00:00:00Z',
+    ...overrides,
+  }
 }
 
 function makePoint(overrides: Partial<HistoryPoint> = {}): HistoryPoint {
@@ -161,7 +168,7 @@ describe('HistoryPage — invalidation explanation (AUD-86)', () => {
 
   it('shows an invalidation notice when the range contains non-canonical points', async () => {
     mockFetchHistory.mockResolvedValue(
-      makeHistoryResponse({ entries: [makePoint({ is_canonical: false })] }),
+      makeHistoryResponse({ items: [makePoint({ is_canonical: false })] }),
     )
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(mockFetchHistory).toHaveBeenCalled())
@@ -177,7 +184,7 @@ describe('HistoryPage — invalidation explanation (AUD-86)', () => {
 
   it('does not show an invalidation notice when all points are canonical', async () => {
     mockFetchHistory.mockResolvedValue(
-      makeHistoryResponse({ entries: [makePoint({ is_canonical: true })] }),
+      makeHistoryResponse({ items: [makePoint({ is_canonical: true })] }),
     )
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(mockFetchHistory).toHaveBeenCalled())

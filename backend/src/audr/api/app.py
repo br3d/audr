@@ -23,6 +23,7 @@ from audr.api.health import router as health_router
 from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
 from audr.api.integrations import router as integrations_router
+from audr.api.networks import router as networks_router
 from audr.api.news import router as news_router
 from audr.api.portfolio import router as portfolio_router
 from audr.api.settings import router as settings_router
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
     app.include_router(assets_router)
     app.include_router(history_router)
     app.include_router(integrations_router)
+    app.include_router(networks_router)
     app.include_router(settings_router)
     app.include_router(events_router)
     app.include_router(news_router)

@@ -42,6 +42,14 @@ class PasswordBody(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+class LoginBody(BaseModel):
+    """Login accepts any candidate password; the length floor is a setup-time
+    complexity rule, not a login-time one — a wrong password must fail with
+    401 from the credential check, never 422 from schema validation."""
+
+    password: str = Field(min_length=1, max_length=128)
+
+
 class ChangePasswordBody(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=12, max_length=128)
@@ -190,7 +198,7 @@ async def post_setup(
 
 @router.post("/auth/login", response_model=TokenResponse)
 async def post_login(
-    body: PasswordBody,
+    body: LoginBody,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -233,7 +241,9 @@ async def post_logout(
     _clear_session_cookie(response)
 
 
-@router.patch("/auth/password", status_code=http_status.HTTP_204_NO_CONTENT)
+@router.api_route(
+    "/auth/password", methods=["PUT", "PATCH"], status_code=http_status.HTTP_204_NO_CONTENT
+)
 async def patch_password(
     body: ChangePasswordBody,
     response: Response,

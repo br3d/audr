@@ -33,7 +33,7 @@ async def test_history_accepts_all_known_periods(seeded_client, period: str) -> 
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["period"] == period
-    assert isinstance(body["entries"], list)
+    assert isinstance(body["items"], list)
 
 
 async def test_history_rejects_unknown_period(seeded_client) -> None:

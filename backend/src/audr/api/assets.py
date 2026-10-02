@@ -17,11 +17,15 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
+from audr.assets.catalog import get_latest_catalog_version
 from audr.assets.constants import is_native_eth
 from audr.auth.models import Session
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
+
+# Matches the vendored source documented in audr.assets.catalog.
+_CATALOG_SOURCE = "https://github.com/Uniswap/default-token-list"
 
 # 7 days, matching the asset_icon_refresh job's negative-cache TTL (AUD-385).
 _ICON_CACHE_CONTROL = "public, max-age=604800"
@@ -75,6 +79,14 @@ class PatchAssetBody(BaseModel):
     excluded: bool | None = None
     decimals_override: int | None = None
     confirm_metadata_override: bool | None = None
+
+
+class CatalogOut(BaseModel):
+    source: str
+    version: str | None
+    count: int
+    bundled_at: str | None
+    coverage: str
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +214,39 @@ async def list_assets(
         next_cursor=next_cursor,
         request_id=str(uuid.uuid4()),
         generated_at=now.isoformat(),
+    )
+
+
+@router.get("/catalog", response_model=CatalogOut)
+async def get_catalog(
+    _session: Annotated[Session, Depends(_require_session)],
+    db: AsyncSession = Depends(get_db),
+) -> CatalogOut:
+    """Report the pinned catalog snapshot's source, version and coverage.
+
+    No catalog has necessarily been imported yet (the import runs as part of
+    discovery) — report zero coverage rather than erroring in that case.
+    """
+    version = await get_latest_catalog_version(db)
+    if version is None:
+        return CatalogOut(
+            source=_CATALOG_SOURCE,
+            version=None,
+            count=0,
+            bundled_at=None,
+            coverage="No catalog snapshot has been imported yet.",
+        )
+    return CatalogOut(
+        source=_CATALOG_SOURCE,
+        version=version.commit_hash,
+        count=version.entry_count,
+        bundled_at=version.imported_at.isoformat(),
+        coverage=(
+            "Pinned Uniswap default token list snapshot for Ethereum mainnet "
+            "(chain_id=1); discovery matches tracked wallets against entries "
+            "in this catalog, plus any manually added or on-chain-discovered "
+            "assets outside it."
+        ),
     )
 
 
