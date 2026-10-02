@@ -279,14 +279,13 @@ test.describe('Keyboard navigation — all journeys', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Text alternatives for charts', () => {
-  test('valuation: allocation pie chart has an accessible data table alternative', async ({
+  test('valuation: allocation is presented as an accessible data table', async ({
     page,
   }) => {
     await mockPortfolio(page, MOCK_ALLOCATION_PORTFOLIO)
     await mockHistory(page, MOCK_HISTORY_ENTRIES)
     await ensureSignedIn(page)
 
-    await expect(page.getByRole('img', { name: /asset allocation pie chart/i })).toBeVisible()
     const table = page.getByRole('table', { name: /asset allocation/i })
     await expect(table).toBeVisible()
     await expect(table.getByRole('cell', { name: 'ETH' })).toBeVisible()
@@ -299,7 +298,7 @@ test.describe('Text alternatives for charts', () => {
     await mockHistory(page, [])
     await ensureSignedIn(page)
 
-    await expect(page.getByRole('img', { name: /asset allocation pie chart/i })).not.toBeVisible()
+    await expect(page.getByRole('table', { name: /asset allocation/i })).not.toBeVisible()
     await expect(page.getByText(/no holdings found/i)).toBeVisible()
   })
 
@@ -397,14 +396,14 @@ for (const viewport of VIEWPORTS) {
       ).toBeVisible()
     })
 
-    test('valuation journey (Dashboard) renders the total and allocation chart', async ({
+    test('valuation journey (Dashboard) renders the total and allocation list', async ({
       page,
     }) => {
       await mockPortfolio(page, MOCK_ALLOCATION_PORTFOLIO)
       await mockHistory(page, MOCK_HISTORY_ENTRIES)
       await ensureSignedIn(page)
       await expect(page.getByRole('heading', { name: /overview/i, level: 2 })).toBeVisible()
-      await expect(page.getByRole('img', { name: /asset allocation pie chart/i })).toBeVisible()
+      await expect(page.getByRole('table', { name: /asset allocation/i })).toBeVisible()
     })
 
     test('history journey renders the chart or its empty state', async ({ page }) => {

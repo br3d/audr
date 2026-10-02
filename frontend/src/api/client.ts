@@ -252,6 +252,8 @@ export interface AllocationItem {
   symbol: string
   value_usd: string
   percentage: string
+  /** Optional token logo. Absent on the keyless default path; the UI falls back to a monogram. */
+  logo_url?: string | null
 }
 
 export interface PortfolioQuality {
