@@ -111,6 +111,20 @@ This spec had never been run before. The first runs surfaced real stale-selector
 
 With all of the above fixed, a clean run passed **51/54**. The remaining 3 failures were `signIn()`/navigation timeouts (`waitForSelector`/`toBeVisible` exceeding their 5–30s budgets), all in the first ~90 seconds of the run while this shared host was still busy with concurrent docker/test activity from other agents; every test after that point passed in 7–13s each. That is host contention in this particular shared dev environment, not a selector or product defect — the same three cases had passed on earlier runs when the host was less loaded.
 
+**Run 2026-10-02** against `tests/e2e/accessibility.spec.ts` (20 cases covering keyboard navigation, chart text alternatives, English-only content, and 390px/1440px layouts across all four journeys — auth, valuation, history, operations; AUD-107), with an isolated dev stack (a freshly built `audr-backend` runtime image + ephemeral Postgres, migrated to head and bound to `127.0.0.1:8000`; Vite dev server on `:5173`):
+
+```bash
+cd frontend
+OWNER_PASSWORD=<owner password> APP_URL=http://localhost:5173 npm run e2e -- ../tests/e2e/accessibility.spec.ts
+```
+
+This spec had never been run before either. The first run surfaced 4 real failures, fixed in place:
+
+- `DashboardPage.tsx` renders the page title twice — once in the shared topbar `<h1 class="topbar-title">` (from `Layout.tsx`'s `PAGE_TITLES` map) and again in its own `<h2 class="page-heading">Overview</h2>`. Both share the accessible name "Overview", so `getByRole('heading', { name: /overview/i })` resolved to 2 elements in strict mode (3 call sites: the keyboard-nav test and both viewport variants of the layout test, which share one source line). Disambiguated with the `level: 2` role option to target the page's own heading rather than the topbar.
+- The "history range switcher" keyboard test asserted `aria-pressed="true"` on the "1W" button immediately after `focus()`, with no activation step. `DashboardPage.tsx`'s default `historyPeriod` state is `'30d'` ("1M"), not `'7d'` ("1W") — focusing a button doesn't press it, so the assertion was checking a precondition that was never true. Fixed by asserting `aria-pressed="false"` first, then pressing `Enter` (matching the activation pattern the adjacent "history journey: range tabs" test already used) before asserting `"true"`.
+
+With both fixed, two consecutive clean runs passed **20/20**, no flakes.
+
 ---
 
 ### Benchmark

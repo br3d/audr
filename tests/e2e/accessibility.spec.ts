@@ -223,13 +223,15 @@ test.describe('Keyboard navigation — all journeys', () => {
     const dashboardNav = page.getByRole('button', { name: 'Dashboard', exact: true })
     await dashboardNav.focus()
     await page.keyboard.press('Enter')
-    await expect(page.getByRole('heading', { name: /overview/i })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /overview/i, level: 2 })).toBeVisible()
 
     const weekButton = page
       .getByRole('group', { name: /history range/i })
       .getByRole('button', { name: '1W' })
     await weekButton.focus()
     await expect(weekButton).toBeFocused()
+    await expect(weekButton).toHaveAttribute('aria-pressed', 'false') // default range is 1M
+    await page.keyboard.press('Enter')
     await expect(weekButton).toHaveAttribute('aria-pressed', 'true')
   })
 
@@ -401,7 +403,7 @@ for (const viewport of VIEWPORTS) {
       await mockPortfolio(page, MOCK_ALLOCATION_PORTFOLIO)
       await mockHistory(page, MOCK_HISTORY_ENTRIES)
       await ensureSignedIn(page)
-      await expect(page.getByRole('heading', { name: /overview/i })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /overview/i, level: 2 })).toBeVisible()
       await expect(page.getByRole('img', { name: /asset allocation pie chart/i })).toBeVisible()
     })
 
