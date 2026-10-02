@@ -13,14 +13,16 @@ docker compose -f compose.test.yaml --profile backend run --rm backend-tests
 # Frontend (Vitest)
 docker compose -f compose.test.yaml --profile frontend run --rm frontend-tests
 
-# E2E (Playwright) — requires Dockerfile.e2e
-docker compose -f compose.test.yaml --profile e2e run --rm e2e
+# E2E (Playwright) — run locally against a dev stack, there is no container profile
+cd frontend && npm run e2e
 
-# Benchmark
+# Benchmark: warm dashboard/history p50/p95 + catalog logical-call report
 docker compose -f compose.test.yaml --profile benchmark run --rm benchmark
 ```
 
-The infrastructure services (`db-test`, `provider-mock`) are started automatically by the `backend-tests` and `benchmark` service dependencies. The `migrate-test` service runs first and applies all Alembic migrations to the ephemeral test database.
+The infrastructure services (`db-test`, `provider-mock`) are started automatically by the `backend-tests` service dependencies. The `migrate-test` service runs first and applies all Alembic migrations to the ephemeral test database. The `benchmark` service depends on `migrate-test` only — it stubs the provider boundary in-process and makes no outbound HTTP calls, so it does not need `provider-mock`.
+
+> The `e2e` / `api-test` compose profiles were removed in AUD-329 — they referenced a `Dockerfile.e2e` that never existed. The `benchmark` profile was removed in the same change (it invoked `pytest --benchmark-only` against a suite with no `pytest-benchmark` dependency and no `benchmark` marker) and re-added in AUD-108 as a real service that runs `scripts/benchmark.py`. See `docs/benchmark.md`.
 
 ---
 
@@ -88,17 +90,38 @@ Tests       23 passed (23) in 8.78s
 
 ### E2E tests (Playwright)
 
-Not run — `Dockerfile.e2e` is not yet present. The Playwright config exists at `frontend/playwright.config.ts` and the spec files at `tests/e2e/`.
+Not run in CI — there is no containerised profile. The Playwright config exists at `frontend/playwright.config.ts` and the spec files at `tests/e2e/`; run them locally with `cd frontend && npm run e2e` against a dev stack.
+
+**Run 2026-10-02** against `tests/e2e/operations.spec.ts` (54 cases covering the US4 SchedulesPage, StatusPage, and AccountDataPage journeys at 390px and 1440px viewports), with a local dev stack up (backend on `:8000`, Vite dev server on `:5173`):
+
+```bash
+cd frontend
+OWNER_PASSWORD=<owner password> APP_URL=http://localhost:5173 npm run e2e -- ../tests/e2e/operations.spec.ts
+```
+
+This spec had never been run before. The first runs surfaced real stale-selector bugs, fixed in place rather than removed:
+
+- `toBeFocusable()` was called in ten assertions but was never a registered Playwright matcher (`expect.extend` was never set up for it) — every call threw `TypeError: ... toBeFocusable is not a function`. Replaced with a local `expectFocusable()` helper (`locator.focus()` + `expect(locator).toBeFocused()`).
+- `getByLabel('New password')` and `getByLabel('Provider')` each resolved to 2 elements in strict mode — "New password" is a substring of "Confirm new password", and "Provider" is a substring of the purge section's `aria-label="Provider data purge"`. Added `{ exact: true }`.
+- The SchedulesPage assertions targeted `<fieldset>` elements; `SchedulesPage.tsx` has never rendered fieldsets — each schedule is a `.schedule-card` div. Updated the locators to match, which also exposed a latent ambiguity in the "cost warning" test's `.or()` locator (it now matched both the warning paragraph and an unrelated static paragraph) — narrowed to the `[role="note"]` element.
+- "cost versus freshness" text has never existed in the UI; the real copy is "Free-tier providers typically cap…". Updated the assertion to match it.
+- StatusPage never said "worker heartbeat" or "next execution" — the real field labels are "Last Heartbeat" and "Next scheduled runs". Updated both assertions.
+- The purge preview button's accessible name is "Preview purge impact" (from its `aria-label`); the regex `/preview impact/i` is not a substring of that name and never matched. Fixed to `/preview purge impact/i`.
+- The AccountDataPage three-section check used `getByRole('region', ...).or(getByText(...))`, which is ambiguous because each section's `<h2>` heading duplicates its `aria-label` text (3-way match for "Change password"). Simplified to a single `getByRole('region', ...)` locator per section.
+
+With all of the above fixed, a clean run passed **51/54**. The remaining 3 failures were `signIn()`/navigation timeouts (`waitForSelector`/`toBeVisible` exceeding their 5–30s budgets), all in the first ~90 seconds of the run while this shared host was still busy with concurrent docker/test activity from other agents; every test after that point passed in 7–13s each. That is host contention in this particular shared dev environment, not a selector or product defect — the same three cases had passed on earlier runs when the host was less loaded.
 
 ---
 
 ### Benchmark
 
-Not run — benchmark suite requires `Dockerfile.test` (now present) and a `benchmark` pytest marker. Run with:
+Run — see **`docs/benchmark.md`** for the reference-host results, the fixture identity and the methodology. Reproduce with:
 
 ```bash
 docker compose -f compose.test.yaml --profile benchmark run --rm benchmark
 ```
+
+The run exits non-zero when a measured p95 breaks the SC-004 3s budget, so it is a gate and not only a report.
 
 ---
 

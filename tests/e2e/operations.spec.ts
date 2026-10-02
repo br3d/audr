@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 
 /**
  * E2E browser journeys for US4 operational pages:
@@ -36,6 +36,11 @@ async function navigateTo(page: Page, label: string): Promise<void> {
   await page.getByRole('button', { name: label }).click()
 }
 
+async function expectFocusable(locator: Locator): Promise<void> {
+  await locator.focus()
+  await expect(locator).toBeFocused()
+}
+
 const VIEWPORTS = [
   { name: '390px (mobile)', width: 390, height: 844 },
   { name: '1440px (desktop)', width: 1440, height: 900 },
@@ -51,14 +56,14 @@ for (const viewport of VIEWPORTS) {
       await signIn(page)
       await navigateTo(page, 'Schedules')
       await expect(page.getByRole('heading', { name: /schedules/i })).toBeVisible()
-      await expect(page.getByRole('group', { name: /balance/i }).or(
-        page.locator('fieldset').filter({ hasText: /balance/i }),
-      )).toBeVisible()
       await expect(
-        page.locator('fieldset').filter({ hasText: /discovery/i }),
+        page.locator('.schedule-card').filter({ hasText: /balance scans/i }),
       ).toBeVisible()
       await expect(
-        page.locator('fieldset').filter({ hasText: /quote/i }),
+        page.locator('.schedule-card').filter({ hasText: /token discovery/i }),
+      ).toBeVisible()
+      await expect(
+        page.locator('.schedule-card').filter({ hasText: /price quotes/i }),
       ).toBeVisible()
     })
 
@@ -75,7 +80,9 @@ for (const viewport of VIEWPORTS) {
     test('shows cost versus freshness warning text', async ({ page }) => {
       await signIn(page)
       await navigateTo(page, 'Schedules')
-      await expect(page.getByText(/cost versus freshness/i)).toBeVisible()
+      await expect(
+        page.getByText(/free-tier providers typically cap/i),
+      ).toBeVisible()
     })
 
     test('save button is disabled when no changes made', async ({ page }) => {
@@ -92,12 +99,12 @@ for (const viewport of VIEWPORTS) {
       const count = await checkboxes.count()
       expect(count).toBeGreaterThan(0)
       for (let i = 0; i < count; i++) {
-        await expect(checkboxes.nth(i)).toBeFocusable()
+        await expectFocusable(checkboxes.nth(i))
       }
       const inputs = page.getByRole('spinbutton')
       const inputCount = await inputs.count()
       for (let i = 0; i < inputCount; i++) {
-        await expect(inputs.nth(i)).toBeFocusable()
+        await expectFocusable(inputs.nth(i))
       }
     })
 
@@ -107,15 +114,13 @@ for (const viewport of VIEWPORTS) {
       await signIn(page)
       await navigateTo(page, 'Schedules')
 
-      const quotesFieldset = page.locator('fieldset').filter({ hasText: /quote/i })
+      const quotesFieldset = page.locator('.schedule-card').filter({ hasText: /price quotes/i })
       const intervalInput = quotesFieldset.locator('input[type="number"]')
       if (await intervalInput.isVisible()) {
         await intervalInput.fill('60')
         await intervalInput.dispatchEvent('change')
         await expect(
-          quotesFieldset.locator('[role="note"]').or(
-            page.getByText(/requests\/day/i),
-          ),
+          quotesFieldset.locator('[role="note"]'),
         ).toBeVisible({ timeout: 2000 })
       }
     })
@@ -144,13 +149,13 @@ for (const viewport of VIEWPORTS) {
     test('shows worker heartbeat field', async ({ page }) => {
       await signIn(page)
       await navigateTo(page, 'Status')
-      await expect(page.getByText(/worker heartbeat/i)).toBeVisible()
+      await expect(page.getByText(/last heartbeat/i)).toBeVisible()
     })
 
     test('shows next execution fields for schedules', async ({ page }) => {
       await signIn(page)
       await navigateTo(page, 'Status')
-      await expect(page.getByText(/next execution/i).first()).toBeVisible()
+      await expect(page.getByText(/next scheduled runs/i)).toBeVisible()
     })
 
     test('shows last attempt field for jobs', async ({ page }) => {
@@ -182,7 +187,7 @@ for (const viewport of VIEWPORTS) {
       await signIn(page)
       await navigateTo(page, 'Status')
       const btn = page.getByRole('button', { name: /trigger balance scan/i })
-      await expect(btn).toBeFocusable()
+      await expectFocusable(btn)
     })
 
     test('running jobs show a cancel button', async ({ page }) => {
@@ -193,7 +198,7 @@ for (const viewport of VIEWPORTS) {
       // If there are running jobs, cancel button is visible. Otherwise absent is fine.
       if (count > 0) {
         await expect(cancelBtns.first()).toBeVisible()
-        await expect(cancelBtns.first()).toBeFocusable()
+        await expectFocusable(cancelBtns.first())
       }
     })
   })
@@ -206,19 +211,13 @@ for (const viewport of VIEWPORTS) {
       await navigateTo(page, 'Account & Data')
       await expect(page.getByRole('heading', { name: /account.*data/i })).toBeVisible()
       await expect(
-        page.getByRole('region', { name: /change password/i }).or(
-          page.getByText(/change password/i),
-        ),
+        page.getByRole('region', { name: /change password/i }),
       ).toBeVisible()
       await expect(
-        page.getByRole('region', { name: /export data/i }).or(
-          page.getByText(/export data/i),
-        ),
+        page.getByRole('region', { name: /export data/i }),
       ).toBeVisible()
       await expect(
-        page.getByRole('region', { name: /provider data purge/i }).or(
-          page.getByText(/provider data purge/i),
-        ),
+        page.getByRole('region', { name: /provider data purge/i }),
       ).toBeVisible()
     })
 
@@ -227,7 +226,7 @@ for (const viewport of VIEWPORTS) {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
         await expect(page.getByLabel('Current password')).toBeVisible()
-        await expect(page.getByLabel('New password')).toBeVisible()
+        await expect(page.getByLabel('New password', { exact: true })).toBeVisible()
         await expect(page.getByLabel('Confirm new password')).toBeVisible()
         await expect(
           page.getByRole('button', { name: /change password/i }),
@@ -238,7 +237,7 @@ for (const viewport of VIEWPORTS) {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
         await page.getByLabel('Current password').fill(OWNER_PASSWORD)
-        await page.getByLabel('New password').fill('short')
+        await page.getByLabel('New password', { exact: true }).fill('short')
         await page.getByLabel('Confirm new password').fill('short')
         await page.getByRole('button', { name: /change password/i }).click()
         await expect(page.getByRole('alert')).toContainText(/at least 12/i)
@@ -248,7 +247,7 @@ for (const viewport of VIEWPORTS) {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
         await page.getByLabel('Current password').fill(OWNER_PASSWORD)
-        await page.getByLabel('New password').fill('new-valid-password-1234')
+        await page.getByLabel('New password', { exact: true }).fill('new-valid-password-1234')
         await page.getByLabel('Confirm new password').fill('different-password-1234')
         await page.getByRole('button', { name: /change password/i }).click()
         await expect(page.getByRole('alert')).toContainText(/do not match/i)
@@ -257,9 +256,9 @@ for (const viewport of VIEWPORTS) {
       test('all password fields are keyboard accessible', async ({ page }) => {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
-        await expect(page.getByLabel('Current password')).toBeFocusable()
-        await expect(page.getByLabel('New password')).toBeFocusable()
-        await expect(page.getByLabel('Confirm new password')).toBeFocusable()
+        await expectFocusable(page.getByLabel('Current password'))
+        await expectFocusable(page.getByLabel('New password', { exact: true }))
+        await expectFocusable(page.getByLabel('Confirm new password'))
       })
     })
 
@@ -287,7 +286,7 @@ for (const viewport of VIEWPORTS) {
         await navigateTo(page, 'Account & Data')
         const exportBtn = page.getByRole('button', { name: /export.*portfolio.*json/i })
         await expect(exportBtn).toBeVisible()
-        await expect(exportBtn).toBeFocusable()
+        await expectFocusable(exportBtn)
       })
 
       test('selecting history format changes export button label', async ({ page }) => {
@@ -313,9 +312,9 @@ for (const viewport of VIEWPORTS) {
       test('purge section shows provider input and preview button', async ({ page }) => {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
-        await expect(page.getByLabel('Provider')).toBeVisible()
+        await expect(page.getByLabel('Provider', { exact: true })).toBeVisible()
         await expect(
-          page.getByRole('button', { name: /preview impact/i }),
+          page.getByRole('button', { name: /preview purge impact/i }),
         ).toBeVisible()
       })
 
@@ -336,10 +335,10 @@ for (const viewport of VIEWPORTS) {
       }) => {
         await signIn(page)
         await navigateTo(page, 'Account & Data')
-        await expect(page.getByLabel('Provider')).toBeFocusable()
-        await expect(
-          page.getByRole('button', { name: /preview impact/i }),
-        ).toBeFocusable()
+        await expectFocusable(page.getByLabel('Provider', { exact: true }))
+        await expectFocusable(
+          page.getByRole('button', { name: /preview purge impact/i }),
+        )
       })
     })
   })
