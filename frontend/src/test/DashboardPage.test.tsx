@@ -517,12 +517,9 @@ describe('DashboardPage', () => {
       await unmount(container, root)
     })
 
-    it('does not render allocation chart when allocations are empty', async () => {
+    it('does not render the allocation list when allocations are empty', async () => {
       const { container, root } = mountWithData(EMPTY_PORTFOLIO)
-      // Chart would have aria-label="Asset allocation pie chart"
-      expect(
-        container.querySelector('[aria-label="Asset allocation pie chart"]'),
-      ).toBeNull()
+      expect(container.querySelector('[aria-label="Asset allocation"]')).toBeNull()
       await unmount(container, root)
     })
   })

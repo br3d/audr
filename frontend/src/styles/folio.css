@@ -743,6 +743,141 @@ body {
 }
 
 /* ----------------------------------------------------------------
+   Asset allocation list
+   ---------------------------------------------------------------- */
+.asset-emblem {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  object-fit: cover;
+  background: var(--bg-elevated);
+}
+
+.asset-emblem-sm {
+  width: 22px;
+  height: 22px;
+}
+
+.asset-emblem-monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.asset-emblem-len-1 { font-size: 13px; }
+.asset-emblem-len-2 { font-size: 11px; }
+.asset-emblem-len-3 { font-size: 9px; }
+
+.asset-emblem-sm.asset-emblem-len-1 { font-size: 11px; }
+.asset-emblem-sm.asset-emblem-len-2 { font-size: 9px; }
+.asset-emblem-sm.asset-emblem-len-3 { font-size: 8px; }
+
+.allocation-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.allocation-symbol {
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.allocation-value {
+  white-space: nowrap;
+}
+
+.allocation-share {
+  width: 45%;
+  min-width: 180px;
+}
+
+.allocation-share-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.allocation-bar {
+  flex: 1;
+  height: 6px;
+  min-width: 60px;
+  border-radius: var(--r-full);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.allocation-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+}
+
+.allocation-pct {
+  flex: none;
+  min-width: 56px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.allocation-spoiler {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.allocation-spoiler:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.allocation-spoiler-chevron {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.allocation-spoiler-label {
+  font-weight: 500;
+}
+
+.allocation-spoiler-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.allocation-spoiler-pct {
+  min-width: 56px;
+  text-align: right;
+}
+
+/* ----------------------------------------------------------------
    Forms
    ---------------------------------------------------------------- */
 .form-card {

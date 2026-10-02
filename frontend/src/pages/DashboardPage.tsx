@@ -5,8 +5,7 @@ import { fetchPortfolio, fetchHistory, fetchEvents, ApiError } from '../api/clie
 import type { HistoryPeriod, PortfolioQuality, HistoryPoint } from '../api/client'
 import type { MainPage } from '../components/Layout'
 import MoneyValue from '../components/MoneyValue'
-import AllocationTable from '../components/AllocationTable'
-import AllocationChart from '../components/AllocationChart'
+import AllocationList from '../components/AllocationList'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
 
@@ -287,10 +286,7 @@ export default function DashboardPage({ setPage }: Props) {
         <section aria-label="Asset allocation" className="mb-20">
           <div className="section-heading">Asset Allocation</div>
           <div className="card">
-            <AllocationChart items={data.allocations} />
-            <div className="mt-16">
-              <AllocationTable items={data.allocations} />
-            </div>
+            <AllocationList items={data.allocations} />
           </div>
         </section>
       ) : (

@@ -53,12 +53,12 @@ test.describe('Dashboard page', () => {
   }) => {
     await signIn(page)
     await page.getByRole('button', { name: /dashboard/i }).click()
-    // If no priced holdings, the allocation chart must NOT appear
+    // If no priced holdings, the allocation list must NOT appear
     const totalNote = page.getByText(/unavailable/i)
     if (await totalNote.isVisible()) {
-      // No priced holdings — chart must be absent
+      // No priced holdings — the list must be absent
       await expect(
-        page.getByRole('img', { name: /allocation pie chart/i }),
+        page.getByRole('table', { name: /asset allocation/i }),
       ).not.toBeVisible()
     }
   })
