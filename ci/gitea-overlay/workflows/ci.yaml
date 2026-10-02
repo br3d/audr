@@ -25,11 +25,11 @@ jobs:
     # undefined names) and nothing else. The full rule set from
     # `backend/pyproject.toml` currently reports 226 findings and
     # `ruff format --check` wants 86 files reformatted, so switching either on
-    # wholesale would land a permanently red gate. Widening it is AUD-392.
+    # wholesale would land a permanently red gate. Widening it is AUD-393.
     #
     # The ruff version is pinned here and in `backend/pyproject.toml` dev
     # extras, and the two must stay in sync — an unpinned ruff makes the gate's
-    # verdict depend on the day it ran. See AUD-391.
+    # verdict depend on the day it ran. See AUD-392.
     runs-on: host
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
       - name: scripts/ must parse on the oldest python3 we run them under
         # `scripts/*.py` are invoked as `python3 scripts/foo.py` from a host
         # shell, not inside the 3.14 image, so they must not use 3.14-only
-        # syntax. This is the gate that catches AUD-391 directly: PEP 758
+        # syntax. This is the gate that catches AUD-392 directly: PEP 758
         # `except A, B:` compiles on 3.14 and fails here.
         #
         # compile() in memory rather than `compileall`: this runner is
