@@ -103,6 +103,16 @@ async def reactivate_wallet(
     return wallet
 
 
+# A valuation line belongs to the wallet either directly or through the balance
+# observation it was priced from; both reach the wallet, and the observation arm
+# keeps a line whose wallet_id was somehow not set from blocking the delete.
+_OWNED_VALUATION_LINE = (
+    "(wallet_id = :wid OR observation_id IN ("
+    "   SELECT id FROM balance_observation WHERE wallet_id = :wid"
+    " ))"
+)
+
+
 async def delete_wallet(
     session: AsyncSession,
     *,
@@ -146,7 +156,7 @@ async def delete_wallet(
             await session.execute(
                 sa.text(
                     "SELECT DISTINCT snapshot_id FROM valuation_line"
-                    " WHERE wallet_id = :wid"
+                    f" WHERE {_OWNED_VALUATION_LINE}"
                 ),
                 params,
             )
@@ -154,6 +164,13 @@ async def delete_wallet(
     )
     params["snapshot_ids"] = touched_snapshots
 
+    # valuation_line references balance_observation as well as wallet, so it has
+    # to go before the observations it was priced from — deleting observations
+    # first trips fk_valuation_line_observation_id_balance_observation (AUD-394).
+    await _delete(
+        "valuation_line",
+        f"DELETE FROM valuation_line WHERE {_OWNED_VALUATION_LINE}",
+    )
     # Child of balance_observation — must go before its parent.
     await _delete(
         "balance_observation_invalidation",
@@ -181,10 +198,6 @@ async def delete_wallet(
     await _delete(
         "event_indexer_checkpoint",
         "DELETE FROM event_indexer_checkpoint WHERE wallet_id = :wid",
-    )
-    await _delete(
-        "valuation_line",
-        "DELETE FROM valuation_line WHERE wallet_id = :wid",
     )
     # history_point hangs off valuation_snapshot, so clear it for the snapshots
     # this wallet just emptied, then drop those snapshots.  Snapshots that
