@@ -189,10 +189,12 @@ only `backend/`.
 
 ## 4. Lint, types and formatting
 
-Configured in `backend/pyproject.toml`:
+Configured in `backend/pyproject.toml` for `backend/`, and in the repo-root
+`ruff.toml` for everything outside it (notably `scripts/`):
 
-- **ruff** — target `py314`, line length 100, rules `E,F,I,UP,B,S,ANN`, with
-  per-file ignores for tests and `src/audr/api/**`.
+- **ruff** — pinned to `0.16.10` in the `dev` extra, target `py313`, line length
+  100. Rules `E,F,I,UP,B,S,ANN` under `backend/`, the same minus `ANN` at the
+  root, with per-file ignores for tests and `src/audr/api/**`.
 - **mypy** — strict, `python_version 3.14`, pydantic plugin,
   `warn_unreachable`.
 - **coverage** — source `src/audr`, omitting tests and migrations.
@@ -201,6 +203,34 @@ Configured in `backend/pyproject.toml`:
 cd backend && uv run ruff check . && uv run mypy src
 cd frontend && npm run typecheck
 ```
+
+### Why ruff targets py313 while the runtime is 3.14
+
+The runtime is Python 3.14 everywhere (`requires-python = ">=3.14"`, every image
+is `python:3.14-slim`), but ruff's target version is held one release back on
+purpose. At `py314` the formatter applies PEP 758 and rewrites
+`except (OSError, ValueError):` into `except OSError, ValueError:`. That form
+runs fine on 3.14, and fails with
+`SyntaxError: multiple exception types must be parenthesized` on 3.13 and
+earlier — which matters because `scripts/*.py` are `#!/usr/bin/env python3` and
+are run from a host shell, where `python3` is routinely older than 3.14.
+Targeting `py313` keeps one syntax that is valid under both. CI enforces the
+floor by byte-compiling `scripts/` under `python:3.13-slim`. See AUD-391.
+
+The pin matters for the same reason: ruff's formatter output moves between
+patch releases, so an unpinned ruff makes "is this formatted?" a question about
+the day you asked. Keep the version in `backend/pyproject.toml` and the version
+in the CI `lint` job in sync.
+
+### What CI actually gates
+
+The `lint` job in `ci/gitea-overlay/workflows/ci.yaml` blocks only on
+`ruff check --select E9,F63,F7,F82` (syntax errors, broken constructs,
+undefined names) plus the `scripts/` 3.13 compile check. The full rule set and
+`ruff format --check` are **not** gated yet: the tree currently has 226 findings
+under the full selection and 86 files the formatter would rewrite, so enabling
+either today would mean a permanently red gate. Clearing that backlog and
+widening the gate is AUD-392.
 
 ---
 

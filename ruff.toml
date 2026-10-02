@@ -1,0 +1,31 @@
+# Repo-root ruff configuration.
+#
+# Without this file the only [tool.ruff] section in the tree is
+# `backend/pyproject.toml`, which ruff discovers by walking up from each file.
+# `scripts/*.py` sit outside `backend/`, so they fell through to ruff's built-in
+# defaults: line-length 88 (backend uses 100) and an inferred formatter target
+# of 3.10. Formatting the repo from the root therefore produced two different
+# styles depending on which directory a file lived in.
+#
+# `backend/` keeps its own [tool.ruff] in `backend/pyproject.toml`; that file is
+# closer to those sources, so it still wins there. This config governs
+# everything else, and the two are kept deliberately in sync.
+#
+# See AUD-391 for why the target version is py313 while the runtime is 3.14
+# (short version: PEP 758 `except A, B:` is valid on 3.14 but these scripts run
+# under whatever `python3` the host shell provides).
+target-version = "py313"
+line-length = 100
+
+extend-exclude = [
+    "frontend",
+    "backend/src/audr/migrations/versions",
+]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[lint.per-file-ignores]
+# Operational scripts legitimately shell out and print; they are run by hand by
+# an operator, not exposed to untrusted input.
+"scripts/*.py" = ["S603", "S607"]
