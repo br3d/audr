@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,9 @@ from audr.auth.models import Session
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
+
+# 7 days, matching the asset_icon_refresh job's negative-cache TTL (AUD-385).
+_ICON_CACHE_CONTROL = "public, max-age=604800"
 
 _SOURCE_TO_METADATA_SOURCE: dict[str, str] = {
     "catalog": "catalog",
@@ -307,3 +310,32 @@ async def patch_asset(
     if updated is None:
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset update failed")
     return _row_to_asset_item(updated)
+
+
+@router.get("/assets/{asset_id}/icon")
+async def get_asset_icon(
+    asset_id: uuid.UUID,
+    _session: Annotated[Session, Depends(_require_session)],
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serve a cached asset icon (AUD-385), or 404 if none is cached.
+
+    Only ever serves what `asset_icon_refresh` has already cached — this
+    route never fetches the upstream inline, so a cold cache 404s (the
+    frontend falls back to a generated monogram) instead of slowing down
+    the request.
+    """
+    result = await db.execute(
+        sa.text("SELECT content_type, image, status FROM asset_icon WHERE asset_id = :id"),
+        {"id": str(asset_id)},
+    )
+    row = result.first()
+    if row is None or row[2] != "ok" or row[1] is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Icon not found")
+
+    content_type, image, _status = row
+    return Response(
+        content=bytes(image),
+        media_type=content_type,
+        headers={"Cache-Control": _ICON_CACHE_CONTROL},
+    )

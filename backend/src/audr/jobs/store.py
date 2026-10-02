@@ -46,6 +46,7 @@ _DEFAULT_FRESHNESS_S: dict[str, int] = {
     "quote_refresh": 3600,
     "event_indexer": 300,
     "news_refresh": 900,
+    "asset_icon_refresh": 900,
 }
 _DEFAULT_FRESHNESS_FALLBACK_S = 300
 
@@ -59,6 +60,7 @@ class JobKind(StrEnum):
     VALIDATE_QUOTES = "validate_quotes"
     EVENT_INDEXER = "event_indexer"
     NEWS_REFRESH = "news_refresh"
+    ASSET_ICON_REFRESH = "asset_icon_refresh"
 
 
 class JobRunStatus(StrEnum):

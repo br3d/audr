@@ -114,3 +114,23 @@ def test_cmc_rate_limit_overridable_from_env(monkeypatch: pytest.MonkeyPatch) ->
     settings = Settings()
     assert settings.cmc_rate_limit_per_second == 0.2
     assert settings.cmc_rate_limit_burst == 2
+
+
+@pytest.mark.unit
+def test_asset_icons_remote_fetch_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.delenv("ASSET_ICONS_REMOTE_FETCH", raising=False)
+    settings = Settings()
+    assert settings.asset_icons_remote_fetch is True
+    assert settings.asset_icon_cg_rate_limit_per_second == 0.5
+    assert settings.asset_icon_cg_rate_limit_burst == 1
+
+
+@pytest.mark.unit
+def test_asset_icons_remote_fetch_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.setenv("ASSET_ICONS_REMOTE_FETCH", "false")
+    settings = Settings()
+    assert settings.asset_icons_remote_fetch is False

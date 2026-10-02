@@ -20,6 +20,9 @@ dependencies = [
     # Ethereum address/ABI utilities
     "eth-utils==6.0.0",
     "eth-abi==6.0.0",
+    # Keccak-256 backend for eth_utils.to_checksum_address (AUD-385) — eth-hash
+    # has no working backend without this installed.
+    "pycryptodome==3.23.0",
     # Authenticated encryption (AES-256-GCM)
     "cryptography==50.0.1",
     # Password hashing (Argon2id)

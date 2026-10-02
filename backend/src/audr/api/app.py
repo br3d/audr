@@ -66,7 +66,13 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def no_store_private_routes(request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
-        if any(request.url.path.startswith(p) for p in _PRIVATE_PREFIXES):
+        # A route that already set its own Cache-Control (e.g. the cached
+        # asset icon route, AUD-385) knows better than this blanket default —
+        # don't overwrite it.
+        if (
+            any(request.url.path.startswith(p) for p in _PRIVATE_PREFIXES)
+            and "Cache-Control" not in response.headers
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 

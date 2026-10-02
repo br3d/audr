@@ -1,6 +1,6 @@
 """Worker process entrypoint — DISCOVERY, BALANCE_SCAN, QUOTE_REFRESH, EVENT_INDEXER,
-NEWS_REFRESH, and on-demand VALIDATE_RPC / VALIDATE_QUOTES job handlers
-(AUD-244/AUD-67/AUD-307/AUD-313/AUD-308)."""
+NEWS_REFRESH, ASSET_ICON_REFRESH, and on-demand VALIDATE_RPC / VALIDATE_QUOTES job
+handlers (AUD-244/AUD-67/AUD-307/AUD-313/AUD-308/AUD-385)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from audr.assets.catalog import import_catalog
 from audr.assets.cmc_catalog import import_cmc_map
 from audr.assets.constants import NATIVE_ETH_ADDRESS
 from audr.db import _get_session_factory
+from audr.jobs.asset_icons import handle_asset_icon_refresh
 from audr.jobs.canonicality import recheck_canonicality
 from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.jobs.event_indexer import handle_event_indexer
@@ -279,6 +280,9 @@ async def _main() -> None:
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
     event_worker = Worker(factory, kind=JobKind.EVENT_INDEXER, handler=handle_event_indexer)
     news_worker = Worker(factory, kind=JobKind.NEWS_REFRESH, handler=handle_news_refresh)
+    icon_worker = Worker(
+        factory, kind=JobKind.ASSET_ICON_REFRESH, handler=handle_asset_icon_refresh
+    )
     # Valuation runs on-demand: enqueued by handle_quote_refresh after each
     # successful quote refresh so snapshots are produced in step with price data.
     valuation_worker = Worker(
@@ -304,6 +308,7 @@ async def _main() -> None:
             did_work |= await quote_worker.run_once()
             did_work |= await event_worker.run_once()
             did_work |= await news_worker.run_once()
+            did_work |= await icon_worker.run_once()
             did_work |= await valuation_worker.run_once()
             did_work |= await validate_rpc_worker.run_once()
             did_work |= await validate_quotes_worker.run_once()
