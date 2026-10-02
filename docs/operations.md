@@ -225,13 +225,20 @@ docker compose down -v    # WARNING: destroys all data
 docker volume rm audr_db_data
 ```
 
-On restart, the `migrate` service re-runs Alembic migrations (idempotent) before `api` and `worker` start. The `init` service validates that the SECRET_KEY can unwrap the stored master key.
+On restart, the `migrate` service re-runs Alembic migrations (idempotent) and then `audr.operations.init_key`, which validates that the SECRET_KEY can unwrap the stored master key, before `api` and `worker` start. (These were two services, `migrate` and `init`, until AUD-386 folded them into one — see [containers.md](containers.md).)
 
 ---
 
 ## Exports
 
-Portfolio data export (JSON and CSV) is planned for User Story 4. Once implemented, exports will be available from the account settings page and via the `GET /api/export` endpoint (requires authentication).
+Portfolio and history export (JSON and CSV) is implemented. Both are available from the Account & Data page and directly:
+
+```
+GET /api/v1/exports/portfolio?format=json|csv
+GET /api/v1/exports/history?format=json|csv&from=...&to=...
+```
+
+Both require an authenticated session. Exports are schema-versioned and contain no passwords, session tokens, RPC URLs, headers or API keys; unknown values are null or empty with an explicit status, never zero. See [api.md](api.md#exports-and-data-lifecycle) for the record schema.
 
 ---
 
@@ -299,8 +306,9 @@ The script:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `init` exits with `SECRET_KEY is not set` | `.env` missing or not mounted | Run `bash scripts/setup-secrets.sh`, restart |
-| `init` exits with `SECRET_KEY must be 32 bytes` | Corrupt `master_key.hex` | Regenerate per key-loss recovery above |
+| `migrate` exits with `SECRET_KEY is not set` | `.env` missing or not mounted | Run `bash scripts/setup-secrets.sh`, restart |
+| `migrate` exits with `SECRET_KEY must be 32 bytes` | Corrupt `master_key.hex` | Regenerate per key-loss recovery above |
 | `migrate` exits non-zero | DB not healthy or migration conflict | `docker compose logs migrate`, check DB logs |
 | `api` health returns 503 | Migration not complete | Wait for `migrate` to finish; check `docker compose ps` |
-| `worker` logs `no RPC integration configured` | RPC provider not set | Sign in and configure RPC URL in settings |
+| `worker` logs `no RPC integration configured` | RPC provider not set | Informational — the keyless public endpoints still work; configure your own RPC URL in Settings → Integrations to upgrade |
+| `GET /` returns 200 but the UI shows no data | API is down; nginx served the SPA fallback | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |
