@@ -46,10 +46,17 @@ def format_decimal(value: Decimal, *, places: int = 18) -> str:
     """Format a Decimal to a fixed-point string with *places* decimal places.
 
     Uses ROUND_DOWN (truncate) to avoid overstating values in display.
+
+    Formatted with ``:f`` rather than ``str()``: quantizing a value that
+    truncates to zero yields a Decimal with a negative exponent and no
+    significant digits, which ``str()`` renders in scientific notation
+    ("0E-18"). The HTTP contract mandates plain fixed-point strings, so
+    every exact-zero and sub-``places`` dust amount would otherwise go out
+    malformed.
     """
     if not isinstance(value, Decimal):
         raise TypeError(f"value must be Decimal, got {type(value).__name__}")
     if places < 0:
         raise ValueError(f"places must be non-negative, got {places}")
     quantizer = Decimal(10) ** -places
-    return str(value.quantize(quantizer, rounding=ROUND_DOWN))
+    return format(value.quantize(quantizer, rounding=ROUND_DOWN), "f")
