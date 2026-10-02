@@ -318,4 +318,4 @@ The script:
 | `migrate` exits non-zero | DB not healthy or migration conflict | `docker compose logs migrate`, check DB logs |
 | `api` health returns 503 | Migration not complete | Wait for `migrate` to finish; check `docker compose ps` |
 | `worker` logs `no RPC integration configured` | RPC provider not set | Informational — the keyless public endpoints still work; configure your own RPC URL in Settings → Integrations to upgrade |
-| `GET /` returns 200 but the UI shows no data | API is down; nginx served the SPA fallback | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |
+| `GET /` returns 200 but the UI shows no data | The process is up and served the SPA, but the database behind it is not ready | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |

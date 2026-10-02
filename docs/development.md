@@ -63,9 +63,9 @@ cd frontend && npm install
 npm run dev          # http://localhost:5173, HMR
 ```
 
-`vite.config.ts` proxies `/api` to `http://localhost:8000` — the backend port
-**directly**, which the compose stack does not publish. Either publish it
-temporarily:
+`vite.config.ts` proxies `/api` to `http://localhost:8000` — the container port
+**directly**, which the compose stack does not publish (it publishes `80:8000`).
+Either publish it temporarily:
 
 ```yaml
 # compose.override.yaml — local only, do not commit
@@ -74,9 +74,15 @@ services:
     ports: ["8000:8000"]
 ```
 
-or point the proxy at nginx on `:80` for the session. Running `npm run dev`
-against an unmodified stack will fail every API call, and the symptom (a
-perfectly rendered shell with no data) is easy to misread as a backend bug.
+Note that compose *appends* to `ports` rather than replacing, so that override
+publishes both `:80` and `:8000`. If something already holds port 80 on your
+machine the stack will refuse to start; use `ports: !override ["8000:8000"]` to
+replace the list instead.
+
+Alternatively, point the proxy at the stack's published `:80` for the session —
+the API and the SPA are the same origin there. Running `npm run dev` against an
+unmodified stack will fail every API call, and the symptom (a perfectly
+rendered shell with no data) is easy to misread as a backend bug.
 
 ### Available npm scripts
 
@@ -240,8 +246,9 @@ docker compose exec db psql -U audr -d audr -c \
   'select kind, status, error, heartbeat_at from job_run order by claimed_at desc limit 20'
 ```
 
-Remember that the API is not reachable from the host — only `web:80` is
-published, so debug through nginx or `exec` into the container.
+Remember that the container's `:8000` is not reachable from the host — the
+stack publishes `api` on `:80`, so debug through that or `exec` into the
+container.
 
 ---
 
