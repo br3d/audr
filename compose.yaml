@@ -21,44 +21,38 @@ services:
     networks:
       - internal
 
+  # Single one-shot bootstrap: schema migration, then master-key init.
+  #
+  # These were two services (`migrate` + `init`) until AUD-386. Both ran the
+  # same image against the same database and `init_key` is idempotent by
+  # design ("safe to call on every startup"), so the split bought nothing but
+  # an extra compose service and an extra container start per deploy. Order
+  # still matters — `init_key` writes to `key_state`, which the 0001 baseline
+  # migration creates — hence `&&` rather than two parallel commands.
   migrate:
     image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    command: ["python", "-m", "alembic", "upgrade", "head"]
+    command:
+      - sh
+      - -c
+      - "python -m alembic upgrade head && python -m audr.operations.init_key"
     working_dir: /app
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
+      SECRET_KEY: ${SECRET_KEY}
     depends_on:
       db:
         condition: service_healthy
     networks:
       - internal
-    # One-shot. Must NOT restart: `init`/`api` wait on it with
+    # One-shot. Must NOT restart: `api`/`worker` wait on it with
     # service_completed_successfully, so an unbounded `restart: on-failure`
     # turns a failed migration into a `docker compose up` that blocks forever
     # instead of an error (2026-09-29 outage: the deploy job hung 2h18m mid
     # rollback and held the audr-deploy lock). Fail fast, let the deploy roll back.
-    restart: "no"
-
-  init:
-    image: 192.168.1.90:8085/audr-backend:${BACKEND_TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: ["python", "-m", "audr.operations.init_key"]
-    environment:
-      DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
-      SECRET_KEY: ${SECRET_KEY}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    networks:
-      - internal
-    # One-shot, same reasoning as `migrate` above.
     restart: "no"
 
   api:
@@ -72,7 +66,7 @@ services:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
       SECRET_KEY: ${SECRET_KEY}
     depends_on:
-      init:
+      migrate:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
@@ -106,7 +100,7 @@ services:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
       SECRET_KEY: ${SECRET_KEY}
     depends_on:
-      init:
+      migrate:
         condition: service_completed_successfully
     networks:
       - internal

@@ -281,12 +281,12 @@ jobs:
           timeout --foreground 600 docker compose run --rm -T migrate
 
           # ---- 5. deploy ----------------------------------------------------
-          # Timeout is mandatory: `migrate`/`init` are one-shots that `init`/`api`
+          # Timeout is mandatory: `migrate` is a one-shot that `api`/`worker`
           # wait on with service_completed_successfully, so a failing one-shot
           # makes `compose up` block until someone kills it (2026-09-29 outage:
           # the job hung 2h18m and held the audr-deploy concurrency group, which
-          # also starved every queued build). compose.yaml pins those services to
-          # `restart: "no"` so they fail fast; this is the belt to that braces.
+          # also starved every queued build). compose.yaml pins that service to
+          # `restart: "no"` so it fails fast; this is the belt to that braces.
           log "Recreating services"
           timeout --foreground 300 docker compose up -d --remove-orphans
 

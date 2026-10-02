@@ -63,7 +63,8 @@ if [ -n "${DEPLOY_TAG}" ]; then
 fi
 
 echo "  -> Pulling latest images"
-docker compose pull init api web worker </dev/null
+# `migrate` shares the backend image with api/worker, so pulling those covers it.
+docker compose pull api web worker </dev/null
 
 echo "  -> Running migrations"
 # `-T` and `</dev/null` are both load-bearing. This whole script is fed to the
