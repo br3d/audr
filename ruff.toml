@@ -11,7 +11,7 @@
 # closer to those sources, so it still wins there. This config governs
 # everything else, and the two are kept deliberately in sync.
 #
-# See AUD-391 for why the target version is py313 while the runtime is 3.14
+# See AUD-392 for why the target version is py313 while the runtime is 3.14
 # (short version: PEP 758 `except A, B:` is valid on 3.14 but these scripts run
 # under whatever `python3` the host shell provides).
 target-version = "py313"

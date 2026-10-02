@@ -215,7 +215,7 @@ runs fine on 3.14, and fails with
 earlier — which matters because `scripts/*.py` are `#!/usr/bin/env python3` and
 are run from a host shell, where `python3` is routinely older than 3.14.
 Targeting `py313` keeps one syntax that is valid under both. CI enforces the
-floor by byte-compiling `scripts/` under `python:3.13-slim`. See AUD-391.
+floor by byte-compiling `scripts/` under `python:3.13-slim`. See AUD-392.
 
 The pin matters for the same reason: ruff's formatter output moves between
 patch releases, so an unpinned ruff makes "is this formatted?" a question about
@@ -230,7 +230,7 @@ undefined names) plus the `scripts/` 3.13 compile check. The full rule set and
 `ruff format --check` are **not** gated yet: the tree currently has 226 findings
 under the full selection and 86 files the formatter would rewrite, so enabling
 either today would mean a permanently red gate. Clearing that backlog and
-widening the gate is AUD-392.
+widening the gate is AUD-393.
 
 ---
 

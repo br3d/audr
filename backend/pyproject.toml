@@ -43,7 +43,7 @@ dev = [
     "types-psycopg2",
     # Lint + format. Pinned exactly: ruff's formatter output and lint rule set
     # both move between patch releases, so an unpinned ruff means "formatted"
-    # depends on whatever the caller happened to have installed. See AUD-391.
+    # depends on whatever the caller happened to have installed. See AUD-392.
     "ruff==0.16.10",
 ]
 
@@ -95,7 +95,7 @@ skip_covered = false
 #     `SyntaxError: multiple exception types must be parenthesized`.
 # Holding at py313 keeps one syntax that is valid everywhere. The only thing
 # given up is 3.14-only `UP` modernizations, of which there are none we want.
-# See AUD-391.
+# See AUD-392.
 target-version = "py313"
 line-length = 100
 
