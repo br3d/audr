@@ -224,13 +224,10 @@ in the CI `lint` job in sync.
 
 ### What CI actually gates
 
-The `lint` job in `ci/gitea-overlay/workflows/ci.yaml` blocks only on
-`ruff check --select E9,F63,F7,F82` (syntax errors, broken constructs,
-undefined names) plus the `scripts/` 3.13 compile check. The full rule set and
-`ruff format --check` are **not** gated yet: the tree currently has 226 findings
-under the full selection and 86 files the formatter would rewrite, so enabling
-either today would mean a permanently red gate. Clearing that backlog and
-widening the gate is AUD-393.
+The `lint` job in `ci/gitea-overlay/workflows/ci.yaml` runs the full rule set
+(`ruff check`) and `ruff format --check`, both in `backend/` and at the repo
+root (`scripts/`), plus the `scripts/` 3.13 compile check. Every `noqa` in the
+tree carries a reason — see AUD-393.
 
 ---
 

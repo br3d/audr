@@ -20,12 +20,9 @@ on:
 
 jobs:
   lint:
-    # Python lint gate. Narrow on purpose: it blocks on the error classes that
-    # mean "this code cannot run" (E9 syntax, F63/F7 broken constructs, F82
-    # undefined names) and nothing else. The full rule set from
-    # `backend/pyproject.toml` currently reports 226 findings and
-    # `ruff format --check` wants 86 files reformatted, so switching either on
-    # wholesale would land a permanently red gate. Widening it is AUD-393.
+    # Python lint gate: the full rule set from backend/pyproject.toml and
+    # ruff.toml, plus format --check, both in backend/ and at the repo root
+    # (scripts/). Every noqa in the tree carries a reason. See AUD-393.
     #
     # The ruff version is pinned here and in `backend/pyproject.toml` dev
     # extras, and the two must stay in sync — an unpinned ruff makes the gate's
@@ -33,10 +30,14 @@ jobs:
     runs-on: host
     steps:
       - uses: actions/checkout@v4
-      - name: ruff (errors only) — backend
-        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 check --no-cache --select E9,F63,F7,F82 .
-      - name: ruff (errors only) — scripts
-        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 check --no-cache --select E9,F63,F7,F82 scripts/
+      - name: ruff check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 check --no-cache .
+      - name: ruff format --check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache .
+      - name: ruff check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 check --no-cache scripts/
+      - name: ruff format --check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache scripts/
       - name: scripts/ must parse on the oldest python3 we run them under
         # `scripts/*.py` are invoked as `python3 scripts/foo.py` from a host
         # shell, not inside the 3.14 image, so they must not use 3.14-only
