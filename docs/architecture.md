@@ -183,7 +183,7 @@ registered worker once, then `recheck_canonicality()` and
 
 | Job kind | Trigger | What it does |
 |---|---|---|
-| `balance_scan` | schedule (fallback 300 s) | Reads native and ERC-20 balances for every monitored pair. |
+| `balance_scan` | schedule (fallback 3600 s) | Reads native and ERC-20 balances for every monitored pair. |
 | `discovery` | schedule (fallback 86400 s) | Chunked, resumable ERC-20 candidate discovery against the catalog. |
 | `quote_refresh` | schedule (fallback 3600 s) | Prices **held assets only**; enqueues a `valuation` run on success. |
 | `event_indexer` | schedule (fallback 300 s) | Incremental `eth_getLogs` Transfer and Approval indexing per wallet, bounded by a per-run chunk budget. |

@@ -179,6 +179,39 @@ async def test_patch_settings_accepts_positive_interval_seconds(
     assert data["revision"] == "2"
 
 
+async def test_patch_settings_interval_seconds_wins_over_stale_freshness(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Regression (AUD-397): a client that round-trips the GET payload sends both
+    ``interval_seconds`` (edited) and ``freshness_seconds`` (stale, unchanged).
+    The server used to prefer ``freshness_seconds``, writing the old value back
+    over the new one — the Schedules page looked like it never saved.
+    """
+    csrf = await _setup_and_get_csrf(http_client)
+    await _insert_schedule(db_session_factory, kind="balance_scan")
+
+    r = await http_client.patch(
+        _SETTINGS_URL,
+        json={
+            "revision": "1",
+            "schedules": {
+                "balances": {
+                    "enabled": True,
+                    "interval_seconds": 3600,
+                    "freshness_seconds": 300,
+                }
+            },
+        },
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+    assert r.json()["schedules"]["balances"]["interval_seconds"] == 3600
+
+    r2 = await http_client.get(_SETTINGS_URL)
+    assert r2.json()["schedules"]["balances"]["interval_seconds"] == 3600
+
+
 async def test_patch_settings_rejects_before_applying_any_schedule(
     http_client: httpx.AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],

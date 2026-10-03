@@ -162,7 +162,15 @@ export default function SchedulesPage() {
       ...current,
       schedules: {
         ...current.schedules,
-        [kind]: { ...(current.schedules?.[kind] ?? {}), interval_seconds: intervalSeconds, enabled },
+        [kind]: {
+          ...(current.schedules?.[kind] ?? {}),
+          interval_seconds: intervalSeconds,
+          // freshness_seconds is the same server-side column under a second
+          // name; leaving the fetched value in place made the draft internally
+          // inconsistent (AUD-397).
+          freshness_seconds: intervalSeconds,
+          enabled,
+        },
       },
     })
     setSaveMsg(null)
@@ -176,10 +184,16 @@ export default function SchedulesPage() {
     setSaveMsg(null)
     setSaving(true)
     try {
-      await patchSettings({
-        revision: data.revision,
-        schedules: current.schedules,
-      })
+      // Send only the two fields this page owns. Echoing the whole GET payload
+      // back also sent next_due_at and a possibly stale freshness_seconds, and
+      // the server used to let the latter override interval_seconds (AUD-397).
+      const schedules = Object.fromEntries(
+        Object.entries(current.schedules ?? {}).map(([kind, config]) => [
+          kind,
+          { enabled: config.enabled, interval_seconds: config.interval_seconds },
+        ]),
+      )
+      await patchSettings({ revision: data.revision, schedules })
       setSaveMsg('Schedule settings saved.')
       setDraft(null)
       void queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -229,7 +243,7 @@ export default function SchedulesPage() {
             id="balances"
             label="Balance scans"
             kind="balances"
-            intervalSeconds={balances?.interval_seconds ?? 300}
+            intervalSeconds={balances?.interval_seconds ?? 3600}
             enabled={balances?.enabled ?? true}
             nextDueAt={balances?.next_due_at}
             onChange={(s, en) => updateSchedule('balances', s, en)}
@@ -240,7 +254,7 @@ export default function SchedulesPage() {
             id="discovery"
             label="Token discovery"
             kind="discovery"
-            intervalSeconds={discovery?.interval_seconds ?? 3600}
+            intervalSeconds={discovery?.interval_seconds ?? 86400}
             enabled={discovery?.enabled ?? true}
             nextDueAt={discovery?.next_due_at}
             onChange={(s, en) => updateSchedule('discovery', s, en)}
@@ -251,7 +265,7 @@ export default function SchedulesPage() {
             id="quotes"
             label="Price quotes"
             kind="quotes"
-            intervalSeconds={quotes?.interval_seconds ?? 300}
+            intervalSeconds={quotes?.interval_seconds ?? 3600}
             enabled={quotes?.enabled ?? true}
             nextDueAt={quotes?.next_due_at}
             onChange={(s, en) => updateSchedule('quotes', s, en)}

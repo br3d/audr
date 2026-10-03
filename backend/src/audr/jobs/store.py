@@ -41,7 +41,7 @@ _RETRY_STREAK_LOOKBACK_INTERVAL = "24 hours"
 # discovery and quote_refresh were raised from 1h/5min to 24h/1h (AUD-366) to
 # cut down how fast a single configured RPC/quote provider's quota gets burned.
 _DEFAULT_FRESHNESS_S: dict[str, int] = {
-    "balance_scan": 300,
+    "balance_scan": 3600,
     "discovery": 86400,
     "quote_refresh": 3600,
     "event_indexer": 300,
