@@ -21,13 +21,9 @@ from audr.jobs.store import (
 from audr.jobs.worker import Worker
 
 
-async def _delete_run(
-    factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID
-) -> None:
+async def _delete_run(factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> None:
     async with factory() as session:
-        await session.execute(
-            sa.text("DELETE FROM job_run WHERE id = :id"), {"id": run_id}
-        )
+        await session.execute(sa.text("DELETE FROM job_run WHERE id = :id"), {"id": run_id})
         await session.commit()
 
 

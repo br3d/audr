@@ -196,9 +196,7 @@ class CoinMarketCapProvider:
         CoinGeckoProvider.get_prices' unknown-token contract.
         """
         erc20 = [a.lower() for a in token_addresses if not is_native_eth(a)]
-        wants_eth = include_eth or any(
-            is_native_eth(a) for a in token_addresses
-        )
+        wants_eth = include_eth or any(is_native_eth(a) for a in token_addresses)
 
         resolved: dict[str, int] = await self._resolver(erc20) if erc20 else {}
 

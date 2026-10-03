@@ -26,10 +26,7 @@ _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": address.lower()},
     )
     return wallet_id
@@ -82,9 +79,7 @@ async def _insert_icon_row(
 
 async def _get_icon_row(session: AsyncSession, asset_id: uuid.UUID) -> dict | None:
     result = await session.execute(
-        text(
-            "SELECT content_type, image, source, status FROM asset_icon WHERE asset_id = :id"
-        ),
+        text("SELECT content_type, image, source, status FROM asset_icon WHERE asset_id = :id"),
         {"id": str(asset_id)},
     )
     row = result.mappings().first()

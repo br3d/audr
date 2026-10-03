@@ -78,9 +78,7 @@ async def invalidate_observation(
     except Exception as exc:
         # Unique constraint violation: already invalidated.
         if "uq_balance_observation_invalidation_observation_id" in str(exc):
-            logger.debug(
-                "observation %s already invalidated — skipping", observation_id
-            )
+            logger.debug("observation %s already invalidated — skipping", observation_id)
             return False
         raise
 
@@ -119,9 +117,7 @@ async def recheck_canonicality(session: AsyncSession) -> int:
     rows = result.fetchall()
     count = len(rows)
     if count:
-        logger.warning(
-            "canonicality recheck: %d history_point(s) flipped to non-canonical", count
-        )
+        logger.warning("canonicality recheck: %d history_point(s) flipped to non-canonical", count)
     return count
 
 

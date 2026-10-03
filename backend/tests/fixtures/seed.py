@@ -51,13 +51,13 @@ AAVE_ADDRESS: str = "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9"
 
 # Seed asset records: (token_address, symbol, name, decimals)
 SEED_ASSETS: list[tuple[str, str, str, int]] = [
-    (WETH_ADDRESS, "WETH",  "Wrapped Ether",    18),
-    (USDC_ADDRESS, "USDC",  "USD Coin",           6),
-    (USDT_ADDRESS, "USDT",  "Tether USD",         6),
-    (DAI_ADDRESS,  "DAI",   "Dai Stablecoin",    18),
-    (LINK_ADDRESS, "LINK",  "ChainLink Token",   18),
-    (UNI_ADDRESS,  "UNI",   "Uniswap",           18),
-    (AAVE_ADDRESS, "AAVE",  "Aave Token",        18),
+    (WETH_ADDRESS, "WETH", "Wrapped Ether", 18),
+    (USDC_ADDRESS, "USDC", "USD Coin", 6),
+    (USDT_ADDRESS, "USDT", "Tether USD", 6),
+    (DAI_ADDRESS, "DAI", "Dai Stablecoin", 18),
+    (LINK_ADDRESS, "LINK", "ChainLink Token", 18),
+    (UNI_ADDRESS, "UNI", "Uniswap", 18),
+    (AAVE_ADDRESS, "AAVE", "Aave Token", 18),
 ]
 
 # ---------------------------------------------------------------------------

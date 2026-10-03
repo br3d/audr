@@ -103,9 +103,7 @@ async def _collect_status() -> SystemStatus:
                 current_revision=readiness["current"],
                 up_to_date=readiness["up_to_date"],
                 status=(
-                    ComponentStatus.OK
-                    if readiness["up_to_date"]
-                    else ComponentStatus.DEGRADED
+                    ComponentStatus.OK if readiness["up_to_date"] else ComponentStatus.DEGRADED
                 ),
             )
             try:

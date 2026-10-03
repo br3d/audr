@@ -61,9 +61,7 @@ async def _scoped_wallet_id(session: AsyncSession, *, run_id: uuid.UUID) -> uuid
     return uuid.UUID(params["wallet_id"])
 
 
-async def _resolve_scoped_wallet(
-    session: AsyncSession, *, wallet_id: uuid.UUID
-) -> Wallet | None:
+async def _resolve_scoped_wallet(session: AsyncSession, *, wallet_id: uuid.UUID) -> Wallet | None:
     """Return the scoped wallet if it still exists and is active, else None."""
     wallet = await get_wallet(session, wallet_id=wallet_id)
     if wallet is None or wallet.status != "active":
@@ -410,9 +408,7 @@ async def _main() -> None:
 
         # Liveness heartbeat: GET /api/v1/status reads the newest worker_status
         # row and reports "unknown" when the table is empty (AUD-318).
-        await _record_worker_status(
-            factory, process_worker_id, "running" if did_work else "idle"
-        )
+        await _record_worker_status(factory, process_worker_id, "running" if did_work else "idle")
 
         if not did_work:
             try:

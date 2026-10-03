@@ -35,9 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.assets.models import CmcMapEntry, CmcMapVersion
 from audr.providers.coinmarketcap_public import CoinMarketCapProvider
 
-_VENDORED_MAP_PATH = (
-    importlib.resources.files("audr.assets") / "data" / "cmc_map_seed.json"
-)
+_VENDORED_MAP_PATH = importlib.resources.files("audr.assets") / "data" / "cmc_map_seed.json"
 
 _MAP_PAGE_SIZE = 5000
 _MAP_TTL = timedelta(days=1)
@@ -128,9 +126,7 @@ async def is_cmc_map_stale(session: AsyncSession) -> bool:
     return datetime.now(UTC) - version.imported_at > _MAP_TTL
 
 
-async def resolve_cmc_ids(
-    session: AsyncSession, token_addresses: list[str]
-) -> dict[str, int]:
+async def resolve_cmc_ids(session: AsyncSession, token_addresses: list[str]) -> dict[str, int]:
     """Resolve lowercase ERC-20 addresses to CoinMarketCap ids.
 
     Matches the AddressResolver contract CoinMarketCapProvider.get_prices

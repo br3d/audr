@@ -361,7 +361,5 @@ def _compute_quality(
     if priced == len(holdings):
         return "complete", priced
 
-    never_asked = any(
-        h.asset_id not in prices and not h.price_unavailable for h in holdings
-    )
+    never_asked = any(h.asset_id not in prices and not h.price_unavailable for h in holdings)
     return ("partial" if never_asked else "gaps"), priced

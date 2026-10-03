@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from datetime import timezone as _tz
+
 _UTC = _tz.utc
 from decimal import Decimal
 
@@ -283,9 +284,15 @@ async def stream_history_csv(
     """
     yield "# schema_version: 1\n"
     yield _csv_row(
-        "snapshot_id", "snapshotted_at", "quality",
-        "wallet_address", "asset_symbol", "asset_name",
-        "raw_amount", "price_usd", "decimals",
+        "snapshot_id",
+        "snapshotted_at",
+        "quality",
+        "wallet_address",
+        "asset_symbol",
+        "asset_name",
+        "raw_amount",
+        "price_usd",
+        "decimals",
     )
 
     stream = await session.stream(_HISTORY_STREAM_QUERY, {"from_": from_, "to_": to_})

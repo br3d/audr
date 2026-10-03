@@ -23,9 +23,7 @@ def rpc_mock() -> Iterator[respx.MockRouter]:
     """HTTPX mock router pre-configured with default Ethereum RPC responses."""
     with respx.mock(assert_all_called=False) as mock:
         # Default: return chain ID 1 (mainnet)
-        mock.post("http://rpc.test/").mock(
-            return_value=Response(200, json=_rpc_response("0x1"))
-        )
+        mock.post("http://rpc.test/").mock(return_value=Response(200, json=_rpc_response("0x1")))
         yield mock
 
 
@@ -58,6 +56,4 @@ class EthRpcStub:
         )
 
     def set_http_error(self, status_code: int) -> None:
-        self._router.post(self._url).mock(
-            return_value=Response(status_code)
-        )
+        self._router.post(self._url).mock(return_value=Response(status_code))

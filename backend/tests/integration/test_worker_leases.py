@@ -35,8 +35,7 @@ async def test_lease_loss_after_missed_heartbeat(db_session: AsyncSession) -> No
     await db_session.execute(
         # pragma: nocover — SQL is DB-level, intentionally raw
         __import__("sqlalchemy").text(
-            "UPDATE job_run SET heartbeat_at = now() - interval '10 minutes'"
-            " WHERE id = :id"
+            "UPDATE job_run SET heartbeat_at = now() - interval '10 minutes' WHERE id = :id"
         ),
         {"id": run_id},
     )
@@ -68,9 +67,7 @@ async def test_retry_budget_exhaustion_backs_off_immediately(db_session: AsyncSe
     """
     max_retries = 2
     for _ in range(max_retries + 1):
-        run_id = await claim_job(
-            db_session, kind=JobKind.DISCOVERY, max_retries=max_retries
-        )
+        run_id = await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries)
         if run_id is None:
             break
         await fail_job(db_session, run_id=run_id, error="transient error")
@@ -84,16 +81,13 @@ async def test_retry_budget_exhaustion_backs_off_immediately(db_session: AsyncSe
 async def test_restart_recovery_reclaims_orphaned_run(db_session: AsyncSession) -> None:
     """A job left in_progress by a crashed worker can be reclaimed after lease expiry."""
     # Simulate a crashed worker by inserting a stale in_progress run.
-    run_id = await claim_job(
-        db_session, kind=JobKind.VALUATION, max_retries=3
-    )
+    run_id = await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3)
     assert run_id is not None
 
     # Expire the lease.
     await db_session.execute(
         __import__("sqlalchemy").text(
-            "UPDATE job_run SET heartbeat_at = now() - interval '10 minutes'"
-            " WHERE id = :id"
+            "UPDATE job_run SET heartbeat_at = now() - interval '10 minutes' WHERE id = :id"
         ),
         {"id": run_id},
     )
@@ -113,8 +107,7 @@ async def test_heartbeat_extends_lease(db_session: AsyncSession) -> None:
     # Manually rewind the heartbeat then extend it.
     await db_session.execute(
         __import__("sqlalchemy").text(
-            "UPDATE job_run SET heartbeat_at = now() - interval '4 minutes'"
-            " WHERE id = :id"
+            "UPDATE job_run SET heartbeat_at = now() - interval '4 minutes' WHERE id = :id"
         ),
         {"id": run_id},
     )
@@ -172,10 +165,7 @@ async def test_upsert_worker_status_inserts_then_updates_same_row(
 
     first = (
         await db_session.execute(
-            sa.text(
-                "SELECT status, last_heartbeat_at FROM worker_status"
-                " WHERE worker_id = :wid"
-            ),
+            sa.text("SELECT status, last_heartbeat_at FROM worker_status WHERE worker_id = :wid"),
             {"wid": worker_id},
         )
     ).one()
@@ -189,10 +179,7 @@ async def test_upsert_worker_status_inserts_then_updates_same_row(
 
     rows = (
         await db_session.execute(
-            sa.text(
-                "SELECT status, current_job_run_id FROM worker_status"
-                " WHERE worker_id = :wid"
-            ),
+            sa.text("SELECT status, current_job_run_id FROM worker_status WHERE worker_id = :wid"),
             {"wid": worker_id},
         )
     ).all()
@@ -249,7 +236,5 @@ async def test_worker_serves_enqueued_pending_run_before_schedule_claim(
         async with db_session_factory() as session:
             import sqlalchemy as sa
 
-            await session.execute(
-                sa.text("DELETE FROM job_run WHERE id = :id"), {"id": run_id}
-            )
+            await session.execute(sa.text("DELETE FROM job_run WHERE id = :id"), {"id": run_id})
             await session.commit()

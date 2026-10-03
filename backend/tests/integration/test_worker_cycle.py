@@ -31,8 +31,7 @@ async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wid = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, 'test', 'active')"
+            "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, 'test', 'active')"
         ),
         {"id": str(wid), "addr": address.lower()},
     )
@@ -140,9 +139,7 @@ async def test_valuation_pipeline_populates_holdings_and_history(
         asset_id=asset_id,
         raw_amount=1_500_000_000_000_000_000,
     )
-    await _insert_complete_quote_set(
-        db_session, asset_id=asset_id, price_usd=Decimal("3000")
-    )
+    await _insert_complete_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("3000"))
     await db_session.flush()
 
     # Run the valuation pipeline (mirrors handle_valuation).
@@ -217,9 +214,7 @@ async def test_handle_valuation_is_idempotent_on_same_snapshot(
         decimals=18,
     )
     await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
-    await _insert_complete_quote_set(
-        db_session, asset_id=asset_id, price_usd=Decimal("1")
-    )
+    await _insert_complete_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("1"))
     await db_session.flush()
 
     snap = await publish_valuation_snapshot(db_session)
@@ -246,9 +241,7 @@ async def test_get_latest_snapshot_lines_issues_one_query_regardless_of_wallet_c
             decimals=18,
         )
         await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
-        await _insert_complete_quote_set(
-            db_session, asset_id=asset_id, price_usd=Decimal("1")
-        )
+        await _insert_complete_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("1"))
         wallets.append(wallet_id)
     await db_session.flush()
     await publish_valuation_snapshot(db_session)
@@ -266,7 +259,5 @@ async def test_get_latest_snapshot_lines_issues_one_query_regardless_of_wallet_c
         sa.event.remove(db_engine.sync_engine, "before_cursor_execute", _count)
 
     assert len(lines) == 3
-    assert {line["wallet_address"] for line in lines} == {
-        "0x" + f"{i:02x}" * 20 for i in range(3)
-    }
+    assert {line["wallet_address"] for line in lines} == {"0x" + f"{i:02x}" * 20 for i in range(3)}
     assert query_count == 1, f"expected exactly 1 query, issued {query_count}"

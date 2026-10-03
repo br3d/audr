@@ -64,13 +64,15 @@ async def discover_tokens(
             if addr in seen or addr in processed_from_checkpoint:
                 continue
             seen.add(addr)
-            candidates.append(DiscoveryCandidate(
-                token_address=addr,
-                source="catalog",
-                symbol=entry.symbol,
-                name=entry.name,
-                decimals=entry.decimals,
-            ))
+            candidates.append(
+                DiscoveryCandidate(
+                    token_address=addr,
+                    source="catalog",
+                    symbol=entry.symbol,
+                    name=entry.name,
+                    decimals=entry.decimals,
+                )
+            )
 
     for raw_addr in manual_addresses:
         addr = raw_addr.lower()
@@ -171,9 +173,7 @@ async def save_discovery_checkpoint(
 ) -> None:
     """Persist *checkpoint* on the job_run row identified by *run_id*."""
     await session.execute(
-        sa.text(
-            "UPDATE job_run SET checkpoint = CAST(:checkpoint AS jsonb) WHERE id = :id"
-        ),
+        sa.text("UPDATE job_run SET checkpoint = CAST(:checkpoint AS jsonb) WHERE id = :id"),
         {"id": str(run_id), "checkpoint": _json_dumps(checkpoint)},
     )
     await session.flush()
@@ -214,9 +214,7 @@ async def _get_catalog_entries(session: AsyncSession) -> list[CatalogEntry]:
     return list(entries_result.scalars())
 
 
-async def _wallet_id_for_address(
-    session: AsyncSession, address: str
-) -> uuid.UUID | None:
+async def _wallet_id_for_address(session: AsyncSession, address: str) -> uuid.UUID | None:
     result = await session.execute(
         sa.text("SELECT id FROM wallet WHERE address = :addr"),
         {"addr": address.lower()},

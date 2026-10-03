@@ -489,7 +489,33 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    _tables = ["asset", "asset_metadata_revision", "balance_observation", "balance_observation_invalidation", "catalog_entry", "catalog_version", "discovery_coverage", "history_point", "integration", "job_run", "key_state", "login_attempt", "monitored_pair", "operational_event", "owner", "provider_budget", "provider_purge_log", "quote_observation", "quote_set", "schedule", "session", "valuation_line", "valuation_snapshot", "wallet", "worker_status"]
+    _tables = [
+        "asset",
+        "asset_metadata_revision",
+        "balance_observation",
+        "balance_observation_invalidation",
+        "catalog_entry",
+        "catalog_version",
+        "discovery_coverage",
+        "history_point",
+        "integration",
+        "job_run",
+        "key_state",
+        "login_attempt",
+        "monitored_pair",
+        "operational_event",
+        "owner",
+        "provider_budget",
+        "provider_purge_log",
+        "quote_observation",
+        "quote_set",
+        "schedule",
+        "session",
+        "valuation_line",
+        "valuation_snapshot",
+        "wallet",
+        "worker_status",
+    ]
     bind = op.get_bind()
     for table in _tables:
         bind.exec_driver_sql(f'DROP TABLE IF EXISTS public."{table}" CASCADE')

@@ -109,7 +109,9 @@ def _row_to_asset_item(row: dict) -> AssetItemOut:
     contract_address: str | None = None if is_native else token_address
 
     decimals_override = row.get("decimals_override")
-    effective_decimals = int(decimals_override) if decimals_override is not None else int(row["decimals"])
+    effective_decimals = (
+        int(decimals_override) if decimals_override is not None else int(row["decimals"])
+    )
 
     created_at = row["created_at"]
     if hasattr(created_at, "isoformat"):
@@ -250,7 +252,9 @@ async def get_catalog(
     )
 
 
-@router.post("/assets/manual", response_model=AssetItemOut, status_code=http_status.HTTP_201_CREATED)
+@router.post(
+    "/assets/manual", response_model=AssetItemOut, status_code=http_status.HTTP_201_CREATED
+)
 async def add_manual_asset(
     body: AddManualAssetBody,
     _session: Annotated[Session, Depends(_require_csrf)],
@@ -316,7 +320,9 @@ async def add_manual_asset(
 
     row = await _get_asset_by_id(db, asset_id)
     if row is None:
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset insert failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset insert failed"
+        )
     return _row_to_asset_item(row)
 
 
@@ -353,7 +359,9 @@ async def patch_asset(
 
     updated = await _get_asset_by_id(db, asset_id)
     if updated is None:
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset update failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset update failed"
+        )
     return _row_to_asset_item(updated)
 
 

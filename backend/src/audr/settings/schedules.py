@@ -189,9 +189,7 @@ async def is_due(session: AsyncSession, *, kind: str) -> bool:
     return elapsed_s >= freshness_s
 
 
-async def project_usage(
-    session: AsyncSession, *, kind: str, days: int = 30
-) -> dict:  # type: ignore[type-arg]
+async def project_usage(session: AsyncSession, *, kind: str, days: int = 30) -> dict:  # type: ignore[type-arg]
     """Project API call usage for *kind* over *days* days.
 
     Returns::

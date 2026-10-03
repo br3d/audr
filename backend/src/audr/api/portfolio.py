@@ -293,9 +293,7 @@ async def get_portfolio(
 
         block_number = line["block_number"]
         is_stale_balance = (
-            block_number is not None
-            and max_block is not None
-            and int(block_number) < max_block
+            block_number is not None and max_block is not None and int(block_number) < max_block
         )
         if is_stale_balance and price_usd_str is not None and value_usd_str is not None:
             try:

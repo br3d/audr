@@ -66,11 +66,7 @@ class ErrorEnvelope(BaseModel):
 
 
 def _request_id(request: Request) -> str:
-    return (
-        str(request.state.request_id)
-        if hasattr(request.state, "request_id")
-        else "unknown"
-    )
+    return str(request.state.request_id) if hasattr(request.state, "request_id") else "unknown"
 
 
 def _retryable(status_code: int) -> bool:
@@ -145,9 +141,7 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
     )
 
 
-async def validation_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Render request-validation failures as 422 with per-field messages."""
     assert isinstance(exc, RequestValidationError)  # registered for this type only
     field_errors: dict[str, str] = {}

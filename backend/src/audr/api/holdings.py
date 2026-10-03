@@ -62,9 +62,7 @@ async def get_wallet_holdings(
     result = await db.execute(select(Wallet.address).where(Wallet.id == wallet_id))
     row = result.first()
     if row is None:
-        raise HTTPException(
-            status_code=http_status.HTTP_404_NOT_FOUND, detail="Wallet not found"
-        )
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Wallet not found")
     address = row[0]
 
     observations = await get_holdings(db, wallet_address=address)
@@ -117,7 +115,9 @@ async def get_portfolio_holdings(
                 quantity=quantity_str,
                 price_usd=str(line["price_usd"]) if line["price_usd"] else None,
                 value_usd=str(line["value_usd"]) if line["value_usd"] else None,
-                block_number=int(line["block_number"]) if line["block_number"] is not None else None,
+                block_number=int(line["block_number"])
+                if line["block_number"] is not None
+                else None,
             )
         )
     return response

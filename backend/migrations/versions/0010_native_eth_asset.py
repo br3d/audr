@@ -117,9 +117,7 @@ def upgrade() -> None:
                     ),
                     {"new": canonical_id, "old": legacy_id},
                 )
-        conn.execute(
-            sa.text("DELETE FROM asset WHERE id = :id"), {"id": legacy_id}
-        )
+        conn.execute(sa.text("DELETE FROM asset WHERE id = :id"), {"id": legacy_id})
 
 
 def downgrade() -> None:

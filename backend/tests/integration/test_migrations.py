@@ -92,9 +92,7 @@ async def test_migration_readiness_current_matches_alembic_version(
     db_session: AsyncSession,
 ) -> None:
     """The 'current' field must match the raw alembic_version table value."""
-    raw = await db_session.execute(
-        text("SELECT version_num FROM alembic_version LIMIT 1")
-    )
+    raw = await db_session.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
     raw_row = raw.first()
     raw_version: str | None = raw_row[0] if raw_row is not None else None
 
@@ -146,14 +144,9 @@ async def test_defaulted_insert_satisfies_check_constraints(
     db_session: AsyncSession,
 ) -> None:
     """Inserting while relying on the server defaults must not trip a CHECK."""
+    await db_session.execute(text("INSERT INTO quote_set (provider) VALUES ('coingecko')"))
     await db_session.execute(
-        text("INSERT INTO quote_set (provider) VALUES ('coingecko')")
-    )
-    await db_session.execute(
-        text(
-            "INSERT INTO wallet (address) VALUES"
-            " ('0x000000000000000000000000000000000000dead')"
-        )
+        text("INSERT INTO wallet (address) VALUES ('0x000000000000000000000000000000000000dead')")
     )
 
     quote_status = await db_session.execute(

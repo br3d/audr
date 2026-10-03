@@ -142,9 +142,7 @@ async def delete_wallet(
         if ":snapshot_ids" in sql:
             # Expanding bindparam renders a literal IN (...) list, which keeps
             # asyncpg from having to infer an array parameter type.
-            stmt = stmt.bindparams(
-                sa.bindparam("snapshot_ids", expanding=True)
-            )
+            stmt = stmt.bindparams(sa.bindparam("snapshot_ids", expanding=True))
         result = await session.execute(stmt, params)
         deleted[table] = int(result.rowcount or 0)
 
@@ -155,8 +153,7 @@ async def delete_wallet(
         (
             await session.execute(
                 sa.text(
-                    "SELECT DISTINCT snapshot_id FROM valuation_line"
-                    f" WHERE {_OWNED_VALUATION_LINE}"
+                    f"SELECT DISTINCT snapshot_id FROM valuation_line WHERE {_OWNED_VALUATION_LINE}"
                 ),
                 params,
             )
@@ -233,9 +230,7 @@ async def delete_wallet(
 
 async def list_wallets(session: AsyncSession) -> list[Wallet]:
     """Return all tracked wallets, ordered by creation time."""
-    result = await session.execute(
-        sa.select(Wallet).order_by(Wallet.created_at)
-    )
+    result = await session.execute(sa.select(Wallet).order_by(Wallet.created_at))
     return list(result.scalars())
 
 

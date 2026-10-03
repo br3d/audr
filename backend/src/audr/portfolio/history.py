@@ -77,9 +77,7 @@ async def materialize_history_point(
 
     lines = await _read_snapshot_lines(session, snapshot_id)
     if not lines:
-        raise ValueError(
-            f"snapshot {snapshot_id} has no valuation lines — cannot materialize"
-        )
+        raise ValueError(f"snapshot {snapshot_id} has no valuation lines — cannot materialize")
 
     snapshotted_at = await _read_snapshotted_at(session, snapshot_id)
     quality = await _read_quality(session, snapshot_id)
@@ -184,9 +182,7 @@ async def _read_snapshotted_at(
     snapshot_id: uuid.UUID,
 ) -> object:
     result = await session.execute(
-        sa.text(
-            "SELECT snapshotted_at FROM valuation_snapshot WHERE id = :sid"
-        ),
+        sa.text("SELECT snapshotted_at FROM valuation_snapshot WHERE id = :sid"),
         {"sid": str(snapshot_id)},
     )
     row = result.first()

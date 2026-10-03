@@ -169,7 +169,9 @@ async def test_published_snapshot_rows_are_not_modified(
 ) -> None:
     """A published valuation_snapshot row cannot be mutated by a second publication."""
     wallet_id = await _insert_wallet(db_session, "0xaaaa000000000000000000000000000000000001")
-    asset_id = await _insert_asset(db_session, token_address="0xbbbb000000000000000000000000000000000002")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xbbbb000000000000000000000000000000000002"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     ts = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -203,7 +205,9 @@ async def test_valuation_lines_are_immutable_after_publication(
 ) -> None:
     """valuation_line rows for a published snapshot cannot be updated via SQL."""
     wallet_id = await _insert_wallet(db_session, "0xcccc000000000000000000000000000000000003")
-    asset_id = await _insert_asset(db_session, token_address="0xdddd000000000000000000000000000000000004")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xdddd000000000000000000000000000000000004"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)
@@ -249,7 +253,9 @@ async def test_materialize_history_point_idempotent(
 ) -> None:
     """Calling materialize_history_point twice for the same snapshot returns the same row."""
     wallet_id = await _insert_wallet(db_session, "0xeeee000000000000000000000000000000000005")
-    asset_id = await _insert_asset(db_session, token_address="0xffff000000000000000000000000000000000006")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xffff000000000000000000000000000000000006"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     ts = datetime(2026, 3, 15, 10, 0, tzinfo=UTC)
@@ -319,7 +325,9 @@ async def test_publish_snapshot_later_verified_block_adds_history_point(
     point — the converse of test_materialize_history_point_idempotent's exact-retry
     case above, which adds none."""
     wallet_id = await _insert_wallet(db_session, "0xa001000000000000000000000000000000000a1")
-    asset_id = await _insert_asset(db_session, token_address="0xa002000000000000000000000000000000000a2")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa002000000000000000000000000000000000a2"
+    )
     await _insert_balance_observation(
         db_session,
         wallet_id=wallet_id,
@@ -360,7 +368,9 @@ async def test_publish_snapshot_quote_only_change_adds_history_point(
     new snapshot and history point, since the AUD-70 input key also covers the
     quote_set id the prices came from."""
     wallet_id = await _insert_wallet(db_session, "0xa003000000000000000000000000000000000a3")
-    asset_id = await _insert_asset(db_session, token_address="0xa004000000000000000000000000000000000a4")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa004000000000000000000000000000000000a4"
+    )
     await _insert_balance_observation(
         db_session,
         wallet_id=wallet_id,
@@ -376,7 +386,9 @@ async def test_publish_snapshot_quote_only_change_adds_history_point(
 
     # A fresh, strictly newer quote_set — holdings are unchanged, only the
     # quote data's provenance (quote_set id) is new.
-    await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("11"), offset_minutes=10)
+    await _insert_quote_set(
+        db_session, asset_id=asset_id, price_usd=Decimal("11"), offset_minutes=10
+    )
     await db_session.flush()
 
     second = await publish_valuation_snapshot(db_session)
@@ -398,7 +410,9 @@ async def test_gap_markers_injected_for_temporal_discontinuities(
 ) -> None:
     """query_history inserts gap markers between snapshots that are far apart."""
     wallet_id = await _insert_wallet(db_session, "0x1111000000000000000000000000000000000007")
-    asset_id = await _insert_asset(db_session, token_address="0x2222000000000000000000000000000000000008")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x2222000000000000000000000000000000000008"
+    )
 
     # Create two snapshots: one at t=0, another at t=72h — well beyond any gap threshold.
     base = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
@@ -434,7 +448,9 @@ async def test_no_gap_markers_for_consecutive_hourly_snapshots(
 ) -> None:
     """No gap markers when snapshots are consecutive hourly points."""
     wallet_id = await _insert_wallet(db_session, "0x3333000000000000000000000000000000000009")
-    asset_id = await _insert_asset(db_session, token_address="0x4444000000000000000000000000000000000010")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x4444000000000000000000000000000000000010"
+    )
 
     base = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
     for i in range(5):
@@ -470,7 +486,9 @@ async def test_has_gap_true_for_partial_quality_snapshot(
 ) -> None:
     """history_point.has_gap is true when snapshot quality is 'partial'."""
     wallet_id = await _insert_wallet(db_session, "0x5555000000000000000000000000000000000011")
-    asset_id = await _insert_asset(db_session, token_address="0x6666000000000000000000000000000000000012")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x6666000000000000000000000000000000000012"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session, quality="partial")
@@ -495,7 +513,9 @@ async def test_gaps_quality_snapshot_materializes_history_point(
     materializes into history_point instead of violating the quality check
     constraint — regression test for the 0012 migration."""
     wallet_id = await _insert_wallet(db_session, "0x5555000000000000000000000000000000000021")
-    asset_id = await _insert_asset(db_session, token_address="0x6666000000000000000000000000000000000022")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x6666000000000000000000000000000000000022"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session, quality="gaps")
@@ -519,7 +539,9 @@ async def test_has_gap_false_for_complete_quality_snapshot(
 ) -> None:
     """history_point.has_gap is false when snapshot quality is 'complete'."""
     wallet_id = await _insert_wallet(db_session, "0x7777000000000000000000000000000000000013")
-    asset_id = await _insert_asset(db_session, token_address="0x8888000000000000000000000000000000000014")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x8888000000000000000000000000000000000014"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session, quality="complete")
@@ -541,8 +563,12 @@ async def test_total_value_usd_summed_across_lines(
 ) -> None:
     """total_value_usd in history_point is the sum of all non-null line values."""
     wallet_id = await _insert_wallet(db_session, "0x9999000000000000000000000000000000000015")
-    asset_a = await _insert_asset(db_session, token_address="0xaaaa000000000000000000000000000000000016", symbol="AAA")
-    asset_b = await _insert_asset(db_session, token_address="0xbbbb000000000000000000000000000000000017", symbol="BBB")
+    asset_a = await _insert_asset(
+        db_session, token_address="0xaaaa000000000000000000000000000000000016", symbol="AAA"
+    )
+    asset_b = await _insert_asset(
+        db_session, token_address="0xbbbb000000000000000000000000000000000017", symbol="BBB"
+    )
     obs_a = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_a)
     obs_b = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_b)
 
@@ -575,7 +601,9 @@ async def test_total_value_usd_null_when_all_lines_unpriced(
 ) -> None:
     """total_value_usd is null when no lines have a price (stale snapshot)."""
     wallet_id = await _insert_wallet(db_session, "0xcccc000000000000000000000000000000000018")
-    asset_id = await _insert_asset(db_session, token_address="0xdddd000000000000000000000000000000000019")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xdddd000000000000000000000000000000000019"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session, quality="stale")
@@ -601,9 +629,12 @@ async def test_total_value_usd_null_when_all_lines_unpriced(
 async def test_period_24h_excludes_older_points(db_session: AsyncSession) -> None:
     """history_query with period='24h' excludes points older than 24 hours."""
     wallet_id = await _insert_wallet(db_session, "0xeeee000000000000000000000000000000000020")
-    asset_id = await _insert_asset(db_session, token_address="0xffff000000000000000000000000000000000021")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xffff000000000000000000000000000000000021"
+    )
 
     from datetime import datetime as dt
+
     now = dt.now(tz=UTC)
 
     recent_ts = now - timedelta(hours=1)
@@ -611,8 +642,16 @@ async def test_period_24h_excludes_older_points(db_session: AsyncSession) -> Non
 
     for ts in (recent_ts, old_ts):
         sid = await _insert_snapshot(db_session, snapshotted_at=ts)
-        obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id, observed_at=ts)
-        await _insert_valuation_line(db_session, snapshot_id=sid, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_id)
+        obs_id = await _insert_balance_observation(
+            db_session, wallet_id=wallet_id, asset_id=asset_id, observed_at=ts
+        )
+        await _insert_valuation_line(
+            db_session,
+            snapshot_id=sid,
+            wallet_id=wallet_id,
+            asset_id=asset_id,
+            observation_id=obs_id,
+        )
         await materialize_history_point(db_session, snapshot_id=sid)
 
     page = await query_history(db_session, period="24h")
@@ -625,15 +664,25 @@ async def test_period_24h_excludes_older_points(db_session: AsyncSession) -> Non
 async def test_cursor_pagination(db_session: AsyncSession) -> None:
     """Cursor pagination correctly pages through history points without overlap."""
     wallet_id = await _insert_wallet(db_session, "0x0000100000000000000000000000000000000022")
-    asset_id = await _insert_asset(db_session, token_address="0x0000200000000000000000000000000000000023")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x0000200000000000000000000000000000000023"
+    )
 
     base = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
     snapshot_ids: list[uuid.UUID] = []
     for i in range(5):
         ts = base + timedelta(hours=i)
         sid = await _insert_snapshot(db_session, snapshotted_at=ts)
-        obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id, observed_at=ts)
-        await _insert_valuation_line(db_session, snapshot_id=sid, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_id)
+        obs_id = await _insert_balance_observation(
+            db_session, wallet_id=wallet_id, asset_id=asset_id, observed_at=ts
+        )
+        await _insert_valuation_line(
+            db_session,
+            snapshot_id=sid,
+            wallet_id=wallet_id,
+            asset_id=asset_id,
+            observation_id=obs_id,
+        )
         await materialize_history_point(db_session, snapshot_id=sid)
         snapshot_ids.append(sid)
 
@@ -666,7 +715,9 @@ async def test_get_snapshot_detail_returns_observation_ids(
 ) -> None:
     """GET /history/{snapshot_id} returns lines with observation_id provenance."""
     wallet_id = await _insert_wallet(db_session, "0x0000300000000000000000000000000000000024")
-    asset_id = await _insert_asset(db_session, token_address="0x0000400000000000000000000000000000000025")
+    asset_id = await _insert_asset(
+        db_session, token_address="0x0000400000000000000000000000000000000025"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)

@@ -136,7 +136,9 @@ async def _seed_wallet(
     async with db_session_factory() as session:
         async with session.begin():
             await session.execute(
-                text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+                text(
+                    "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
+                ),
                 {"id": wallet_id, "addr": address.lower()},
             )
     return wallet_id
@@ -157,7 +159,13 @@ async def _seed_asset(
                     "INSERT INTO asset (id, token_address, symbol, name, decimals, source)"
                     " VALUES (:id, :addr, :sym, :sym, :dec, :src)"
                 ),
-                {"id": asset_id, "addr": token_address.lower(), "sym": symbol, "dec": decimals, "src": source},
+                {
+                    "id": asset_id,
+                    "addr": token_address.lower(),
+                    "sym": symbol,
+                    "dec": decimals,
+                    "src": source,
+                },
             )
     return asset_id
 
@@ -325,7 +333,9 @@ async def test_portfolio_gaps_quality_yields_total_from_priced_holdings(
     await _setup_and_get_csrf(http_client)
     wallet_id = await _seed_wallet(db_session_factory)
     priced_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40)
-    dust_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="DUST")
+    dust_asset_id = await _seed_asset(
+        db_session_factory, token_address="0x" + "b" * 40, symbol="DUST"
+    )
     await _seed_snapshot(
         db_session_factory,
         quality="gaps",
@@ -399,8 +409,12 @@ async def test_portfolio_exposes_block_time_and_stale_contribution(
     """
     await _setup_and_get_csrf(http_client)
     wallet_id = await _seed_wallet(db_session_factory)
-    fresh_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40, symbol="FRESH")
-    stale_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="STALE")
+    fresh_asset_id = await _seed_asset(
+        db_session_factory, token_address="0x" + "a" * 40, symbol="FRESH"
+    )
+    stale_asset_id = await _seed_asset(
+        db_session_factory, token_address="0x" + "b" * 40, symbol="STALE"
+    )
 
     older_block_time = "2026-01-01T00:00:00+00:00"
     newer_block_time = "2026-01-02T00:00:00+00:00"
@@ -576,8 +590,12 @@ async def test_portfolio_allocations_include_unpriced_asset(
     """
     await _setup_and_get_csrf(http_client)
     wallet_id = await _seed_wallet(db_session_factory)
-    priced_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40, symbol="ETH")
-    dust_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="DUST")
+    priced_asset_id = await _seed_asset(
+        db_session_factory, token_address="0x" + "a" * 40, symbol="ETH"
+    )
+    dust_asset_id = await _seed_asset(
+        db_session_factory, token_address="0x" + "b" * 40, symbol="DUST"
+    )
 
     await _seed_snapshot(
         db_session_factory,

@@ -88,10 +88,7 @@ async def _fetch_schedule(session: AsyncSession, kind: str) -> tuple:
     """Return (enabled, paused_at, revision) for the named schedule."""
     row = (
         await session.execute(
-            text(
-                "SELECT enabled, paused_at, revision"
-                " FROM schedule WHERE kind = :kind"
-            ),
+            text("SELECT enabled, paused_at, revision FROM schedule WHERE kind = :kind"),
             {"kind": kind},
         )
     ).first()
@@ -198,7 +195,7 @@ async def test_schedule_usage_projection_respects_budget(
     await _insert_schedule(
         db_session,
         kind="discovery",
-        freshness_s=3600,   # 24 runs/day; calls_per_run defaults to >=1
+        freshness_s=3600,  # 24 runs/day; calls_per_run defaults to >=1
         budget_calls_per_day=1,  # far below any realistic projection
     )
 

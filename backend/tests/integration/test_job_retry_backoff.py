@@ -40,9 +40,7 @@ async def _insert_failed_run(session: AsyncSession, *, kind: JobKind, age: str) 
     await session.flush()
 
 
-async def _backdate_failed_runs(
-    session: AsyncSession, *, kind: JobKind, interval: str
-) -> None:
+async def _backdate_failed_runs(session: AsyncSession, *, kind: JobKind, interval: str) -> None:
     await session.execute(
         sa.text(
             f"""
@@ -67,10 +65,7 @@ async def test_three_consecutive_failures_self_heal_after_backoff(
         await _insert_failed_run(db_session, kind=JobKind.BALANCE_SCAN, age="0 seconds")
 
     # Immediately after the 3rd failure: still inside the backoff window.
-    assert (
-        await claim_job(db_session, kind=JobKind.BALANCE_SCAN, max_retries=max_retries)
-        is None
-    )
+    assert await claim_job(db_session, kind=JobKind.BALANCE_SCAN, max_retries=max_retries) is None
 
     # Once the backoff window has clearly elapsed, the kind claims again on
     # its own — this is the behaviour that was missing before AUD-356.
@@ -93,18 +88,13 @@ async def test_backoff_grows_then_caps_instead_of_blocking_forever(
     for _ in range(max_retries + 5):  # well beyond the old hard cutoff
         await _insert_failed_run(db_session, kind=JobKind.DISCOVERY, age="0 seconds")
 
-    assert (
-        await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries) is None
-    )
+    assert await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries) is None
 
     # The backoff cap (with max_retries=3) tops out well under an hour —
     # comfortably past it regardless of how long the streak grew.
     await _backdate_failed_runs(db_session, kind=JobKind.DISCOVERY, interval="1 hour")
 
-    assert (
-        await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries)
-        is not None
-    )
+    assert await claim_job(db_session, kind=JobKind.DISCOVERY, max_retries=max_retries) is not None
 
 
 async def test_old_failure_streak_does_not_gate_dispatch_today(
@@ -117,6 +107,5 @@ async def test_old_failure_streak_does_not_gate_dispatch_today(
         await _insert_failed_run(db_session, kind=JobKind.EVENT_INDEXER, age="48 hours")
 
     assert (
-        await claim_job(db_session, kind=JobKind.EVENT_INDEXER, max_retries=max_retries)
-        is not None
+        await claim_job(db_session, kind=JobKind.EVENT_INDEXER, max_retries=max_retries) is not None
     )

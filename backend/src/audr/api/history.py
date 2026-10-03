@@ -126,9 +126,7 @@ async def get_history(
         HistoryEntryResponse(
             snapshot_id=str(e.snapshot_id) if not e.is_gap_marker else None,
             snapshotted_at=e.snapshotted_at.isoformat(),
-            total_value_usd=(
-                _fmt(e.total_value_usd) if e.total_value_usd is not None else None
-            ),
+            total_value_usd=(_fmt(e.total_value_usd) if e.total_value_usd is not None else None),
             quality=e.quality,
             included_wallet_count=e.included_wallet_count,
             included_asset_count=e.included_asset_count,
@@ -162,9 +160,7 @@ async def get_history_snapshot(
     Each line includes observation_id for exact balance provenance.  Lines are
     ordered by value_usd descending (unknown values last).
     """
-    detail: SnapshotDetail | None = await get_snapshot_detail(
-        db, snapshot_id=snapshot_id
-    )
+    detail: SnapshotDetail | None = await get_snapshot_detail(db, snapshot_id=snapshot_id)
     if detail is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,

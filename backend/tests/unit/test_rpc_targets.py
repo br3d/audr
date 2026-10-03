@@ -63,10 +63,7 @@ class TestDirectIpLiterals:
         assert validate_rpc_url("http://8.8.8.8/") == "http://8.8.8.8"
 
     def test_allow_private_hosts_bypasses_check(self) -> None:
-        assert (
-            validate_rpc_url("http://127.0.0.1/", allow_private_hosts=True)
-            == "http://127.0.0.1"
-        )
+        assert validate_rpc_url("http://127.0.0.1/", allow_private_hosts=True) == "http://127.0.0.1"
 
 
 class TestObfuscatedIpLiterals:
@@ -114,14 +111,9 @@ class TestDnsNames:
             return [(socket.AF_INET, None, None, "", ("93.184.216.34", 0))]
 
         monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
-        assert (
-            validate_rpc_url("https://mainnet.example.com/")
-            == "https://mainnet.example.com"
-        )
+        assert validate_rpc_url("https://mainnet.example.com/") == "https://mainnet.example.com"
 
-    def test_unresolvable_dns_name_fails_open(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unresolvable_dns_name_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A transient DNS/network outage must not permanently block a
         legitimate public hostname — numeric IP obfuscation is still always
         caught since it never depends on network (see TestObfuscatedIpLiterals)."""
@@ -130,18 +122,13 @@ class TestDnsNames:
             raise socket.gaierror("Temporary failure in name resolution")
 
         monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
-        assert (
-            validate_rpc_url("https://mainnet.example.com/")
-            == "https://mainnet.example.com"
-        )
+        assert validate_rpc_url("https://mainnet.example.com/") == "https://mainnet.example.com"
 
 
 class TestAsyncWrapper:
     @pytest.mark.unit
     async def test_validate_rpc_url_async_matches_sync(self) -> None:
-        assert (
-            await validate_rpc_url_async("http://8.8.8.8/")
-        ) == "http://8.8.8.8"
+        assert (await validate_rpc_url_async("http://8.8.8.8/")) == "http://8.8.8.8"
 
     @pytest.mark.unit
     async def test_validate_rpc_url_async_raises_for_private_host(self) -> None:

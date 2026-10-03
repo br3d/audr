@@ -10,6 +10,7 @@ Covers:
   - Metadata conflict: catalog vs on-chain metadata — catalog wins for display.
   - Per-item failure: one wallet failing balance scan does not block others.
 """
+
 import pytest
 from audr.portfolio.balances import (
     get_holdings,

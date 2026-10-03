@@ -144,8 +144,13 @@ async def test_get_block_time_missing_timestamp_raises(rpc_mock: respx.MockRoute
 async def test_reader_has_no_signing_methods(reader: RpcReader) -> None:
     """The RPC reader must not expose any signing or key-management methods."""
     signing_attrs = [
-        "sign", "sign_transaction", "send_raw_transaction", "eth_sign",
-        "personal_sign", "sign_typed_data", "private_key",
+        "sign",
+        "sign_transaction",
+        "send_raw_transaction",
+        "eth_sign",
+        "personal_sign",
+        "sign_typed_data",
+        "private_key",
     ]
     for attr in signing_attrs:
         assert not hasattr(reader, attr), f"RpcReader must not expose {attr!r}"

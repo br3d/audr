@@ -105,9 +105,7 @@ async def claim_job(
 
     # Check if an active lease exists (the partial unique index makes this atomic).
     active = await session.execute(
-        sa.text(
-            "SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"
-        ),
+        sa.text("SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"),
         {"kind": kind.value},
     )
     if active.first() is not None:
@@ -170,9 +168,7 @@ async def claim_job(
             if elapsed < freshness_s:
                 return None
     else:
-        default_freshness_s = _DEFAULT_FRESHNESS_S.get(
-            kind.value, _DEFAULT_FRESHNESS_FALLBACK_S
-        )
+        default_freshness_s = _DEFAULT_FRESHNESS_S.get(kind.value, _DEFAULT_FRESHNESS_FALLBACK_S)
         last_run = await session.execute(
             sa.text(
                 """
@@ -262,9 +258,7 @@ async def claim_pending_job(
     await _expire_stale_leases(session, kind=kind)
 
     active = await session.execute(
-        sa.text(
-            "SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"
-        ),
+        sa.text("SELECT id FROM job_run WHERE kind = :kind AND status = 'in_progress' LIMIT 1"),
         {"kind": kind.value},
     )
     if active.first() is not None:
@@ -361,9 +355,8 @@ async def get_worker_heartbeat(session: AsyncSession) -> tuple[str, datetime | N
         return "unknown", None
 
     status, heartbeat = row
-    stale = (
-        heartbeat is None
-        or datetime.now(tz=UTC) - heartbeat > timedelta(minutes=_WORKER_STALE_MINUTES)
+    stale = heartbeat is None or datetime.now(tz=UTC) - heartbeat > timedelta(
+        minutes=_WORKER_STALE_MINUTES
     )
     if stale:
         return "stopped", heartbeat
@@ -430,9 +423,7 @@ async def release_lease(session: AsyncSession, *, run_id: uuid.UUID) -> None:
     await session.flush()
 
 
-async def get_job_run(
-    session: AsyncSession, *, run_id: uuid.UUID
-) -> JobRun | None:
+async def get_job_run(session: AsyncSession, *, run_id: uuid.UUID) -> JobRun | None:
     """Fetch a job run by ID or return None."""
     result = await session.execute(
         sa.text(
@@ -464,9 +455,7 @@ async def get_job_run(
     )
 
 
-async def get_job_params(
-    session: AsyncSession, *, run_id: uuid.UUID
-) -> dict[str, Any] | None:
+async def get_job_params(session: AsyncSession, *, run_id: uuid.UUID) -> dict[str, Any] | None:
     """Return the ``params`` blob stored on *run_id*, or None if unset."""
     result = await session.execute(
         sa.text("SELECT params FROM job_run WHERE id = :id"),

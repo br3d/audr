@@ -60,9 +60,7 @@ class TestRateLimiter:
 
 @pytest.mark.unit
 class TestSharedRpcRateLimiter:
-    def test_returns_same_instance(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_same_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
         monkeypatch.setenv("SECRET_KEY", "super-secret-key")
         get_shared_rpc_rate_limiter.cache_clear()

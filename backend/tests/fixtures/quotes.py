@@ -48,9 +48,7 @@ class CoinGeckoStub:
         )
 
     def set_http_error(self, status_code: int) -> None:
-        self._router.get(f"{self._base}/simple/price").mock(
-            return_value=Response(status_code)
-        )
+        self._router.get(f"{self._base}/simple/price").mock(return_value=Response(status_code))
 
     def set_rate_limited(self) -> None:
         self.set_http_error(429)

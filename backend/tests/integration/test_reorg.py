@@ -99,9 +99,7 @@ async def _insert_balance_observation(
     return obs_id
 
 
-async def _insert_snapshot(
-    session: AsyncSession, *, quality: str = "complete"
-) -> uuid.UUID:
+async def _insert_snapshot(session: AsyncSession, *, quality: str = "complete") -> uuid.UUID:
     sid = uuid.uuid4()
     now = datetime.now(tz=UTC)
     await session.execute(
@@ -157,7 +155,9 @@ async def test_invalidate_observation_inserts_record(
     db_session: AsyncSession,
 ) -> None:
     wallet_id = await _insert_wallet(db_session, "0xa001000000000000000000000000000000000001")
-    asset_id = await _insert_asset(db_session, token_address="0xa002000000000000000000000000000000000002")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa002000000000000000000000000000000000002"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     result = await invalidate_observation(
@@ -181,7 +181,9 @@ async def test_invalidate_observation_inserts_record(
 async def test_invalidate_observation_idempotent(db_session: AsyncSession) -> None:
     """A second invalidation call for the same observation returns False (already done)."""
     wallet_id = await _insert_wallet(db_session, "0xa003000000000000000000000000000000000003")
-    asset_id = await _insert_asset(db_session, token_address="0xa004000000000000000000000000000000000004")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa004000000000000000000000000000000000004"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     first = await invalidate_observation(db_session, observation_id=obs_id, reason="reorg")
@@ -206,7 +208,9 @@ async def test_invalidation_reason_verification_pending(
     db_session: AsyncSession,
 ) -> None:
     wallet_id = await _insert_wallet(db_session, "0xa005000000000000000000000000000000000005")
-    asset_id = await _insert_asset(db_session, token_address="0xa006000000000000000000000000000000000006")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa006000000000000000000000000000000000006"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     result = await invalidate_observation(
@@ -227,13 +231,13 @@ async def test_invalidation_reason_verification_pending(
 
 async def test_invalidation_rejects_unknown_reason(db_session: AsyncSession) -> None:
     wallet_id = await _insert_wallet(db_session, "0xa007000000000000000000000000000000000007")
-    asset_id = await _insert_asset(db_session, token_address="0xa008000000000000000000000000000000000008")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xa008000000000000000000000000000000000008"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     with pytest.raises(ValueError, match="invalid invalidation reason"):
-        await invalidate_observation(
-            db_session, observation_id=obs_id, reason="bad_reason"
-        )
+        await invalidate_observation(db_session, observation_id=obs_id, reason="bad_reason")
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +249,9 @@ async def test_history_point_marked_non_canonical_when_observation_invalidated(
     db_session: AsyncSession,
 ) -> None:
     wallet_id = await _insert_wallet(db_session, "0xb001000000000000000000000000000000000009")
-    asset_id = await _insert_asset(db_session, token_address="0xb002000000000000000000000000000000000010")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xb002000000000000000000000000000000000010"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)
@@ -276,8 +282,12 @@ async def test_history_point_stays_canonical_when_unrelated_observation_invalida
     db_session: AsyncSession,
 ) -> None:
     wallet_id = await _insert_wallet(db_session, "0xb003000000000000000000000000000000000011")
-    asset_a = await _insert_asset(db_session, token_address="0xb004000000000000000000000000000000000012", symbol="AAA")
-    asset_b = await _insert_asset(db_session, token_address="0xb005000000000000000000000000000000000013", symbol="BBB")
+    asset_a = await _insert_asset(
+        db_session, token_address="0xb004000000000000000000000000000000000012", symbol="AAA"
+    )
+    asset_b = await _insert_asset(
+        db_session, token_address="0xb005000000000000000000000000000000000013", symbol="BBB"
+    )
     obs_a = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_a)
     obs_b = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_b)
 
@@ -313,7 +323,9 @@ async def test_recheck_canonicality_catches_late_invalidations(
 ) -> None:
     """recheck_canonicality() detects observations that were invalidated after publish."""
     wallet_id = await _insert_wallet(db_session, "0xc001000000000000000000000000000000000014")
-    asset_id = await _insert_asset(db_session, token_address="0xc002000000000000000000000000000000000015")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xc002000000000000000000000000000000000015"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)
@@ -355,7 +367,9 @@ async def test_recheck_canonicality_no_false_positives(
 ) -> None:
     """recheck_canonicality() does not flip canonical points with no invalidations."""
     wallet_id = await _insert_wallet(db_session, "0xc003000000000000000000000000000000000016")
-    asset_id = await _insert_asset(db_session, token_address="0xc004000000000000000000000000000000000017")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xc004000000000000000000000000000000000017"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)
@@ -417,7 +431,9 @@ async def test_schedule_replacement_scans_deduplicates_pairs(
 ) -> None:
     """Same (wallet, asset) pair from multiple invalidated observations is deduped."""
     wallet_id = await _insert_wallet(db_session, "0xd003000000000000000000000000000000000020")
-    asset_id = await _insert_asset(db_session, token_address="0xd004000000000000000000000000000000000021")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xd004000000000000000000000000000000000021"
+    )
     obs_1 = await _insert_balance_observation(
         db_session, wallet_id=wallet_id, asset_id=asset_id, block_number=100
     )
@@ -450,7 +466,9 @@ async def test_schedule_replacement_scans_empty_when_all_canonical(
     db_session: AsyncSession,
 ) -> None:
     wallet_id = await _insert_wallet(db_session, "0xd005000000000000000000000000000000000022")
-    asset_id = await _insert_asset(db_session, token_address="0xd006000000000000000000000000000000000023")
+    asset_id = await _insert_asset(
+        db_session, token_address="0xd006000000000000000000000000000000000023"
+    )
     obs_id = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     sid = await _insert_snapshot(db_session)

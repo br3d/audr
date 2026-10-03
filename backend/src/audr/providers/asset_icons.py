@@ -119,9 +119,7 @@ async def fetch_coingecko_icon(
     return IconImage(content_type=content_type, data=image_data, source="coingecko")
 
 
-async def _download_image(
-    client: httpx.AsyncClient, url: str
-) -> tuple[bytes, str] | None:
+async def _download_image(client: httpx.AsyncClient, url: str) -> tuple[bytes, str] | None:
     """Stream *url*, enforcing the timeout/size/content-type allowlist.
 
     Returns None for a 404 (no icon there); raises IconFetchError for any

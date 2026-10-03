@@ -141,9 +141,7 @@ async def get_holdings(
 
 async def _ensure_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     """Return the wallet ID for *address*, inserting a row if absent."""
-    result = await session.execute(
-        sa.select(Wallet.id).where(Wallet.address == address)
-    )
+    result = await session.execute(sa.select(Wallet.id).where(Wallet.address == address))
     row = result.first()
     if row is not None:
         return uuid.UUID(str(row[0]))
@@ -163,9 +161,7 @@ async def _ensure_asset(session: AsyncSession, token_address: str) -> uuid.UUID:
     native = is_native_eth(token_address)
     canonical = normalise_token_address(token_address) if native else token_address
 
-    result = await session.execute(
-        sa.select(Asset.id).where(Asset.token_address == canonical)
-    )
+    result = await session.execute(sa.select(Asset.id).where(Asset.token_address == canonical))
     row = result.first()
     if row is not None:
         return uuid.UUID(str(row[0]))

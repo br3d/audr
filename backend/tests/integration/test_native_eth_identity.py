@@ -66,10 +66,7 @@ async def test_recording_native_balance_creates_eth_not_unknown(
 
     row = (
         await db_session.execute(
-            sa.text(
-                "SELECT symbol, name, decimals, source FROM asset"
-                " WHERE token_address = :a"
-            ),
+            sa.text("SELECT symbol, name, decimals, source FROM asset WHERE token_address = :a"),
             {"a": NATIVE_ETH_ADDRESS},
         )
     ).first()
@@ -105,9 +102,7 @@ async def test_legacy_native_address_resolves_to_canonical_asset(
 
     count = (
         await db_session.execute(
-            sa.text(
-                "SELECT count(*) FROM asset WHERE token_address IN (:canonical, :legacy)"
-            ),
+            sa.text("SELECT count(*) FROM asset WHERE token_address IN (:canonical, :legacy)"),
             {"canonical": NATIVE_ETH_ADDRESS, "legacy": LEGACY_NATIVE_ETH_ADDRESS},
         )
     ).scalar()

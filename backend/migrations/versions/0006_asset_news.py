@@ -43,12 +43,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name="pk_asset_news"),
-        sa.ForeignKeyConstraint(
-            ["asset_id"], ["asset.id"], name="fk_asset_news_asset"
-        ),
-        sa.UniqueConstraint(
-            "asset_id", "source", "external_id", name="uq_asset_news_dedup"
-        ),
+        sa.ForeignKeyConstraint(["asset_id"], ["asset.id"], name="fk_asset_news_asset"),
+        sa.UniqueConstraint("asset_id", "source", "external_id", name="uq_asset_news_dedup"),
     )
 
     op.create_index(

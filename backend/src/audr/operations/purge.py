@@ -70,9 +70,7 @@ async def preview_purge(session: AsyncSession, *, kind: str) -> dict:  # type: i
     }
 
 
-async def execute_purge(
-    session: AsyncSession, *, kind: str, password: str
-) -> dict:  # type: ignore[type-arg]
+async def execute_purge(session: AsyncSession, *, kind: str, password: str) -> dict:  # type: ignore[type-arg]
     """Purge provider-specific monetary data, preserving all on-chain records.
 
     1. Verifies the caller's password against the stored owner hash.
@@ -122,9 +120,7 @@ async def execute_purge(
         )
 
         # Delete coingecko quote_set rows.
-        await session.execute(
-            sa.text("DELETE FROM quote_set WHERE provider = 'coingecko'")
-        )
+        await session.execute(sa.text("DELETE FROM quote_set WHERE provider = 'coingecko'"))
 
         # Delete history_point rows for snapshots that will become empty after
         # we remove the priced valuation_lines (those with no unpriced sibling).
@@ -142,9 +138,7 @@ async def execute_purge(
         )
 
         # Delete valuation_line rows that carry coingecko-derived prices.
-        await session.execute(
-            sa.text("DELETE FROM valuation_line WHERE price_usd IS NOT NULL")
-        )
+        await session.execute(sa.text("DELETE FROM valuation_line WHERE price_usd IS NOT NULL"))
 
         # Delete valuation_snapshot rows that are now childless.
         await session.execute(
@@ -155,9 +149,7 @@ async def execute_purge(
         )
 
         # Delete the coingecko integration row.
-        await session.execute(
-            sa.text("DELETE FROM integration WHERE kind = 'coingecko'")
-        )
+        await session.execute(sa.text("DELETE FROM integration WHERE kind = 'coingecko'"))
 
     elif kind == "rpc":
         # Job fencing: cancel pending/in_progress balance_scan and discovery jobs.
@@ -172,9 +164,7 @@ async def execute_purge(
         )
 
         # Delete the rpc integration row.
-        await session.execute(
-            sa.text("DELETE FROM integration WHERE kind = 'rpc'")
-        )
+        await session.execute(sa.text("DELETE FROM integration WHERE kind = 'rpc'"))
 
     # NEVER delete balance_observation, wallet, or asset rows.
 

@@ -89,8 +89,7 @@ async def test_list_jobs_paginates_with_cursor(
     async with db_session_factory() as session:
         async with session.begin():
             job_ids = [
-                await _insert_job(session, created_at=base + timedelta(seconds=i))
-                for i in range(3)
+                await _insert_job(session, created_at=base + timedelta(seconds=i)) for i in range(3)
             ]
     newest_first = list(reversed(job_ids))
 
@@ -100,9 +99,7 @@ async def test_list_jobs_paginates_with_cursor(
         params = {"limit": 1}
         if cursor is not None:
             params["cursor"] = cursor
-        r = await http_client.get(
-            _JOBS_URL, params=params, headers={"x-csrf-token": csrf}
-        )
+        r = await http_client.get(_JOBS_URL, params=params, headers={"x-csrf-token": csrf})
         assert r.status_code == 200
         body = r.json()
         assert len(body["items"]) == 1
@@ -138,9 +135,7 @@ async def test_list_jobs_cursor_composes_with_kind_filter(
         async with session.begin():
             await _insert_job(session, created_at=base, kind="quote_refresh")
             rpc_ids = [
-                await _insert_job(
-                    session, created_at=base + timedelta(seconds=i + 1), kind="rpc"
-                )
+                await _insert_job(session, created_at=base + timedelta(seconds=i + 1), kind="rpc")
                 for i in range(2)
             ]
 

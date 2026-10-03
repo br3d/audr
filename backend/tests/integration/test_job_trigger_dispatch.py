@@ -100,9 +100,7 @@ async def test_trigger_job_enqueues_pending_not_in_progress(
 
     async with db_session_factory() as session:
         row = (
-            await session.execute(
-                text("SELECT status FROM job_run WHERE id = :id"), {"id": run_id}
-            )
+            await session.execute(text("SELECT status FROM job_run WHERE id = :id"), {"id": run_id})
         ).first()
     assert row is not None, "the returned run_id must reference a real row"
     assert row[0] == "pending", (
@@ -133,8 +131,7 @@ async def test_trigger_job_run_id_is_never_fabricated(
 
     get_r = await c.get(f"{_V1}/jobs/{run_id}")
     assert get_r.status_code == 200, (
-        "run_id returned by POST /jobs must resolve via GET /jobs/{id}, "
-        f"got {get_r.status_code}"
+        f"run_id returned by POST /jobs must resolve via GET /jobs/{{id}}, got {get_r.status_code}"
     )
 
 

@@ -152,9 +152,7 @@ class CoinGeckoProvider:
         prices: dict[str, Decimal] = {}
 
         erc20 = [a for a in token_addresses if not is_native_eth(a)]
-        wants_eth = include_eth or any(
-            is_native_eth(a) for a in token_addresses
-        )
+        wants_eth = include_eth or any(is_native_eth(a) for a in token_addresses)
 
         if erc20:
             token_prices = await self.get_token_prices(erc20)

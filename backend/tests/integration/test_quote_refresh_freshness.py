@@ -35,18 +35,13 @@ _STALE_CMC_ID = 1002
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": address.lower()},
     )
     return wallet_id
 
 
-async def _insert_asset(
-    session: AsyncSession, *, token_address: str, symbol: str
-) -> uuid.UUID:
+async def _insert_asset(session: AsyncSession, *, token_address: str, symbol: str) -> uuid.UUID:
     asset_id = uuid.uuid4()
     await session.execute(
         text(

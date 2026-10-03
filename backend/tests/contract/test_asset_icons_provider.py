@@ -158,9 +158,7 @@ async def test_fetch_coingecko_icon_429_raises_rate_limited() -> None:
         mock.get(contract_url).mock(return_value=Response(429))
         async with AsyncClient() as client:
             with pytest.raises(IconRateLimitedError):
-                await fetch_coingecko_icon(
-                    client, _USDC_LOWER, rate_limiter=_fast_rate_limiter()
-                )
+                await fetch_coingecko_icon(client, _USDC_LOWER, rate_limiter=_fast_rate_limiter())
 
 
 @pytest.mark.contract
@@ -170,6 +168,4 @@ async def test_fetch_coingecko_icon_server_error_raises_fetch_error() -> None:
         mock.get(contract_url).mock(return_value=Response(500))
         async with AsyncClient() as client:
             with pytest.raises(IconFetchError):
-                await fetch_coingecko_icon(
-                    client, _USDC_LOWER, rate_limiter=_fast_rate_limiter()
-                )
+                await fetch_coingecko_icon(client, _USDC_LOWER, rate_limiter=_fast_rate_limiter())

@@ -56,9 +56,7 @@ async def test_get_logs_returns_parsed_entries() -> None:
     logs = [_transfer_log(block_number=200, log_index=1, amount=5_000_000)]
 
     with respx.mock() as mock:
-        mock.post("http://rpc.test/").mock(
-            return_value=Response(200, json=_rpc_ok(logs))
-        )
+        mock.post("http://rpc.test/").mock(return_value=Response(200, json=_rpc_ok(logs)))
         reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
         result = await reader.get_logs(from_block=100, to_block=200)
 
@@ -73,9 +71,7 @@ async def test_get_logs_returns_parsed_entries() -> None:
 async def test_get_logs_empty_list() -> None:
     """get_logs returns an empty list when no logs match."""
     with respx.mock() as mock:
-        mock.post("http://rpc.test/").mock(
-            return_value=Response(200, json=_rpc_ok([]))
-        )
+        mock.post("http://rpc.test/").mock(return_value=Response(200, json=_rpc_ok([])))
         reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
         result = await reader.get_logs(from_block=100, to_block=200)
 
@@ -85,11 +81,13 @@ async def test_get_logs_empty_list() -> None:
 @pytest.mark.contract
 async def test_get_logs_rpc_error_raises() -> None:
     """An RPC error response raises RpcError."""
-    error_body = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32005, "message": "range too large"}}
+    error_body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32005, "message": "range too large"},
+    }
     with respx.mock() as mock:
-        mock.post("http://rpc.test/").mock(
-            return_value=Response(200, json=error_body)
-        )
+        mock.post("http://rpc.test/").mock(return_value=Response(200, json=error_body))
         reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
         with pytest.raises(RpcError):
             await reader.get_logs(from_block=0, to_block=999_999)
@@ -99,9 +97,7 @@ async def test_get_logs_rpc_error_raises() -> None:
 async def test_get_logs_non_list_result_raises() -> None:
     """A non-list result raises MalformedResponseError."""
     with respx.mock() as mock:
-        mock.post("http://rpc.test/").mock(
-            return_value=Response(200, json=_rpc_ok("unexpected"))
-        )
+        mock.post("http://rpc.test/").mock(return_value=Response(200, json=_rpc_ok("unexpected")))
         reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
         with pytest.raises(MalformedResponseError):
             await reader.get_logs(from_block=0, to_block=100)
@@ -127,6 +123,7 @@ async def test_get_logs_address_filter_sent_in_params() -> None:
 
     assert captured
     import json
+
     body = json.loads(captured[0])
     assert body["method"] == "eth_getLogs"
     params = body["params"][0]

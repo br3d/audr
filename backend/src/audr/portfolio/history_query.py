@@ -224,9 +224,7 @@ async def get_snapshot_detail(
 ) -> SnapshotDetail | None:
     """Return detailed snapshot lines with observation provenance."""
     snap_result = await session.execute(
-        sa.text(
-            "SELECT snapshotted_at, quality FROM valuation_snapshot WHERE id = :sid"
-        ),
+        sa.text("SELECT snapshotted_at, quality FROM valuation_snapshot WHERE id = :sid"),
         {"sid": str(snapshot_id)},
     )
     snap_row = snap_result.first()
@@ -352,9 +350,7 @@ def _compute_gap_threshold(entries: list[HistoryEntry]) -> float:
         return float(_MIN_GAP_SECONDS)
 
     deltas = sorted(
-        abs(
-            (entries[i].snapshotted_at - entries[i + 1].snapshotted_at).total_seconds()
-        )
+        abs((entries[i].snapshotted_at - entries[i + 1].snapshotted_at).total_seconds())
         for i in range(len(entries) - 1)
     )
     if len(deltas) == 1:
@@ -373,11 +369,7 @@ def _inject_gaps(
 
     result: list[HistoryEntry] = [entries[0]]
     for i in range(1, len(entries)):
-        delta = abs(
-            (
-                entries[i - 1].snapshotted_at - entries[i].snapshotted_at
-            ).total_seconds()
-        )
+        delta = abs((entries[i - 1].snapshotted_at - entries[i].snapshotted_at).total_seconds())
         if delta > gap_threshold:
             # Synthetic gap marker between entries[i-1] and entries[i].
             midpoint = entries[i - 1].snapshotted_at - timedelta(seconds=delta / 2)

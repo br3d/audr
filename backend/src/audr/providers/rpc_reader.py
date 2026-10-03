@@ -186,9 +186,7 @@ class RpcReader:
 
         raw = await self._call_raw("eth_getLogs", [filter_params])
         if not isinstance(raw, list):
-            raise MalformedResponseError(
-                f"eth_getLogs expected list, got {type(raw).__name__}"
-            )
+            raise MalformedResponseError(f"eth_getLogs expected list, got {type(raw).__name__}")
         return [_parse_log_entry(item) for item in raw]
 
     async def _call_raw(self, method: str, params: list) -> Any:  # type: ignore[type-arg]

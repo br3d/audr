@@ -60,9 +60,7 @@ async def get_master_key(session: AsyncSession) -> bytes:
     kek = _load_kek()
     blob = await _load_raw(session)
     if blob is None:
-        raise MissingKeyError(
-            "master key has not been initialised; call init_key() first"
-        )
+        raise MissingKeyError("master key has not been initialised; call init_key() first")
     return decrypt(blob, b"key_state:master_key", kek)
 
 
@@ -89,9 +87,7 @@ def _load_kek() -> bytes:
     except ValueError as exc:
         raise MissingKeyError("SECRET_KEY is not valid hexadecimal") from exc
     if len(kek) != 32:
-        raise MissingKeyError(
-            f"SECRET_KEY must be 32 bytes (64 hex chars), got {len(kek)}"
-        )
+        raise MissingKeyError(f"SECRET_KEY must be 32 bytes (64 hex chars), got {len(kek)}")
     return kek
 
 

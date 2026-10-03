@@ -45,12 +45,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name="pk_onchain_event"),
-        sa.ForeignKeyConstraint(
-            ["wallet_id"], ["wallet.id"], name="fk_onchain_event_wallet"
-        ),
-        sa.UniqueConstraint(
-            "tx_hash", "log_index", name="uq_onchain_event_dedup"
-        ),
+        sa.ForeignKeyConstraint(["wallet_id"], ["wallet.id"], name="fk_onchain_event_wallet"),
+        sa.UniqueConstraint("tx_hash", "log_index", name="uq_onchain_event_dedup"),
         sa.CheckConstraint(
             "event_type IN ('transfer_in', 'transfer_out')",
             name="ck_onchain_event_type",

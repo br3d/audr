@@ -58,8 +58,7 @@ async def test_publish_snapshot_handles_balance_above_bigint_max(
 
     await db_session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
         ),
         {"id": str(wallet_id), "addr": "0x" + "9" * 40},
     )

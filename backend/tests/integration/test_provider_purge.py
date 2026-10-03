@@ -54,10 +54,7 @@ async def _insert_wallet(
     """Insert a wallet row and return its UUID."""
     wallet_id = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": address.lower()},
     )
     return wallet_id
@@ -392,9 +389,7 @@ async def test_purge_preview_coingecko_shows_correct_quote_count(
     for i in range(3):
         # Each asset gets a distinct token address; each gets its own quote_set row.
         token_address = f"0x{'%040x' % (i + 1)}"
-        asset_id = await _insert_asset(
-            db_session, token_address=token_address, symbol=f"TKN{i}"
-        )
+        asset_id = await _insert_asset(db_session, token_address=token_address, symbol=f"TKN{i}")
         await _insert_coingecko_quote(db_session, asset_id=asset_id)
     await db_session.flush()
 
@@ -673,15 +668,9 @@ async def test_quote_refresh_fenced_on_cancelled_run(
                     text("DELETE FROM balance_observation WHERE wallet_id = :w"),
                     {"w": str(wallet_id)},
                 )
-                await s.execute(
-                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
-                )
-                await s.execute(
-                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
-                )
-                await s.execute(
-                    text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
-                )
+                await s.execute(text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)})
+                await s.execute(text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)})
+                await s.execute(text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)})
 
 
 @pytest.mark.integration
@@ -704,9 +693,7 @@ async def test_quote_refresh_marks_empty_on_zero_observations(
 
     # Asset with a non-zero balance so _get_held_asset_addresses returns it.
     wallet_id = await _insert_wallet(db_session, "0xface" + "0" * 36)
-    asset_id = await _insert_asset(
-        db_session, token_address="0x" + "e1" * 20, symbol="ZEROPRICE"
-    )
+    asset_id = await _insert_asset(db_session, token_address="0x" + "e1" * 20, symbol="ZEROPRICE")
     await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     # Fencing check needs an in_progress job_run and a coingecko integration.
@@ -732,9 +719,7 @@ async def test_quote_refresh_marks_empty_on_zero_observations(
     ):
         with respx.mock(assert_all_called=False) as mock_router:
             # CoinGecko returns no prices for any of the held tokens.
-            mock_router.get(url__regex=r"coingecko").mock(
-                return_value=httpx.Response(200, json={})
-            )
+            mock_router.get(url__regex=r"coingecko").mock(return_value=httpx.Response(200, json={}))
             await handle_quote_refresh(db_session, run_id)
 
     row = (
@@ -782,9 +767,7 @@ async def test_quote_refresh_provider_error_raises_and_marks_quote_set_failed(
     async with db_session_factory() as s:
         async with s.begin():
             wallet_id = await _insert_wallet(s, unique_addr)
-            asset_id = await _insert_asset(
-                s, token_address="0x" + "d1" * 20, symbol="FAILPRICE"
-            )
+            asset_id = await _insert_asset(s, token_address="0x" + "d1" * 20, symbol="FAILPRICE")
             await _insert_balance(s, wallet_id=wallet_id, asset_id=asset_id)
             await s.execute(
                 text(
@@ -818,17 +801,13 @@ async def test_quote_refresh_provider_error_raises_and_marks_quote_set_failed(
         async with db_session_factory() as session:
             row = (
                 await session.execute(
-                    text(
-                        "SELECT id, status FROM quote_set"
-                        " ORDER BY fetched_at DESC LIMIT 1"
-                    )
+                    text("SELECT id, status FROM quote_set ORDER BY fetched_at DESC LIMIT 1")
                 )
             ).first()
             assert row is not None
             quote_set_id = row[0]
             assert row[1] == "failed", (
-                "a provider error must leave the quote_set 'failed', "
-                f"not '{row[1]}'"
+                f"a provider error must leave the quote_set 'failed', not '{row[1]}'"
             )
     finally:
         async with db_session_factory() as s:
@@ -837,15 +816,9 @@ async def test_quote_refresh_provider_error_raises_and_marks_quote_set_failed(
                     text("DELETE FROM balance_observation WHERE wallet_id = :w"),
                     {"w": str(wallet_id)},
                 )
-                await s.execute(
-                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
-                )
-                await s.execute(
-                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
-                )
-                await s.execute(
-                    text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
-                )
+                await s.execute(text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)})
+                await s.execute(text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)})
+                await s.execute(text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)})
                 if quote_set_id is not None:
                     await s.execute(
                         text("DELETE FROM quote_set WHERE id = :id"),
@@ -872,9 +845,7 @@ async def test_quote_refresh_provider_error_worker_records_failed_run(
     async with db_session_factory() as s:
         async with s.begin():
             wallet_id = await _insert_wallet(s, unique_addr)
-            asset_id = await _insert_asset(
-                s, token_address="0x" + "e2" * 20, symbol="WORKERFAIL"
-            )
+            asset_id = await _insert_asset(s, token_address="0x" + "e2" * 20, symbol="WORKERFAIL")
             await _insert_balance(s, wallet_id=wallet_id, asset_id=asset_id)
             await s.execute(
                 text(
@@ -923,9 +894,7 @@ async def test_quote_refresh_provider_error_worker_records_failed_run(
 
             qs_row = (
                 await session.execute(
-                    text(
-                        "SELECT id FROM quote_set ORDER BY fetched_at DESC LIMIT 1"
-                    )
+                    text("SELECT id FROM quote_set ORDER BY fetched_at DESC LIMIT 1")
                 )
             ).first()
             quote_set_id = qs_row[0] if qs_row else None
@@ -936,16 +905,10 @@ async def test_quote_refresh_provider_error_worker_records_failed_run(
                     text("DELETE FROM balance_observation WHERE wallet_id = :w"),
                     {"w": str(wallet_id)},
                 )
-                await s.execute(
-                    text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)}
-                )
-                await s.execute(
-                    text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)}
-                )
+                await s.execute(text("DELETE FROM wallet WHERE id = :w"), {"w": str(wallet_id)})
+                await s.execute(text("DELETE FROM asset WHERE id = :a"), {"a": str(asset_id)})
                 if run_id is not None:
-                    await s.execute(
-                        text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)}
-                    )
+                    await s.execute(text("DELETE FROM job_run WHERE id = :id"), {"id": str(run_id)})
                 if quote_set_id is not None:
                     await s.execute(
                         text("DELETE FROM quote_set WHERE id = :id"),
