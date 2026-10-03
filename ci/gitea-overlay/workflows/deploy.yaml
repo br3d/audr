@@ -43,12 +43,14 @@ name: Build & Deploy (guarded)
 #      against the PREVIOUS containers and reported success while the running
 #      code never changed. Step 5b now asserts each container actually runs the
 #      new tag.
-#   4. Health-gate — waits for THREE signals: the api container healthcheck
+#   4. Health-gate — waits for FOUR signals: the api container healthcheck
 #      (/health/live inside the container), a public GET /health/ready on :80
 #      returning `"status":"ok"` (real DB + master-key check — a bare /health or
 #      / could be answered by the SPA fallback even with a dead API, see
-#      AUD-328), and :80 serving the SPA. Since AUD-388 all three are the same
-#      container: `api` publishes :80 and serves the SPA itself.
+#      AUD-328), :80 serving the SPA, and GET /api/v1/version reporting the
+#      commit this job built (AUD-407 — the one signal a moved registry tag
+#      cannot fake). Since AUD-388 all four come from the same container:
+#      `api` publishes :80 and serves the SPA itself.
 #   5. Auto-rollback — any failure after the snapshot restores the previous
 #      images and brings the stack back up.
 #   6. Harbor :latest is only advanced AFTER the health-gate passes, so a failed
@@ -102,24 +104,54 @@ jobs:
           fi
           echo "registry = $REGISTRY"
 
+      # AUD-407: every image tag now carries the semantic version from the
+      # repo-root VERSION file, so a tag in the registry says what it is without
+      # anyone having to resolve a sha against the git history.
+      #
+      #   push to main        -> <version>-g<sha>   (unique per commit)
+      #   release tag v1.4.2  -> 1.4.2
+      #   workflow_dispatch   -> whatever was typed, else <version>-g<sha>
+      #
+      # A `v*` ref whose name disagrees with VERSION is a hard failure, not a
+      # warning: a v1.4.2 tag deploying an image that reports 1.4.1 makes every
+      # later "what is on staging?" answer a lie, and the recovery costs more
+      # the longer it survives. scripts/release.sh cannot produce that state.
       - name: Compute tags
         id: meta
         run: |
+          set -euo pipefail
           sha="${GITHUB_SHA:0:12}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          version="$(tr -d ' \t\r\n' < VERSION)"
+          release=0
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+              echo "FATAL: release tag ${GITHUB_REF_NAME} does not match VERSION (${version})."
+              echo "       Cut releases with scripts/release.sh, which keeps the two in step."
+              exit 2
+            fi
+            tag="$version"
+            release=1
           elif [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+            tag="${{ github.event.inputs.image_tag }}"
           else
-            echo "tag=$sha" >> "$GITHUB_OUTPUT"
+            tag="${version}-g${sha}"
           fi
+          {
+            echo "sha=$sha"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version tag=$tag release=$release"
 
       # One image since AUD-388 — see the equivalent note in build.yaml.
       - name: Build image
         run: |
           set -euo pipefail
           docker build --target runtime \
+            --build-arg "AUDR_VERSION=${{ steps.meta.outputs.version }}" \
+            --build-arg "AUDR_GIT_SHA=${GITHUB_SHA}" \
+            --build-arg "AUDR_BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}" .
 
       - name: Push build tag to Harbor
@@ -135,6 +167,14 @@ jobs:
       - name: Guarded deploy
         env:
           TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          RELEASE: ${{ steps.meta.outputs.release }}
+          # Bound explicitly rather than read from $GITHUB_SHA inside the
+          # script: the health-gate compares against it, and an empty value
+          # would turn every deploy into a failed gate and an automatic
+          # rollback — a pipeline-wide outage caused by a missing variable.
+          # The preflight below refuses to start instead.
+          EXPECT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           # Both come from the workflow `env:` block above — REGISTRY from the
@@ -150,7 +190,8 @@ jobs:
           cd "$DEPLOY_DIR"
 
           # ---- 1. secrets preflight (NEVER regenerate) ----------------------
-          log "Preflight in $DEPLOY_DIR (tag=$TAG)"
+          log "Preflight in $DEPLOY_DIR (tag=$TAG version=${VERSION:-?})"
+          [ -n "${EXPECT_COMMIT:-}" ] || { log "FATAL: EXPECT_COMMIT empty — the health-gate could never pass"; exit 2; }
           [ -f .env ] || { log "FATAL: .env missing — refusing (would break DB auth)"; exit 2; }
           [ -f secrets/db_password.txt ] || { log "FATAL: secrets/db_password.txt missing"; exit 2; }
           grep -q '^DB_PASSWORD=' .env  || { log "FATAL: DB_PASSWORD missing in .env"; exit 2; }
@@ -339,20 +380,32 @@ jobs:
           # build at /app/static. An image built without it still starts and
           # still passes /health/ready — it just serves no UI — and / returns
           # 404, so this is the only signal that catches it. Do not drop it.
+          #
+          # Fourth signal since AUD-407: GET /api/v1/version must report the
+          # commit this job just built. Step 5b already asserts the container
+          # runs the expected *image tag*, but a tag is metadata the registry
+          # can be talked into moving; the commit sha is baked into the image at
+          # build time, so this is the one check that compares what is running
+          # against what this job compiled. It is also what makes the semantic
+          # version in the sidebar trustworthy — nothing is "deployed" until the
+          # running build admits to being the right one.
           log "Health-gate"
           ok=0
           for i in $(seq 1 "$HEALTH_RETRIES"); do
             state="$(docker inspect --format '{{.State.Health.Status}}' audr-api-1 2>/dev/null || echo none)"
             ready="$(curl -s -m 5 http://localhost:80/health/ready 2>/dev/null || true)"
             spa_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:80/ 2>/dev/null || echo 000)"
+            ver="$(curl -s -m 5 http://localhost:80/api/v1/version 2>/dev/null || true)"
             case "$ready" in *'"status":"ok"'*) ready_ok=1 ;; *) ready_ok=0 ;; esac
-            if [ "$state" = healthy ] && [ "$ready_ok" = 1 ] && [ "$spa_code" = 200 ]; then
-              ok=1; log "healthy on attempt $i (api=$state ready=ok spa=$spa_code)"; break
+            case "$ver" in *"\"commit\":\"${EXPECT_COMMIT}\""*) ver_ok=1 ;; *) ver_ok=0 ;; esac
+            if [ "$state" = healthy ] && [ "$ready_ok" = 1 ] && [ "$spa_code" = 200 ] && [ "$ver_ok" = 1 ]; then
+              ok=1; log "healthy on attempt $i (api=$state ready=ok spa=$spa_code version=$ver)"; break
             fi
             sleep "$HEALTH_SLEEP"
           done
           if [ "$ok" != 1 ]; then
-            log "health-gate FAILED (api state=$state spa=$spa_code ready=${ready:-<none>})"
+            log "health-gate FAILED (api state=$state spa=$spa_code ready=${ready:-<none>} version=${ver:-<none>})"
+            log "expected commit ${EXPECT_COMMIT}"
             docker compose ps || true
             false
           fi
@@ -361,7 +414,18 @@ jobs:
 
           # ---- 7. advance Harbor :latest ONLY after health passes -----------
           docker push "$BACKEND:latest" || log "warn: push $BACKEND:latest failed"
-          log "Deploy OK — tag=$TAG"
+          # A release ref additionally publishes the bare `:<version>` tag, and
+          # only from here: a version tag that appears before the health-gate
+          # would name an image nobody has proven can serve traffic. On a
+          # non-release push RELEASE is 0 and nothing extra is published, so
+          # `:1.4.2` keeps meaning the 1.4.2 release rather than "latest build
+          # that happened while VERSION said 1.4.2".
+          if [ "${RELEASE:-0}" = 1 ]; then
+            docker tag "$BACKEND:$TAG" "$BACKEND:$VERSION"
+            docker push "$BACKEND:$VERSION" || log "warn: push $BACKEND:$VERSION failed"
+            log "published release tag $BACKEND:$VERSION"
+          fi
+          log "Deploy OK — tag=$TAG version=$VERSION"
 
       # Every deploy mints a new per-sha image on this runner and nothing used
       # to remove them: by 2026-10-03 the host held 299 images + 3.8GB of build

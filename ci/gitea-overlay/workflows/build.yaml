@@ -33,11 +33,21 @@ jobs:
             exit 2
           fi
           echo "registry = $REGISTRY"
+      # AUD-407: same `<version>-g<sha>` scheme as deploy.yaml, so a manual
+      # dispatch and an automatic deploy leave tags of the same shape in the
+      # registry. This workflow never publishes a bare `:<version>` tag — that
+      # one is reserved for a release that has passed deploy.yaml's health-gate.
       - name: Compute tags
         id: meta
         run: |
-          echo "sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
-          echo "version=latest" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          sha="${GITHUB_SHA:0:12}"
+          version="$(tr -d ' \t\r\n' < VERSION)"
+          {
+            echo "sha=$sha"
+            echo "version=$version"
+            echo "tag=${version}-g${sha}"
+          } >> "$GITHUB_OUTPUT"
       # One image since AUD-388: the `runtime` stage contains the Vite build at
       # /app/static and the API serves the SPA itself, so the separate
       # nginx-based `audr-frontend` image is gone. The frontend is still built —
@@ -45,12 +55,15 @@ jobs:
       - name: Build backend image
         run: |
           docker build --target runtime \
-            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}" \
-            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}" .
+            --build-arg "AUDR_VERSION=${{ steps.meta.outputs.version }}" \
+            --build-arg "AUDR_GIT_SHA=${GITHUB_SHA}" \
+            --build-arg "AUDR_BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}" \
+            -t "$REGISTRY/audr-backend:latest" .
       - name: Push images
         run: |
-          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}"
-          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}"
+          docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}"
+          docker push "$REGISTRY/audr-backend:latest"
       # Same host runner, same image accumulation as deploy.yaml (AUD-395).
       - name: Reclaim host disk
         if: always()

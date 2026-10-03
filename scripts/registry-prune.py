@@ -18,7 +18,9 @@ run says so at the end rather than letting the operator assume bytes came back.
 RETENTION RULES (a tag survives if ANY apply)
 ---------------------------------------------
   * it is `latest` or `rollback` — the two aliases the deploy pipeline moves;
-  * it looks like a release tag (`v1.2.3`);
+  * it looks like a release tag — `1.2.3` (what the pipeline publishes since
+    AUD-407) or the older `v1.2.3` spelling. Ordinary per-commit builds are
+    `1.2.3-g<sha>` and are NOT release tags;
   * it is the tag currently pinned in the deploy host's .env (BACKEND_TAG), or
     was passed via --protect;
   * it is one of the --keep newest tags by image creation time, in ANY of the
@@ -100,7 +102,16 @@ DEFAULT_REPOS = ["audr-backend"]
 
 # Aliases the deploy pipeline itself moves; never prunable.
 ALIAS_TAGS = {"latest", "rollback"}
-RELEASE_TAG_RE = re.compile(r"^v\d+(\.\d+)*")
+# Two accepted release spellings: `v1.2.3` (git-tag spelling, and what this
+# registry held before AUD-407) and `1.2.3` (what the deploy pipeline publishes
+# for a release — an image tag conventionally carries no leading `v`).
+#
+# The bare form is deliberately STRICT — exactly three components and nothing
+# after them. AUD-407 also made every ordinary build `<version>-g<sha>`, so a
+# pattern loose enough to accept a suffix would mark every commit ever pushed to
+# main as a release and silently turn retention off. The `v` form stays
+# permissive so historical `v1`, `v1.2` and `v1.2.3-rc1` tags keep protection.
+RELEASE_TAG_RE = re.compile(r"^(?:v\d+(?:\.\d+)*(?:[-+].*)?|\d+\.\d+\.\d+)$")
 
 MANIFEST_ACCEPT = ",".join(
     [

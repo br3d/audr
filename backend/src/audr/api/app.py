@@ -28,8 +28,10 @@ from audr.api.news import router as news_router
 from audr.api.portfolio import router as portfolio_router
 from audr.api.settings import router as settings_router
 from audr.api.spa import mount_spa
+from audr.api.version import router as version_router
 from audr.api.wallets import router as wallets_router
 from audr.config import get_spa_settings
+from audr.version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="audr",
         description="Ethereum portfolio tracker API",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
     )
@@ -87,6 +90,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
     app.include_router(health_router)
+    app.include_router(version_router)
     app.include_router(auth_router)
     app.include_router(wallets_router)
     app.include_router(holdings_router)

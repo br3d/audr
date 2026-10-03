@@ -80,6 +80,7 @@ route and are documented inline.
 |---|---|---|
 | GET | `/health/live` | Liveness. Always 200. Hidden from the schema. |
 | GET | `/health/ready` | Readiness: database, migration head, master key, worker heartbeat, catalog, quotes. 200 with `"status":"ok"`, or 503 with per-subsystem detail. |
+| GET | `/api/v1/version` | `{version, commit, built_at}` for the running build. `version` is the semantic version; `commit` and `built_at` are empty outside CI-built images. Unauthenticated on purpose — the deploy health-gate and `scripts/smoke-test.sh` assert on it before any session exists. See `docs/releases.md`. |
 | GET | `/api/v1/setup/status` | `{setup_required}`. Exposes no operational secrets. |
 | POST | `/api/v1/setup` | Create the singleton owner. Password 12–128 characters. 201 with `csrf_token` and a session cookie; **409** if an owner already exists. |
 | POST | `/api/v1/auth/login` | Verify the password, set the `sid` cookie, return `csrf_token`. 429 with `Retry-After: 900` when throttled. |

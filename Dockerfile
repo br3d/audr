@@ -4,6 +4,13 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# AUD-407: the SPA bakes its version in at build time (frontend/build-meta.ts).
+# AUDR_VERSION is optional — without it the bundle falls back to package.json,
+# which scripts/release.sh keeps on the same number. Declared here, after
+# `npm ci`, so changing the version does not re-resolve node_modules.
+ARG AUDR_VERSION=""
+ARG AUDR_GIT_SHA=""
+ENV AUDR_VERSION=${AUDR_VERSION} AUDR_GIT_SHA=${AUDR_GIT_SHA}
 RUN npm run build
 
 # Stage 2: install Python dependencies with uv
@@ -47,6 +54,20 @@ RUN chown -R audr:audr /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH=/app/src
+
+# AUD-407: build provenance for GET /api/v1/version. Last in the file on
+# purpose — these change on every build, so anything above them stays cached.
+# The version itself is NOT taken from a build arg: it lives in
+# backend/src/audr/version.py, which is already in the image, so an image can
+# never report a version its code does not carry.
+ARG AUDR_GIT_SHA=""
+ARG AUDR_BUILT_AT=""
+ARG AUDR_VERSION=""
+ENV AUDR_GIT_SHA=${AUDR_GIT_SHA} AUDR_BUILT_AT=${AUDR_BUILT_AT}
+LABEL org.opencontainers.image.version=${AUDR_VERSION} \
+      org.opencontainers.image.revision=${AUDR_GIT_SHA} \
+      org.opencontainers.image.created=${AUDR_BUILT_AT} \
+      org.opencontainers.image.source="https://github.com/br3d/audr"
 
 USER audr
 

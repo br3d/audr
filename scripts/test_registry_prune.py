@@ -52,9 +52,23 @@ def test_aliases_and_release_tags_are_never_pruned():
 
 
 def test_release_tag_pattern():
-    for tag in ("v0.1.0", "v1", "v0.1.0-rc1", "v10.2.3"):
+    # Both spellings are releases: `v1.2.3` is the git tag and what this
+    # registry held before AUD-407; `1.2.3` is what the pipeline publishes now.
+    for tag in ("v0.1.0", "v1", "v0.1.0-rc1", "v10.2.3", "0.1.0", "10.2.3"):
         assert rp.RELEASE_TAG_RE.match(tag), tag
-    for tag in ("version", "vabc", "0.1.0", "latest"):
+    for tag in ("version", "vabc", "latest", "0.1", "1.2.3.4"):
+        assert not rp.RELEASE_TAG_RE.match(tag), tag
+
+
+def test_per_commit_build_tags_are_not_release_tags():
+    """`<version>-g<sha>` is what every ordinary build on main is tagged (AUD-407).
+
+    If the release pattern accepted that suffix, every commit ever pushed would
+    count as a release and retention would be off with nothing to show for it.
+    The failure would surface months later as a full registry disk rather than
+    as a red test, so it is pinned here.
+    """
+    for tag in ("0.1.0-g1a2b3c4d5e6f", "1.4.2-g0123456789ab", "1.4.2-g1a2b3c-dirty"):
         assert not rp.RELEASE_TAG_RE.match(tag), tag
 
 

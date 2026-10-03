@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import Layout, { type MainPage } from '../components/Layout'
+import pkg from '../../package.json'
 
 describe('Layout', () => {
   let container: HTMLDivElement
@@ -132,5 +133,15 @@ describe('Layout', () => {
       document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     })
     expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  // AUD-407: the sidebar version is a compile-time constant from package.json,
+  // not an API call, so it must render with no network and no session.
+  it('shows the build version in the sidebar footer', () => {
+    mount(vi.fn(), vi.fn())
+    const label = container.querySelector('.sidebar-footer [data-testid="app-version"]')
+    expect(label).toBeTruthy()
+    expect(label!.textContent).toBe(`v${pkg.version}`)
+    expect(label!.getAttribute('title')).toContain(`audr v${pkg.version}`)
   })
 })
