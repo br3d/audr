@@ -16,6 +16,7 @@ import {
   IconSignOut,
   IconChat,
 } from './Icons'
+import { BrandMark } from './Logo'
 
 // ---- Theme context ----
 
@@ -189,6 +190,11 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
     <ThemeCtx.Provider value={{ theme, toggle }}>
       <div className="app-shell">
         <aside className="sidebar" role="navigation" aria-label="Main navigation">
+          <div className="sidebar-brand">
+            <BrandMark label={null} />
+            <span className="sidebar-brand-name">audr</span>
+          </div>
+
           <div className="space-card">
             <span className="space-card-name">Personal portfolio</span>
             <span className="space-card-type">Local space</span>

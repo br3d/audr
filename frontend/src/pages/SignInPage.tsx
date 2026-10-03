@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { login, ApiError } from '../api/client'
+import { BrandLockup } from '../components/Logo'
 
 interface Props {
   onSignIn: () => void
@@ -33,8 +34,7 @@ export default function SignInPage({ onSignIn }: Props) {
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-mark">A</div>
-          <span className="auth-logo-name">audr</span>
+          <BrandLockup />
         </div>
         <h1 className="auth-title">Sign in</h1>
         <p className="auth-subtitle">Enter your portfolio password to continue.</p>
