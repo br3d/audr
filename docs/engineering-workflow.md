@@ -78,3 +78,11 @@ push to `main`.
 
 Merging to `main` needs no founder approval. Deploying to production still does, per the
 guarded deploy pipeline.
+
+## Versioning
+
+Releases are semantic versions cut with `./scripts/release.sh major|minor|patch` (AUD-407).
+Do not hand-edit `VERSION`, `backend/pyproject.toml`, `backend/src/audr/version.py` or
+`frontend/package.json` — the script rewrites all four together, and a test fails the build
+if they drift. Merging to `main` does **not** cut a release; pushing the `vX.Y.Z` tag does,
+and that tag is what triggers the deploy. See `docs/releases.md`.

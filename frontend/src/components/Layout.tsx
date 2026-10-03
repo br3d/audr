@@ -16,6 +16,7 @@ import {
   IconChat,
 } from './Icons'
 import { BrandMark } from './Logo'
+import { VERSION_LABEL, VERSION_TITLE } from '../version'
 
 // ---- Theme context ----
 
@@ -217,6 +218,11 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
             <span className="sidebar-status">
               <span className="status-dot status-dot-ok" />
               Self-hosted · your data stays yours
+            </span>
+            {/* AUD-407: bottom-left build identity. Baked into the bundle, so
+                it renders even when the API is down. */}
+            <span className="sidebar-version" title={VERSION_TITLE} data-testid="app-version">
+              {VERSION_LABEL}
             </span>
           </div>
         </aside>
