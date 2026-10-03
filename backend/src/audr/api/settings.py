@@ -313,7 +313,18 @@ async def patch_settings(
         for kind_fe, patch in body.schedules.items():
             _validate_schedule_patch(patch)
             kind_db = _FE_TO_DB.get(kind_fe, kind_fe)
-            freshness_s = patch.freshness_seconds if patch.freshness_seconds is not None else patch.interval_seconds
+            # ``interval_seconds`` and ``freshness_seconds`` are two names for the
+            # same ``schedule.freshness_s`` column, and GET /settings echoes the
+            # value back under both. ``interval_seconds`` is the field the
+            # Schedules page actually edits, so it must win when both arrive —
+            # preferring ``freshness_seconds`` meant a client that round-tripped
+            # the GET payload silently rewrote the old value over the new one
+            # and the change appeared not to save at all (AUD-397).
+            freshness_s = (
+                patch.interval_seconds
+                if patch.interval_seconds is not None
+                else patch.freshness_seconds
+            )
 
             sets: list[str] = ["revision = revision + 1"]
             params: dict[str, Any] = {"kind": kind_db}
