@@ -142,8 +142,14 @@ All services communicate over the `internal` Docker bridge network. The only pub
 To reach the API inside the container, bypassing the published port:
 
 ```bash
-docker compose exec api curl -s http://localhost:8000/health/live
+docker compose exec api python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/live').read().decode())"
 ```
+
+The image ships no `curl` (AUD-379 removed the apt layer so the release image
+is fully digest-pinned), so use the interpreter for anything that needs an HTTP
+call from inside a container. From the host, `curl http://localhost/health/live`
+through the published port still works.
 
 ---
 

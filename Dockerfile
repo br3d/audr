@@ -17,8 +17,14 @@ RUN uv sync --frozen --no-dev --no-install-project
 FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS runtime
 WORKDIR /app
 
-# Runtime system deps (curl needed by health check)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# No apt layer here on purpose. This stage used to install `curl` for the
+# container health check, which was the one element of the release image that
+# was not reproducible: every `FROM` above is digest-pinned, but apt resolves
+# to whatever the Debian archive serves at build time. The health check in
+# compose.yaml now uses the interpreter that is already in the image
+# (`python -c` + stdlib urllib), so nothing in the runtime needs apt. See
+# docs/third-party.md section 1.3 and AUD-379. Keep health checks stdlib-only;
+# reintroducing apt here reintroduces the unpinned dependency.
 
 # Non-root user for runtime security
 RUN useradd -m -u 1000 -s /bin/bash audr

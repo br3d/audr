@@ -64,13 +64,25 @@ curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
 
 ### 1.3 Not pinned
 
-One element of the release image is deliberately unpinned: the `runtime` stage
-runs `apt-get install --no-install-recommends curl` (needed by the container
-health check), which resolves to whatever `curl` and its dependencies the
-Debian archive serves at build time. `curl` is distributed under the
-[curl licence](https://curl.se/docs/copyright.html) (an MIT/X derivative).
-Pinning it to an exact Debian version would require pinning the whole apt
-snapshot; this is tracked as a follow-up rather than resolved here.
+Nothing. Every third-party element of the release image is now digest-pinned.
+
+Until AUD-379 there was one exception: the `runtime` stage ran
+`apt-get install --no-install-recommends curl` for the container health check,
+so `curl` and its dependencies resolved to whatever the Debian archive served
+at build time and two builds of the same commit could ship different versions.
+Pinning an exact Debian version would have required pinning the whole apt
+snapshot, so the apt layer was removed instead: the health check in
+`compose.yaml` calls the interpreter already present in the image
+(`python -c` with stdlib `urllib`). `curl` is no longer installed or
+redistributed, so its [licence](https://curl.se/docs/copyright.html) (an MIT/X
+derivative) no longer applies to this image.
+
+The host-side scripts (`scripts/deploy.sh`, `scripts/smoke-test.sh`,
+`scripts/seed_dev.sh`) and the Gitea deploy health-gate still use `curl`, but
+they run on the deploy host against its own system packages — they are not part
+of anything we build or redistribute. Keep container health checks
+stdlib-only; adding an apt layer back to `runtime` reintroduces the unpinned
+dependency.
 
 ---
 
