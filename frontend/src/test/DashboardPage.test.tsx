@@ -611,6 +611,15 @@ describe('DashboardPage', () => {
       generated_at: '2026-01-15T00:00:00Z',
     }
 
+    async function waitForRangeButtons(container: HTMLDivElement): Promise<HTMLButtonElement[]> {
+      let buttons: HTMLButtonElement[] = []
+      await vi.waitFor(() => {
+        buttons = Array.from(container.querySelectorAll('.range-switcher-btn')) as HTMLButtonElement[]
+        expect(buttons.length).toBeGreaterThan(0)
+      })
+      return buttons
+    }
+
     it('renders four range segments defaulting to 1M', async () => {
       mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
       const { container, root } = mountWithData({
@@ -618,12 +627,7 @@ describe('DashboardPage', () => {
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
       })
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 10))
-      })
-      const buttons = Array.from(
-        container.querySelectorAll('.range-switcher-btn'),
-      ) as HTMLButtonElement[]
+      const buttons = await waitForRangeButtons(container)
       expect(buttons.map((b) => b.textContent)).toEqual(['1D', '1W', '1M', 'All'])
       const active = buttons.find((b) => b.getAttribute('aria-pressed') === 'true')
       expect(active?.textContent).toBe('1M')
@@ -638,18 +642,14 @@ describe('DashboardPage', () => {
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
       })
+      const buttons = await waitForRangeButtons(container)
+      const dayButton = buttons.find((b) => b.textContent === '1D')
+      expect(dayButton).toBeTruthy()
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 10))
-      })
-      const buttons = Array.from(
-        container.querySelectorAll('.range-switcher-btn'),
-      ) as HTMLButtonElement[]
-      const dayButton = buttons.find((b) => b.textContent === '1D')!
-      await act(async () => {
-        dayButton.click()
+        dayButton?.click()
       })
       expect(mockFetchHistory).toHaveBeenCalledWith('24h')
-      expect(dayButton.getAttribute('aria-pressed')).toBe('true')
+      expect(dayButton?.getAttribute('aria-pressed')).toBe('true')
       await unmount(container, root)
     })
   })
