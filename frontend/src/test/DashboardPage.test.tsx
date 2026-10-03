@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { PortfolioResponse, HistoryPoint, HistoryResponse } from '../api/client'
+import type { AllocationItem, Holding, PortfolioResponse, HistoryPoint, HistoryResponse } from '../api/client'
 
 vi.mock('../api/client', () => ({
   fetchPortfolio: vi.fn(),
@@ -48,6 +48,44 @@ function makeQuality(overrides: Partial<PortfolioResponse['quality']> = {}): Por
     ...overrides,
   }
 }
+
+function makeHolding(overrides: Partial<Holding> = {}): Holding {
+  return {
+    wallet_id: 'w1',
+    asset_id: 'eth',
+    contract_address: null,
+    is_native: true,
+    raw_balance: '1000000000000000000',
+    decimals: 18,
+    quantity: '1.0',
+    price_usd: '2000.00',
+    value_usd: '2000.00',
+    included: true,
+    metadata_source: 'chain',
+    read_status: 'ok',
+    block_time: null,
+    observed_at: null,
+    last_success_at: null,
+    ...overrides,
+  }
+}
+
+function makeAllocation(overrides: Partial<AllocationItem> = {}): AllocationItem {
+  return {
+    asset_id: 'eth',
+    symbol: 'ETH',
+    value_usd: '4000.00',
+    percentage: '100.00',
+    quantity: '2.0',
+    price_usd: '2000.00',
+    wallet_count: 1,
+    read_status: 'ok',
+    included: true,
+    ...overrides,
+  }
+}
+
+const ETH_ALLOCATION = makeAllocation()
 
 const EMPTY_PORTFOLIO: PortfolioResponse = {
   snapshot_id: null,
@@ -490,25 +528,7 @@ describe('DashboardPage', () => {
     it('shows allocation unavailable note when allocations array is empty and holdings exist', async () => {
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
-        holdings: [
-          {
-            wallet_id: 'w1',
-            asset_id: 'eth',
-            contract_address: null,
-            is_native: true,
-            raw_balance: '1000000000000000000',
-            decimals: 18,
-            quantity: '1.0',
-            price_usd: null,
-            value_usd: null,
-            included: true,
-            metadata_source: 'chain',
-            read_status: 'ok',
-            block_time: null,
-            observed_at: null,
-            last_success_at: null,
-          },
-        ],
+        holdings: [makeHolding({ price_usd: null, value_usd: null })],
         allocations: [],
       })
       expect(container.textContent).toMatch(/no priced holdings/i)
@@ -520,9 +540,7 @@ describe('DashboardPage', () => {
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
-        allocations: [
-          { asset_id: 'eth', symbol: 'ETH', value_usd: '4000.00', percentage: '100.00' },
-        ],
+        allocations: [ETH_ALLOCATION],
       })
       expect(container.querySelector('[aria-label="Asset allocation"]')).toBeTruthy()
       expect(container.textContent).toContain('ETH')
@@ -534,6 +552,50 @@ describe('DashboardPage', () => {
       expect(container.querySelector('[aria-label="Asset allocation"]')).toBeNull()
       await unmount(container, root)
     })
+
+    it('renders the Refresh balances / Discover tokens scan controls in the card header', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+        allocations: [ETH_ALLOCATION],
+      })
+      expect(
+        Array.from(container.querySelectorAll('button')).some(
+          (b) => b.textContent === 'Refresh balances',
+        ),
+      ).toBe(true)
+      expect(
+        Array.from(container.querySelectorAll('button')).some(
+          (b) => b.textContent === 'Discover tokens',
+        ),
+      ).toBe(true)
+      await unmount(container, root)
+    })
+
+    it('still shows the allocation card (not the unavailable alert) when only unpriced assets exist', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        holdings: [makeHolding({ asset_id: 'xyz', value_usd: null, price_usd: null })],
+        allocations: [
+          {
+            asset_id: 'xyz',
+            symbol: 'XYZ',
+            value_usd: null,
+            percentage: '0',
+            quantity: '5.0',
+            price_usd: null,
+            wallet_count: 1,
+            read_status: 'ok',
+            included: true,
+          },
+        ],
+      })
+      expect(container.querySelector('[aria-label="Asset allocation"]')).toBeTruthy()
+      expect(container.textContent).not.toMatch(/allocation unavailable/i)
+      expect(container.textContent).toContain('unpriced')
+      await unmount(container, root)
+    })
   })
 
   describe('news section', () => {
@@ -542,11 +604,32 @@ describe('DashboardPage', () => {
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
-        allocations: [
-          { asset_id: 'eth', symbol: 'ETH', value_usd: '4000.00', percentage: '100.00' },
-        ],
+        allocations: [ETH_ALLOCATION],
       })
       expect(container.querySelector('[aria-label="Asset news"]')).toBeTruthy()
+      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe(
+        '1 assets',
+      )
+      await unmount(container, root)
+    })
+
+    it('excludes unpriced assets from the News section item count', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+        allocations: [
+          ETH_ALLOCATION,
+          makeAllocation({
+            asset_id: 'xyz',
+            symbol: 'XYZ',
+            value_usd: null,
+            percentage: '0',
+            quantity: '5.0',
+            price_usd: null,
+          }),
+        ],
+      })
       expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe(
         '1 assets',
       )

@@ -46,6 +46,14 @@ describe('Layout', () => {
     ) as HTMLButtonElement | undefined
   }
 
+  it('does not render a Holdings nav entry (AUD-405 retired the standalone page)', () => {
+    mount(vi.fn(), vi.fn())
+    const navLabels = Array.from(container.querySelectorAll('.sidebar-nav .nav-item')).map(
+      (b) => b.textContent,
+    )
+    expect(navLabels).not.toContain('Holdings')
+  })
+
   it('renders the space card, nav section label, and self-hosted status without a Sign out button in the sidebar', () => {
     mount(vi.fn(), vi.fn())
     expect(container.querySelector('.space-card')?.textContent).toContain('Personal portfolio')

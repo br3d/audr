@@ -250,8 +250,15 @@ export interface Holding {
 export interface AllocationItem {
   asset_id: string
   symbol: string
-  value_usd: string
+  /** Null for assets with no usable price — the row still renders, unpriced (AUD-404). */
+  value_usd: string | null
   percentage: string
+  /** Summed across every wallet holding this asset; null if any contributing read has an unknown quantity. */
+  quantity: string | null
+  price_usd: string | null
+  wallet_count: number
+  read_status: ReadStatus
+  included: boolean
   /** Optional token logo. Absent on the keyless default path; the UI falls back to a monogram. */
   logo_url?: string | null
 }

@@ -8,6 +8,7 @@ import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
+import ScanStatus from '../components/ScanStatus'
 
 const RECENT_EVENTS_LIMIT = 7
 
@@ -148,7 +149,8 @@ export default function DashboardPage({ setPage }: Props) {
 
   const hasHoldings = data.holdings.length > 0
   const allExcluded = hasHoldings && data.holdings.every((h) => !h.included)
-  const hasPricedAllocations = data.allocations.length > 0
+  const pricedAllocations = data.allocations.filter((a) => a.value_usd !== null)
+  const hasPricedAllocations = pricedAllocations.length > 0
   const isComplete = data.total_usd !== null
   const totalValue = data.total_usd ?? data.priced_subtotal_usd
   const pricedCount = data.holdings.filter((h) => h.value_usd !== null && h.included).length
@@ -244,7 +246,7 @@ export default function DashboardPage({ setPage }: Props) {
 
         <div className="metric-card">
           <div className="metric-label">Priced Assets</div>
-          <div className="metric-value metric-value-sm">{data.allocations.length}</div>
+          <div className="metric-value metric-value-sm">{pricedAllocations.length}</div>
           <div className="metric-note">{pricedAssetsNote}</div>
         </div>
       </div>
@@ -282,12 +284,16 @@ export default function DashboardPage({ setPage }: Props) {
         )}
 
       {/* Allocation */}
-      {hasPricedAllocations ? (
-        <section aria-label="Asset allocation" className="mb-20">
-          <div className="section-heading">Asset Allocation</div>
-          <div className="card">
-            <AllocationList items={data.allocations} />
+      {data.allocations.length > 0 ? (
+        <section aria-label="Asset allocation" className="card mb-20">
+          <div className="card-header">
+            <div className="card-title">Asset Allocation</div>
+            <div className="btn-group">
+              <ScanStatus runId={null} kind="balances" label="Refresh balances" />
+              <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
+            </div>
           </div>
+          <AllocationList items={data.allocations} />
         </section>
       ) : (
         hasHoldings && (
@@ -302,7 +308,7 @@ export default function DashboardPage({ setPage }: Props) {
       {hasPricedAllocations && (
         <section aria-label="Asset news" className="mb-20">
           <div className="section-heading">News</div>
-          <NewsFeed items={data.allocations} />
+          <NewsFeed items={pricedAllocations} />
         </section>
       )}
 

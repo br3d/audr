@@ -6,7 +6,6 @@ import { useHashPage } from './routing'
 import SetupPage from './pages/SetupPage'
 import SignInPage from './pages/SignInPage'
 import DashboardPage from './pages/DashboardPage'
-import HoldingsPage from './pages/HoldingsPage'
 import WalletsPage from './pages/WalletsPage'
 import AssetsPage from './pages/AssetsPage'
 import EventsPage from './pages/EventsPage'
@@ -90,7 +89,6 @@ export default function App() {
   return (
     <Layout page={page} setPage={setPage} onSignOut={handleSignOut}>
       {page === 'dashboard' && <DashboardPage setPage={setPage} />}
-      {page === 'holdings' && <HoldingsPage />}
       {page === 'wallets' && <WalletsPage />}
       {page === 'assets' && <AssetsPage />}
       {page === 'events' && <EventsPage />}

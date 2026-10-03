@@ -27,9 +27,6 @@ vi.mock('../pages/SignInPage', () => ({
 vi.mock('../pages/DashboardPage', () => ({
   default: () => React.createElement('div', { 'data-testid': 'dashboard-page' }),
 }))
-vi.mock('../pages/HoldingsPage', () => ({
-  default: () => React.createElement('div', { 'data-testid': 'holdings-page' }),
-}))
 vi.mock('../pages/WalletsPage', () => ({
   default: () => React.createElement('div', { 'data-testid': 'wallets-page' }),
 }))
@@ -159,7 +156,7 @@ describe('App routing and auth guard', () => {
     mountWithCache({ setup_required: false }, SESSION_OK)
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
     expect(container.textContent).toContain('Dashboard')
-    expect(container.textContent).toContain('Holdings')
+    expect(container.textContent).not.toContain('Holdings')
     expect(container.textContent).toContain('Wallets')
     expect(container.textContent).toContain('Assets')
     expect(container.textContent).toContain('Connections')
@@ -194,14 +191,23 @@ describe('App routing and auth guard', () => {
   })
 
   it('restores the tab from the URL hash on mount, as a reload would', () => {
-    window.history.replaceState(null, '', '#/holdings')
+    window.history.replaceState(null, '', '#/wallets')
     mountWithCache({ setup_required: false }, SESSION_OK)
-    expect(container.querySelector('[data-testid="holdings-page"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="wallets-page"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeNull()
   })
 
   it('falls back to the dashboard for an unknown hash', () => {
     window.history.replaceState(null, '', '#/not-a-page')
+    mountWithCache({ setup_required: false }, SESSION_OK)
+    expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
+    expect(window.location.hash).toBe('#/dashboard')
+  })
+
+  it('falls back to the dashboard for the retired #/holdings hash', () => {
+    // AUD-405 retired the standalone Holdings page; a stale bookmark or a
+    // persisted #/holdings hash from before the change must not render blank.
+    window.history.replaceState(null, '', '#/holdings')
     mountWithCache({ setup_required: false }, SESSION_OK)
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
     expect(window.location.hash).toBe('#/dashboard')

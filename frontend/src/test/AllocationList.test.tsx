@@ -20,24 +20,48 @@ async function unmount(container: HTMLDivElement, root: Root) {
   document.body.removeChild(container)
 }
 
+function makeItem(overrides: Partial<AllocationItem> = {}): AllocationItem {
+  return {
+    asset_id: 'eth',
+    symbol: 'ETH',
+    value_usd: '3456.78',
+    percentage: '75.50',
+    quantity: '1.5',
+    price_usd: '2304.52',
+    wallet_count: 1,
+    read_status: 'ok',
+    included: true,
+    ...overrides,
+  }
+}
+
 const ITEMS: AllocationItem[] = [
-  { asset_id: 'eth', symbol: 'ETH', value_usd: '3456.78', percentage: '75.50' },
-  { asset_id: 'usdc', symbol: 'USDC', value_usd: '1122.00', percentage: '24.50' },
+  makeItem({ asset_id: 'eth', symbol: 'ETH', value_usd: '3456.78', percentage: '75.50' }),
+  makeItem({
+    asset_id: 'usdc',
+    symbol: 'USDC',
+    value_usd: '1122.00',
+    percentage: '24.50',
+    quantity: '1122.0',
+    price_usd: '1.00',
+  }),
 ]
 
 /** Two significant holdings plus a long tail of dust — exercises the spoiler. */
 function dustyPortfolio(dustCount: number): AllocationItem[] {
   const items: AllocationItem[] = [
-    { asset_id: 'eth', symbol: 'ETH', value_usd: '9000.00', percentage: '90.00' },
-    { asset_id: 'usdc', symbol: 'USDC', value_usd: '500.00', percentage: '5.00' },
+    makeItem({ asset_id: 'eth', symbol: 'ETH', value_usd: '9000.00', percentage: '90.00' }),
+    makeItem({ asset_id: 'usdc', symbol: 'USDC', value_usd: '500.00', percentage: '5.00' }),
   ]
   for (let i = 0; i < dustCount; i += 1) {
-    items.push({
-      asset_id: `dust-${i}`,
-      symbol: `DST${i}`,
-      value_usd: '10.00',
-      percentage: '0.10',
-    })
+    items.push(
+      makeItem({
+        asset_id: `dust-${i}`,
+        symbol: `DST${i}`,
+        value_usd: '10.00',
+        percentage: '0.10',
+      }),
+    )
   }
   return items
 }
@@ -63,6 +87,15 @@ describe('AllocationList', () => {
     it('renders one row per item', async () => {
       const { container, root } = render(<AllocationList items={ITEMS} />)
       expect(container.querySelectorAll('tbody tr').length).toBe(2)
+      await unmount(container, root)
+    })
+
+    it('renders one row per asset even when it is held in multiple wallets (AUD-404 dedup)', async () => {
+      // Backend aggregates per asset_id across wallets; the frontend must not
+      // re-split that back into one row per wallet.
+      const twoWallets = [makeItem({ asset_id: 'eth', symbol: 'ETH', wallet_count: 2 })]
+      const { container, root } = render(<AllocationList items={twoWallets} />)
+      expect(container.querySelectorAll('tbody tr').length).toBe(1)
       await unmount(container, root)
     })
 
@@ -99,6 +132,127 @@ describe('AllocationList', () => {
       const { container, root } = render(<AllocationList items={ITEMS} />)
       const fill = container.querySelector('.allocation-bar-fill') as HTMLElement
       expect(fill.style.width).toBe('75.5%')
+      await unmount(container, root)
+    })
+  })
+
+  describe('amount column', () => {
+    it('renders the quantity monospaced', async () => {
+      const { container, root } = render(
+        <AllocationList items={[makeItem({ quantity: '1.5' })]} />,
+      )
+      const cell = container.querySelector('.allocation-quantity')!
+      expect(cell.textContent).toBe('1.5')
+      expect(cell.className).toContain('td-mono')
+      await unmount(container, root)
+    })
+
+    it('shows "unknown" when quantity is null', async () => {
+      const { container, root } = render(
+        <AllocationList items={[makeItem({ quantity: null })]} />,
+      )
+      expect(container.querySelector('.allocation-quantity')!.textContent).toBe('unknown')
+      await unmount(container, root)
+    })
+  })
+
+  describe('unpriced rows', () => {
+    const unpriced = makeItem({
+      asset_id: 'xyz',
+      symbol: 'XYZ',
+      value_usd: null,
+      percentage: '0',
+      quantity: '5.0',
+      price_usd: null,
+    })
+
+    it('shows the amount plus a muted "unpriced" label instead of a value', async () => {
+      const { container, root } = render(<AllocationList items={[unpriced]} />)
+      expect(container.querySelector('.allocation-quantity')!.textContent).toBe('5.0')
+      expect(container.querySelector('.allocation-value')!.textContent).toBe('unpriced')
+      await unmount(container, root)
+    })
+
+    it('does not render a share bar or percentage for an unpriced row', async () => {
+      const { container, root } = render(<AllocationList items={[unpriced]} />)
+      expect(container.querySelector('.allocation-bar')).toBeNull()
+      expect(container.querySelector('.allocation-pct')).toBeNull()
+      await unmount(container, root)
+    })
+
+    it('sorts unpriced rows after every priced row', async () => {
+      const { container, root } = render(
+        <AllocationList items={[unpriced, ...ITEMS]} />,
+      )
+      const rows = container.querySelectorAll('tbody tr')
+      expect(rows[rows.length - 1].textContent).toContain('XYZ')
+      await unmount(container, root)
+    })
+
+    it('keeps unpriced rows in the hidden dust tail rather than the visible head', () => {
+      const items = [...dustyPortfolio(10), unpriced]
+      const { visible, hidden } = splitAllocations(items)
+      expect(visible.some((i) => i.asset_id === 'xyz')).toBe(false)
+      expect(hidden.some((i) => i.asset_id === 'xyz')).toBe(true)
+    })
+  })
+
+  describe('read-status badge', () => {
+    it.each([
+      ['ok', 'Current'],
+      ['stale', 'Stale'],
+      ['error', 'Error'],
+      ['pending', 'Pending'],
+    ] as const)('renders the %s badge as "%s"', async (status, label) => {
+      const { container, root } = render(
+        <AllocationList items={[makeItem({ read_status: status })]} />,
+      )
+      expect(container.querySelector(`[aria-label="Read status: ${status}"]`)?.textContent).toBe(
+        label,
+      )
+      await unmount(container, root)
+    })
+  })
+
+  describe('excluded badge', () => {
+    it('shows an "excluded" badge when included is false', async () => {
+      const { container, root } = render(
+        <AllocationList items={[makeItem({ included: false })]} />,
+      )
+      expect(container.querySelector('[aria-label="Excluded from total"]')?.textContent).toBe(
+        'excluded',
+      )
+      await unmount(container, root)
+    })
+
+    it('does not show an excluded badge when included is true', async () => {
+      const { container, root } = render(
+        <AllocationList items={[makeItem({ included: true })]} />,
+      )
+      expect(container.querySelector('[aria-label="Excluded from total"]')).toBeNull()
+      await unmount(container, root)
+    })
+  })
+
+  describe('search box', () => {
+    it('filters rows by symbol, case-insensitively', async () => {
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const input = container.querySelector('input[aria-label="Filter allocations"]') as HTMLInputElement
+      // Use native setter so React's synthetic onChange fires in jsdom.
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      await act(async () => {
+        nativeSetter?.call(input, 'usd')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      const rows = container.querySelectorAll('tbody tr')
+      expect(rows.length).toBe(1)
+      expect(rows[0].textContent).toContain('USDC')
+      await unmount(container, root)
+    })
+
+    it('shows a "filtered of total" count', async () => {
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      expect(container.textContent).toContain('2 of 2')
       await unmount(container, root)
     })
   })
@@ -177,27 +331,32 @@ describe('AllocationList', () => {
     })
 
     it('caps the collapsed view at twelve rows even when all shares are significant', () => {
-      const many: AllocationItem[] = Array.from({ length: 30 }, (_, i) => ({
-        asset_id: `a-${i}`,
-        symbol: `A${i}`,
-        value_usd: '100.00',
-        percentage: '3.33',
-      }))
+      const many: AllocationItem[] = Array.from({ length: 30 }, (_, i) =>
+        makeItem({ asset_id: `a-${i}`, symbol: `A${i}`, value_usd: '100.00', percentage: '3.33' }),
+      )
       const { visible, hidden } = splitAllocations(many)
       expect(visible.length).toBe(12)
       expect(hidden.length).toBe(18)
     })
 
     it('keeps a five-row floor when every share is tiny', () => {
-      const dust: AllocationItem[] = Array.from({ length: 20 }, (_, i) => ({
-        asset_id: `d-${i}`,
-        symbol: `D${i}`,
-        value_usd: '1.00',
-        percentage: '0.05',
-      }))
+      const dust: AllocationItem[] = Array.from({ length: 20 }, (_, i) =>
+        makeItem({ asset_id: `d-${i}`, symbol: `D${i}`, value_usd: '1.00', percentage: '0.05' }),
+      )
       const { visible, hidden } = splitAllocations(dust)
       expect(visible.length).toBe(5)
       expect(hidden.length).toBe(15)
+    })
+
+    it('summarises hidden unpriced rows as zero value without throwing', async () => {
+      const items = [
+        ...dustyPortfolio(10),
+        makeItem({ asset_id: 'xyz', symbol: 'XYZ', value_usd: null, percentage: '0' }),
+      ]
+      const { container, root } = render(<AllocationList items={items} />)
+      const toggle = container.querySelector('.allocation-spoiler')!
+      expect(toggle.textContent).toContain('8 smaller assets')
+      await unmount(container, root)
     })
   })
 
@@ -210,7 +369,7 @@ describe('AllocationList', () => {
 
     it('column headers use scope="col"', async () => {
       const { container, root } = render(<AllocationList items={ITEMS} />)
-      expect(container.querySelectorAll('th[scope="col"]').length).toBeGreaterThanOrEqual(3)
+      expect(container.querySelectorAll('th[scope="col"]').length).toBeGreaterThanOrEqual(4)
       await unmount(container, root)
     })
 

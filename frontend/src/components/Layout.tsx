@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconGrid,
-  IconLayers,
   IconWallet,
   IconCoins,
   IconBarChart,
@@ -35,7 +34,6 @@ export function useTheme() {
 
 export const MAIN_PAGES = [
   'dashboard',
-  'holdings',
   'wallets',
   'assets',
   'events',
@@ -53,7 +51,6 @@ export type MainPage = (typeof MAIN_PAGES)[number]
 
 const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<SVGSVGElement>> }[] = [
   { page: 'dashboard', label: 'Dashboard', Icon: IconGrid },
-  { page: 'holdings', label: 'Holdings', Icon: IconLayers },
   { page: 'wallets', label: 'Wallets', Icon: IconWallet },
   { page: 'assets', label: 'Assets', Icon: IconCoins },
   { page: 'events', label: 'Events', Icon: IconZap },
@@ -67,7 +64,6 @@ const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<
 
 const PAGE_TITLES: Record<MainPage, string> = {
   dashboard: 'Overview',
-  holdings: 'Holdings',
   wallets: 'Wallets',
   assets: 'Assets',
   events: 'Events',

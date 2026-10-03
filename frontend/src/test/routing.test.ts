@@ -27,6 +27,10 @@ describe('pageFromHash / hashForPage with a query part', () => {
     expect(pageFromHash('#/not-a-page?x=1')).toBeNull()
   })
 
+  it('returns null for the retired #/holdings page (AUD-405), falling back to the default', () => {
+    expect(pageFromHash('#/holdings')).toBeNull()
+  })
+
   it('builds a hash with or without a query string', () => {
     expect(hashForPage('history')).toBe('#/history')
     expect(hashForPage('history', 'period=30d')).toBe('#/history?period=30d')
