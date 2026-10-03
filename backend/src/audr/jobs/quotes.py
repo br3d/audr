@@ -39,7 +39,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.assets.cmc_catalog import resolve_cmc_ids
-from audr.assets.constants import NATIVE_ETH_ADDRESS
+from audr.assets.constants import (
+    NATIVE_ETH_ADDRESS,  # noqa: F401 -- re-export pinned by test_native_eth_identity.py
+)
 from audr.jobs.policy import get_shared_cmc_rate_limiter
 from audr.jobs.store import JobKind, enqueue_job
 from audr.operations.status import ComponentStatus, QuoteStatus
@@ -162,7 +164,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         try:
             if provider_name == "coingecko":
                 api_key = await get_coingecko_api_key(session)
-                assert api_key is not None  # get_active_quote_provider already checked
+                assert api_key is not None  # noqa: S101 -- get_active_quote_provider already checked
                 async with CoinGeckoProvider(api_key=api_key) as provider:
                     fetched_prices = await provider.get_prices(stale_addresses)
             else:
@@ -322,9 +324,7 @@ async def _get_cached_prices(
     return {row[0]: Decimal(row[1]) for row in result}
 
 
-async def _insert_quote_set(
-    session: AsyncSession, *, provider: str
-) -> uuid.UUID:
+async def _insert_quote_set(session: AsyncSession, *, provider: str) -> uuid.UUID:
     qset_id = uuid.uuid4()
     now = datetime.now(tz=UTC)
     await session.execute(
@@ -337,9 +337,7 @@ async def _insert_quote_set(
     return qset_id
 
 
-async def _mark_quote_set(
-    session: AsyncSession, quote_set_id: uuid.UUID, status: str
-) -> None:
+async def _mark_quote_set(session: AsyncSession, quote_set_id: uuid.UUID, status: str) -> None:
     await session.execute(
         sa.text("UPDATE quote_set SET status = :status WHERE id = :id"),
         {"status": status, "id": str(quote_set_id)},
@@ -381,8 +379,7 @@ async def _update_price_availability(
     if unresolved:
         await session.execute(
             sa.text(
-                "UPDATE asset SET price_unavailable_since = :now"
-                " WHERE token_address = ANY(:addrs)"
+                "UPDATE asset SET price_unavailable_since = :now WHERE token_address = ANY(:addrs)"
             ),
             {"addrs": unresolved, "now": now},
         )

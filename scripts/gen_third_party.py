@@ -139,7 +139,11 @@ function walk(p) {
 for (const d of Object.keys(pj.dependencies)) walk(resolve("", d));
 function license(p, e) {
   if (e.license) return e.license;
-  try { return JSON.parse(fs.readFileSync(path.join(p, "package.json"))).license; } catch { return null; }
+  try {
+    return JSON.parse(fs.readFileSync(path.join(p, "package.json"))).license;
+  } catch {
+    return null;
+  }
 }
 const direct = new Set(Object.keys(pj.dependencies));
 const prod = [...seen].map((p) => {

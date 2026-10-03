@@ -100,7 +100,9 @@ class TestInsertEventApprovalClassification:
             data=hex(2**256 - 1),
         )
 
-        n = await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+        n = await _insert_event(
+            session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address
+        )
 
         assert n == 1
         params = session.execute.call_args.args[1]
@@ -125,7 +127,9 @@ class TestInsertEventApprovalClassification:
             data=hex(1_000),
         )
 
-        n = await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+        n = await _insert_event(
+            session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address
+        )
 
         assert n == 0
         session.execute.assert_not_called()

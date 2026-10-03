@@ -188,9 +188,7 @@ async def test_get_prices_routes_eth_and_tokens() -> None:
 async def test_get_token_prices_unknown_token_omitted() -> None:
     """Tokens not in the CoinGecko response are silently omitted (unknown ≠ zero)."""
     with respx.mock() as mock:
-        mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
-            return_value=Response(200, json={})
-        )
+        mock.get(f"{_BASE}/simple/token_price/ethereum").mock(return_value=Response(200, json={}))
         provider = CoinGeckoProvider(api_key=_FAKE_KEY)
         prices = await provider.get_token_prices([_USDC_ADDR])
         await provider.close()

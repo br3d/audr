@@ -186,12 +186,10 @@ class RpcReader:
 
         raw = await self._call_raw("eth_getLogs", [filter_params])
         if not isinstance(raw, list):
-            raise MalformedResponseError(
-                f"eth_getLogs expected list, got {type(raw).__name__}"
-            )
+            raise MalformedResponseError(f"eth_getLogs expected list, got {type(raw).__name__}")
         return [_parse_log_entry(item) for item in raw]
 
-    async def _call_raw(self, method: str, params: list) -> Any:  # type: ignore[type-arg]
+    async def _call_raw(self, method: str, params: list) -> object:  # type: ignore[type-arg]
         """POST a JSON-RPC request and return the parsed ``result`` value.
 
         Walks the endpoint list from the currently selected endpoint onwards,
@@ -228,7 +226,7 @@ class RpcReader:
         url: str,
         method: str,
         payload: dict[str, Any],
-    ) -> Any:  # type: ignore[type-arg]
+    ) -> object:  # type: ignore[type-arg]
         """Issue the request against a single endpoint.
 
         Every attempt (including retries) goes through the shared rate
@@ -318,7 +316,7 @@ def _pad_address_topic(address: str) -> str:
     return "0x" + addr[2:].zfill(64)
 
 
-def _parse_log_entry(item: Any) -> LogEntry:
+def _parse_log_entry(item: object) -> LogEntry:
     if not isinstance(item, dict):
         raise MalformedResponseError(f"log entry is not a dict: {item!r}")
     try:

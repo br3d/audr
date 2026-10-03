@@ -33,10 +33,7 @@ pytestmark = pytest.mark.integration
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": address.lower()},
     )
     return wallet_id
@@ -134,9 +131,7 @@ async def test_quote_refresh_flags_unresolved_asset(db_session: AsyncSession) ->
             # The provider only knows about the priced token — dust is absent
             # from the response, exactly like an unlisted CoinGecko/CMC asset.
             mock_router.get(url__regex=r"coingecko").mock(
-                return_value=httpx.Response(
-                    200, json={priced_addr: {"usd": "3.5"}}
-                )
+                return_value=httpx.Response(200, json={priced_addr: {"usd": "3.5"}})
             )
             await handle_quote_refresh(db_session, run_id)
 

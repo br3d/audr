@@ -38,10 +38,7 @@ async def _insert_wallet_and_asset(session: AsyncSession) -> tuple[uuid.UUID, uu
     wallet_id = uuid.uuid4()
     asset_id = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": "0x" + "1a" * 20},
     )
     await session.execute(
@@ -119,9 +116,7 @@ async def test_price_older_than_2x_freshness_reports_degraded(
     """Default quote_refresh freshness_s is 3600s, so 5 hours is well past 2x."""
     wallet_id, asset_id = await _insert_wallet_and_asset(db_session)
     await _insert_priced_snapshot(db_session, wallet_id=wallet_id, asset_id=asset_id)
-    await _insert_complete_quote_set(
-        db_session, fetched_at_sql="now() - interval '5 hours'"
-    )
+    await _insert_complete_quote_set(db_session, fetched_at_sql="now() - interval '5 hours'")
     await db_session.flush()
 
     with _no_coingecko_key:

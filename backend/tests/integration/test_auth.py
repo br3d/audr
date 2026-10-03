@@ -250,9 +250,7 @@ async def test_expired_session_returns_401(
     async with db_session_factory() as session:
         async with session.begin():
             await session.execute(
-                text(
-                    "UPDATE session SET expires_at = now() - interval '1 second'"
-                )
+                text("UPDATE session SET expires_at = now() - interval '1 second'")
             )
 
     r = await http_client.get(_SESSION_URL)
@@ -405,7 +403,7 @@ async def test_change_password_old_password_rejected(http_client: httpx.AsyncCli
 # Persistent login throttle tests
 # ---------------------------------------------------------------------------
 
-from audr.auth.service import THROTTLE_MAX_FAILURES  # noqa: E402
+from audr.auth.service import THROTTLE_MAX_FAILURES  # noqa: E402 — imported near point of use
 
 
 @pytest.mark.integration

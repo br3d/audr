@@ -109,7 +109,9 @@ def _row_to_asset_item(row: dict) -> AssetItemOut:
     contract_address: str | None = None if is_native else token_address
 
     decimals_override = row.get("decimals_override")
-    effective_decimals = int(decimals_override) if decimals_override is not None else int(row["decimals"])
+    effective_decimals = (
+        int(decimals_override) if decimals_override is not None else int(row["decimals"])
+    )
 
     created_at = row["created_at"]
     if hasattr(created_at, "isoformat"):
@@ -197,7 +199,7 @@ async def list_assets(
             {where_clause}
             ORDER BY a.id
             LIMIT :limit
-            """
+            """  # noqa: S608 -- where_clause is built from a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )
@@ -250,7 +252,9 @@ async def get_catalog(
     )
 
 
-@router.post("/assets/manual", response_model=AssetItemOut, status_code=http_status.HTTP_201_CREATED)
+@router.post(
+    "/assets/manual", response_model=AssetItemOut, status_code=http_status.HTTP_201_CREATED
+)
 async def add_manual_asset(
     body: AddManualAssetBody,
     _session: Annotated[Session, Depends(_require_csrf)],
@@ -316,7 +320,9 @@ async def add_manual_asset(
 
     row = await _get_asset_by_id(db, asset_id)
     if row is None:
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset insert failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset insert failed"
+        )
     return _row_to_asset_item(row)
 
 
@@ -345,15 +351,16 @@ async def patch_asset(
 
     if updates:
         updates.append("updated_at = :now")
-        await db.execute(
-            sa.text(f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"),
-            params,
-        )
+        # updates is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
+        sql = f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"  # noqa: S608 — updates is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
+        await db.execute(sa.text(sql), params)
         await db.commit()
 
     updated = await _get_asset_by_id(db, asset_id)
     if updated is None:
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset update failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Asset update failed"
+        )
     return _row_to_asset_item(updated)
 
 

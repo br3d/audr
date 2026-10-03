@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
 from audr.assets.catalog import get_catalog_status
+from audr.auth.models import Session
 from audr.auth.service import AuthenticationError
 from audr.db import get_db
 from audr.jobs.quotes import get_quote_status
@@ -203,7 +204,9 @@ _SELECT_SCHEDULE_COLS = """
 """
 
 
-def _row_to_schedule_read(row: Any) -> ScheduleRead:  # noqa: ANN401
+# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
+def _row_to_schedule_read(row: Any) -> ScheduleRead:  # noqa: ANN401 — row is a positional SQLAlchemy Row, indexed by column position; no narrower static type for an ad-hoc sa.text() result
     return ScheduleRead(
         kind=row[1],
         enabled=row[2],
@@ -229,7 +232,9 @@ def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
     )
 
 
-def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401
+# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
+def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401 — row is a positional SQLAlchemy Row, indexed by column position; no narrower static type for an ad-hoc sa.text() result
     """Return (frontend_kind, ScheduleConfig) from a schedule table row."""
     kind_db: str = row[1]
     enabled: bool = row[2]
@@ -247,7 +252,9 @@ def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: AN
     )
 
 
-def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401
+# ANN401: row is a positional SQLAlchemy Row, unpacked by position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
+def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401 — row is a positional SQLAlchemy Row, unpacked by position; no narrower static type for an ad-hoc sa.text() result
     """Map a job_run table row to the frontend-shaped JobRunResponse."""
     job_id, kind_db, status, retry_count, error, claimed_at, completed_at, created_at = row
 
@@ -274,7 +281,8 @@ def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401
 async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
     """Build the SettingsResponse from the current schedule table state."""
     result = await db.execute(
-        sa.text(f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule ORDER BY kind")  # noqa: S608
+        # _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated.
+        sa.text(f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule ORDER BY kind")  # noqa: S608 — _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated
     )
     rows = result.fetchall()
 
@@ -296,7 +304,7 @@ async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
 
 @router.get("/settings", response_model=SettingsResponse)
 async def get_settings(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> SettingsResponse:
     """Return all schedule settings in the frontend-expected shape."""
@@ -306,7 +314,7 @@ async def get_settings(
 @router.patch("/settings", response_model=SettingsResponse)
 async def patch_settings(
     body: SettingsPatch,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> SettingsResponse:
     """Update schedule settings (optimistic-lock on revision)."""
@@ -346,7 +354,8 @@ async def patch_settings(
             if len(sets) > 1:  # more than just the revision bump
                 await db.execute(
                     sa.text(
-                        "UPDATE schedule SET "  # noqa: S608
+                        # sets is a fixed ":param" vocabulary; values are bound, never interpolated.
+                        "UPDATE schedule SET "  # noqa: S608 — sets is a fixed ":param" vocabulary; values are bound, never interpolated
                         + ", ".join(sets)
                         + " WHERE kind = :kind"
                     ),
@@ -365,7 +374,7 @@ async def patch_settings(
 @router.get("/settings/schedules/{kind}", response_model=ScheduleRead)
 async def get_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Return a single schedule by kind, or 404."""
@@ -382,7 +391,7 @@ async def get_schedule_route(
 async def patch_schedule(
     kind: str,
     body: ScheduleUpdate,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Update configurable schedule fields."""
@@ -416,7 +425,7 @@ async def patch_schedule(
 @router.post("/settings/schedules/{kind}/pause", response_model=ScheduleRead)
 async def pause_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Pause a schedule (sets paused_at = now())."""
@@ -434,7 +443,7 @@ async def pause_schedule_route(
 @router.post("/settings/schedules/{kind}/resume", response_model=ScheduleRead)
 async def resume_schedule_route(
     kind: str,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> ScheduleRead:
     """Resume a paused schedule (clears paused_at)."""
@@ -457,7 +466,7 @@ async def resume_schedule_route(
 @router.post("/jobs", response_model=JobRef, status_code=http_status.HTTP_202_ACCEPTED)
 async def trigger_job(
     body: TriggerJobInput,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> JobRef:
     """Queue an immediate job run, coalescing if one is already queued or active.
@@ -532,7 +541,7 @@ async def trigger_job(
 
 @router.get("/jobs", response_model=JobsListResponse)
 async def list_jobs(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     kind: str | None = None,
     cursor: str | None = None,
@@ -553,11 +562,11 @@ async def list_jobs(
     if cursor is not None:
         try:
             cursor_uuid = uuid.UUID(cursor)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="cursor is not a valid UUID",
-            )
+            ) from exc
         # Keyset pagination: strictly-older-than the cursor row, tie-broken by
         # id since bulk-enqueued jobs can share the same created_at value.
         conditions.append(
@@ -569,13 +578,14 @@ async def list_jobs(
 
     rows_result = await db.execute(
         sa.text(
+            # where_clause is a fixed ":param" vocabulary; values are bound, never interpolated.
             f"""
             SELECT id, kind, status, retry_count, error,
                    claimed_at, completed_at, created_at
             FROM job_run {where_clause}
             ORDER BY created_at DESC, id DESC
             LIMIT :limit
-            """  # noqa: S608
+            """  # noqa: S608 — where_clause is a fixed ":param" vocabulary; values are bound, never interpolated
         ),
         params,
     )
@@ -596,7 +606,7 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=JobRunResponse)
 async def get_job(
     job_id: uuid.UUID,
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> JobRunResponse:
     """Return a single job run by ID, or 404."""
@@ -622,7 +632,7 @@ async def get_job(
 @router.post("/jobs/{job_id}/cancel", status_code=http_status.HTTP_202_ACCEPTED)
 async def cancel_job(
     job_id: uuid.UUID,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
     """Cancel a pending or in-progress job.
@@ -657,7 +667,7 @@ async def cancel_job(
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
     """Return system operational status in the frontend-expected shape."""
@@ -707,7 +717,7 @@ async def get_status(
 
 @router.get("/exports/portfolio")
 async def export_portfolio(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     format: str = Query(default="json", pattern="^(json|csv)$"),
 ) -> StreamingResponse:
@@ -749,7 +759,7 @@ def _parse_export_date(value: str | None, param: str) -> datetime | None:
 
 @router.get("/exports/history")
 async def export_history(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     format: str = Query(default="json", pattern="^(json|csv)$"),
     from_: str | None = Query(default=None, alias="from"),
@@ -804,7 +814,7 @@ class PurgeResult(BaseModel):
 
 @router.get("/data/provider-purge-preview", response_model=PurgePreviewResponse)
 async def get_purge_preview(
-    _session: Annotated[Any, Depends(_require_session)],
+    _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     provider: str = Query(...),
 ) -> PurgePreviewResponse:
@@ -821,7 +831,7 @@ async def get_purge_preview(
 @router.post("/data/provider-purge", response_model=PurgeResult)
 async def post_provider_purge(
     body: PurgeInput,
-    _session: Annotated[Any, Depends(_require_csrf)],
+    _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> PurgeResult:
     """Execute a password-protected provider-data purge."""

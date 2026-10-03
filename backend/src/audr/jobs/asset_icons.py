@@ -72,14 +72,10 @@ async def handle_asset_icon_refresh(session: AsyncSession, run_id: uuid.UUID) ->
     async with httpx.AsyncClient(follow_redirects=True) as client:
         for asset_id, token_address in candidates:
             try:
-                icon = await _resolve_icon(
-                    client, token_address, rate_limiter=rate_limiter
-                )
+                icon = await _resolve_icon(client, token_address, rate_limiter=rate_limiter)
             except IconRateLimitedError:
                 rate_limited += 1
-                logger.info(
-                    "asset_icon_refresh rate limited asset=%s run_id=%s", asset_id, run_id
-                )
+                logger.info("asset_icon_refresh rate limited asset=%s run_id=%s", asset_id, run_id)
                 continue
 
             if icon is not None:

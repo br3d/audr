@@ -99,7 +99,7 @@ class CoinMarketCapProvider:
         # delay is deliberately higher than RetryPolicy()'s 1.0s.
         self._retry_policy = retry_policy or RetryPolicy(base_delay_s=4.0, max_delay_s=60.0)
 
-    async def __aenter__(self) -> "CoinMarketCapProvider":
+    async def __aenter__(self) -> CoinMarketCapProvider:
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -196,9 +196,7 @@ class CoinMarketCapProvider:
         CoinGeckoProvider.get_prices' unknown-token contract.
         """
         erc20 = [a.lower() for a in token_addresses if not is_native_eth(a)]
-        wants_eth = include_eth or any(
-            is_native_eth(a) for a in token_addresses
-        )
+        wants_eth = include_eth or any(is_native_eth(a) for a in token_addresses)
 
         resolved: dict[str, int] = await self._resolver(erc20) if erc20 else {}
 

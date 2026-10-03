@@ -37,7 +37,8 @@ def upgrade() -> None:
     op.execute("UPDATE valuation_snapshot SET input_key = id::text WHERE input_key IS NULL")
     op.execute("ALTER TABLE valuation_snapshot ALTER COLUMN input_key SET NOT NULL")
     op.execute(
-        "ALTER TABLE valuation_snapshot ADD CONSTRAINT uq_valuation_snapshot_input_key UNIQUE (input_key)"
+        "ALTER TABLE valuation_snapshot ADD CONSTRAINT uq_valuation_snapshot_input_key"
+        " UNIQUE (input_key)"
     )
 
 

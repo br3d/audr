@@ -15,9 +15,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from tests.fixtures.quotes import CoinGeckoStub, quotes_mock  # noqa: F401
-from tests.fixtures.rpc import EthRpcStub, rpc_mock, rpc_url  # noqa: F401
-from tests.fixtures.seed import (  # noqa: F401
+from tests.fixtures.quotes import CoinGeckoStub, quotes_mock  # noqa: F401 — re-exported fixture
+from tests.fixtures.rpc import EthRpcStub, rpc_mock, rpc_url  # noqa: F401 — re-exported fixture
+from tests.fixtures.seed import (  # noqa: F401 — re-exported fixtures
     AAVE_ADDRESS,
     BUTERIN_ADDRESS,
     BUTERIN_LABEL,
@@ -52,9 +52,7 @@ def _test_db_url() -> str:
     # TEST_DATABASE_URL takes precedence; fall back to DATABASE_URL (set in CI compose),
     # then the local dev default.
     return (
-        os.environ.get(_TEST_DB_URL_ENV)
-        or os.environ.get("DATABASE_URL")
-        or _DEFAULT_TEST_DB_URL
+        os.environ.get(_TEST_DB_URL_ENV) or os.environ.get("DATABASE_URL") or _DEFAULT_TEST_DB_URL
     )
 
 

@@ -66,10 +66,7 @@ class SystemStatus:
 
     @property
     def healthy(self) -> bool:
-        return (
-            self.migration.status == ComponentStatus.OK
-            and self.key.status == ComponentStatus.OK
-        )
+        return self.migration.status == ComponentStatus.OK and self.key.status == ComponentStatus.OK
 
     @property
     def ready(self) -> bool:

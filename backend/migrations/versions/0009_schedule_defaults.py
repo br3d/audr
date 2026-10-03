@@ -47,10 +47,10 @@ def upgrade() -> None:
             INSERT INTO schedule (id, kind, enabled, freshness_s)
             VALUES (gen_random_uuid(), '{kind}', true, {freshness_s})
             ON CONFLICT (kind) DO NOTHING
-            """
+            """  # noqa: S608 -- kind/freshness_s come from the hardcoded _DEFAULT_FRESHNESS_S dict above, not user input
         )
 
 
 def downgrade() -> None:
     kinds = ", ".join(f"'{kind}'" for kind in _DEFAULT_FRESHNESS_S)
-    op.execute(f"DELETE FROM schedule WHERE kind IN ({kinds})")
+    op.execute(f"DELETE FROM schedule WHERE kind IN ({kinds})")  # noqa: S608 -- kinds are hardcoded dict keys, not user input

@@ -33,16 +33,10 @@ class QuoteObservation(Base):
     __tablename__ = "quote_observation"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    quote_set_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("quote_set.id"), nullable=False
-    )
-    asset_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("asset.id"), nullable=False
-    )
+    quote_set_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("quote_set.id"), nullable=False)
+    asset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("asset.id"), nullable=False)
     # Exact USD price: 36 total digits, 18 decimal places.
-    price_usd: Mapped[object] = mapped_column(
-        Numeric(precision=36, scale=18), nullable=False
-    )
+    price_usd: Mapped[object] = mapped_column(Numeric(precision=36, scale=18), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -58,9 +52,7 @@ class ValuationSnapshot(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     quality: Mapped[str] = mapped_column(Text, nullable=False)
-    published_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -79,23 +71,13 @@ class ValuationLine(Base):
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("valuation_snapshot.id"), nullable=False
     )
-    wallet_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("wallet.id"), nullable=False
-    )
-    asset_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("asset.id"), nullable=False
-    )
-    raw_amount: Mapped[object] = mapped_column(
-        Numeric(precision=78, scale=0), nullable=False
-    )
+    wallet_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("wallet.id"), nullable=False)
+    asset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("asset.id"), nullable=False)
+    raw_amount: Mapped[object] = mapped_column(Numeric(precision=78, scale=0), nullable=False)
     block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # NULL when price was not available at snapshot time (unknown ≠ zero).
-    price_usd: Mapped[object | None] = mapped_column(
-        Numeric(precision=36, scale=18), nullable=True
-    )
-    value_usd: Mapped[object | None] = mapped_column(
-        Numeric(precision=36, scale=18), nullable=True
-    )
+    price_usd: Mapped[object | None] = mapped_column(Numeric(precision=36, scale=18), nullable=True)
+    value_usd: Mapped[object | None] = mapped_column(Numeric(precision=36, scale=18), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

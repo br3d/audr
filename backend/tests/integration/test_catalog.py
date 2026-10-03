@@ -39,9 +39,7 @@ async def test_import_catalog_reads_vendored_tokens(db_session: AsyncSession) ->
     assert version.entry_count > 300, "vendored Uniswap mainnet list should have hundreds of tokens"
 
     rows = await db_session.execute(
-        sa.text(
-            "SELECT token_address FROM catalog_entry WHERE version_id = :vid"
-        ),
+        sa.text("SELECT token_address FROM catalog_entry WHERE version_id = :vid"),
         {"vid": str(version.id)},
     )
     addresses = {r[0] for r in rows}
@@ -58,9 +56,7 @@ async def test_import_catalog_is_idempotent(db_session: AsyncSession) -> None:
 
     assert first.id == second.id
 
-    count = await db_session.execute(
-        sa.text("SELECT COUNT(*) FROM catalog_version")
-    )
+    count = await db_session.execute(sa.text("SELECT COUNT(*) FROM catalog_version"))
     assert count.scalar() == 1
 
 
@@ -131,8 +127,7 @@ async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label, status) "
-            "VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
         ),
         {"id": str(wallet_id), "addr": address.lower()},
     )

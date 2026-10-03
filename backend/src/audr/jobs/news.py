@@ -36,9 +36,7 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Fetch recent news and cache articles that mention a held asset."""
     api_key = await get_coingecko_api_key(session)
     if not api_key:
-        logger.warning(
-            "news_refresh skipped — no CoinGecko API key configured run_id=%s", run_id
-        )
+        logger.warning("news_refresh skipped — no CoinGecko API key configured run_id=%s", run_id)
         return
 
     assets = await _get_held_assets(session)
@@ -54,9 +52,7 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         async with CoinGeckoProvider(api_key=api_key) as provider:
             articles = await provider.get_news()
     except CoinGeckoError as exc:
-        logger.warning(
-            "news_refresh provider error run_id=%s: %s", run_id, exc
-        )
+        logger.warning("news_refresh provider error run_id=%s: %s", run_id, exc)
         return
 
     inserted = 0
@@ -120,9 +116,7 @@ async def _fetched_recently(session: AsyncSession) -> bool:
     return datetime.now(tz=UTC) - last_fetch < _MIN_REFRESH_INTERVAL
 
 
-async def _insert_news(
-    session: AsyncSession, *, asset_id: uuid.UUID, article: NewsItem
-) -> int:
+async def _insert_news(session: AsyncSession, *, asset_id: uuid.UUID, article: NewsItem) -> int:
     result = await session.execute(
         sa.text(
             """

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
+from audr.wallets.models import Wallet
 from audr.wallets.service import (
     InvalidAddressError,
     WalletAlreadyExistsError,
@@ -26,7 +27,6 @@ from audr.wallets.service import (
     set_label,
     stop_wallet,
 )
-from audr.wallets.models import Wallet
 
 router = APIRouter(prefix="/api/v1")
 
@@ -110,11 +110,11 @@ async def get_wallets(
     if cursor is not None:
         try:
             cursor_uuid = uuid.UUID(cursor)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="cursor is not a valid UUID",
-            )
+            ) from exc
 
     wallets, next_cursor = await list_wallets_page(db, cursor=cursor_uuid, limit=limit)
     now = datetime.now(tz=UTC)

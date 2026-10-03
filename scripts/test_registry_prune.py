@@ -213,9 +213,7 @@ def test_read_env_tags():
 
 
 def main():
-    tests = [
-        (n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)
-    ]
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
     for name, fn in tests:
         try:

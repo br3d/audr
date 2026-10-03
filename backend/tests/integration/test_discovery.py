@@ -16,6 +16,14 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from audr.jobs.__main__ import _discover_for_active_wallets
+from audr.jobs.store import (
+    JobKind,
+    claim_job,
+)
+from audr.portfolio.balances import get_holdings, record_balance
 from audr.portfolio.discovery import (
     DiscoveryResult,
     discover_tokens,
@@ -23,14 +31,6 @@ from audr.portfolio.discovery import (
     persist_discovery_candidates,
     save_discovery_checkpoint,
 )
-from audr.portfolio.balances import get_holdings, record_balance
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from audr.jobs.store import (
-    JobKind,  # noqa: F401
-    claim_job,  # noqa: F401
-)
-from audr.jobs.__main__ import _discover_for_active_wallets
 
 
 @pytest.mark.integration
@@ -110,8 +110,7 @@ async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label, status) "
-            "VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
         ),
         {"id": str(wallet_id), "addr": address.lower()},
     )
@@ -180,9 +179,7 @@ async def test_persist_is_idempotent(db_session: AsyncSession) -> None:
 
     from audr.portfolio.discovery import DiscoveryCandidate
 
-    candidates = [
-        DiscoveryCandidate(token_address=token_addr, source="manual")
-    ]
+    candidates = [DiscoveryCandidate(token_address=token_addr, source="manual")]
     first = await persist_discovery_candidates(
         db_session, wallet_address=wallet_addr, candidates=candidates
     )
@@ -244,9 +241,7 @@ async def test_discover_persist_scan_shows_holdings(
 
     # Holdings should now include the token
     holdings = await get_holdings(db_session, wallet_address=wallet_addr)
-    match = next(
-        (h for h in holdings if h.token_address.lower() == token_addr.lower()), None
-    )
+    match = next((h for h in holdings if h.token_address.lower() == token_addr.lower()), None)
     assert match is not None
     assert match.raw_amount == 500_000_000_000_000_000
 

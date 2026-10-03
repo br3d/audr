@@ -17,7 +17,6 @@ from audr.portfolio.history import materialize_history_point
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
 from audr.portfolio.snapshot import _compute_quality, publish_valuation_snapshot
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -113,7 +112,8 @@ async def _insert_quote_set(
     )
     await session.execute(
         sa.text(
-            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd) VALUES (:id, :qset, :asset, :price)"
+            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd)"
+            " VALUES (:id, :qset, :asset, :price)"
         ),
         {
             "id": str(uuid.uuid4()),
@@ -232,7 +232,9 @@ class TestComputeQuality:
         unavailable_holding = HoldingRow(
             uuid.uuid4(), aid2, uuid.uuid4(), "0x" + "b" * 40, 1, 1, 18, price_unavailable=True
         )
-        never_asked_holding = HoldingRow(uuid.uuid4(), aid3, uuid.uuid4(), "0x" + "c" * 40, 1, 1, 18)
+        never_asked_holding = HoldingRow(
+            uuid.uuid4(), aid3, uuid.uuid4(), "0x" + "c" * 40, 1, 1, 18
+        )
         quality, priced = _compute_quality(
             [priced_holding, unavailable_holding, never_asked_holding], {aid1: Decimal("1")}
         )
@@ -276,7 +278,9 @@ async def test_publish_snapshot_value_usd_exact(db_session: AsyncSession) -> Non
     wallet_id = await _insert_wallet(db_session, "0x" + "3" * 40)
     asset_id = await _insert_asset(db_session, token_address="0x" + "4" * 40, decimals=6)
     # 500 USDC (6 decimals)
-    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=500_000_000)
+    await _insert_balance(
+        db_session, wallet_id=wallet_id, asset_id=asset_id, raw_amount=500_000_000
+    )
     await _insert_quote_set(db_session, asset_id=asset_id, price_usd=Decimal("1"))
     await db_session.flush()
 
@@ -396,12 +400,8 @@ async def test_publish_snapshot_provider_confirmed_gap_is_quality_gaps(
 async def test_publish_snapshot_excluded_asset_omitted(db_session: AsyncSession) -> None:
     """Excluded assets are not included in the snapshot."""
     wallet_id = await _insert_wallet(db_session, "0x" + "7" * 40)
-    included_id = await _insert_asset(
-        db_session, token_address="0x" + "8" * 40, excluded=False
-    )
-    excluded_id = await _insert_asset(
-        db_session, token_address="0x" + "9" * 40, excluded=True
-    )
+    included_id = await _insert_asset(db_session, token_address="0x" + "8" * 40, excluded=False)
+    excluded_id = await _insert_asset(db_session, token_address="0x" + "9" * 40, excluded=True)
     await _insert_balance(db_session, wallet_id=wallet_id, asset_id=included_id, raw_amount=10**18)
     await _insert_balance(db_session, wallet_id=wallet_id, asset_id=excluded_id, raw_amount=10**18)
     await _insert_quote_set(db_session, asset_id=included_id, price_usd=Decimal("100"))
@@ -454,7 +454,9 @@ async def test_stale_balance_uses_latest_observation(db_session: AsyncSession) -
     result = await publish_valuation_snapshot(db_session)
 
     line_row = await db_session.execute(
-        sa.text("SELECT raw_amount::text, block_number FROM valuation_line WHERE snapshot_id = :snap"),
+        sa.text(
+            "SELECT raw_amount::text, block_number FROM valuation_line WHERE snapshot_id = :snap"
+        ),
         {"snap": str(result.snapshot_id)},
     )
     row = line_row.first()
@@ -569,14 +571,10 @@ async def test_publish_snapshot_retry_same_inputs_does_not_add_history(
     assert second.snapshot_id == first.snapshot_id
     await materialize_history_point(db_session, snapshot_id=second.snapshot_id)
 
-    snapshot_count = await db_session.execute(
-        sa.text("SELECT COUNT(*) FROM valuation_snapshot")
-    )
+    snapshot_count = await db_session.execute(sa.text("SELECT COUNT(*) FROM valuation_snapshot"))
     assert snapshot_count.scalar_one() == 1
 
-    history_count = await db_session.execute(
-        sa.text("SELECT COUNT(*) FROM history_point")
-    )
+    history_count = await db_session.execute(sa.text("SELECT COUNT(*) FROM history_point"))
     assert history_count.scalar_one() == 1
 
 

@@ -160,10 +160,8 @@ def _summarise(samples_ms: list[float]) -> dict[str, float]:
 
 def _git_commit() -> str:
     try:
-        out = subprocess.run(  # noqa: S603
-            # noqa: S607 — resolving git from PATH is intended; this only stamps
-            # the report with the commit under test.
-            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],  # noqa: S607
+        out = subprocess.run(  # noqa: S603 — fixed argv, shell=False; this only stamps the report with the commit under test
+            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],  # noqa: S607 — resolving `git` from PATH is intended here
             capture_output=True,
             text=True,
             timeout=10,
@@ -241,7 +239,8 @@ async def _row_counts(session: AsyncSession) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     for table in _COUNT_TABLES:
-        result = await session.execute(sa.text(f"SELECT COUNT(*) FROM {table}"))  # noqa: S608
+        # table comes from the hardcoded _COUNT_TABLES tuple above, not user input.
+        result = await session.execute(sa.text(f"SELECT COUNT(*) FROM {table}"))  # noqa: S608 — table comes from the hardcoded _COUNT_TABLES tuple above, not user input
         counts[table] = int(result.scalar_one())
     return counts
 
@@ -278,7 +277,8 @@ async def _truncate_all(session: AsyncSession) -> None:
     if not tables:
         return
     quoted = ", ".join(f'"{t}"' for t in tables)
-    await session.execute(sa.text(f"TRUNCATE {quoted} CASCADE"))  # noqa: S608
+    # tables/quoted come from information_schema.tables, not user input, and are identifier-quoted.
+    await session.execute(sa.text(f"TRUNCATE {quoted} CASCADE"))  # noqa: S608 — tables/quoted come from information_schema.tables, not user input, and are identifier-quoted
 
 
 def _guard_destructive(db_url: str, *, force: bool) -> None:
@@ -304,7 +304,6 @@ async def _measure_latency(
 ) -> dict[str, Any]:
     import httpx
     import sqlalchemy as sa
-
     from audr.api.app import app
     from audr.db import get_db
 
@@ -317,8 +316,9 @@ async def _measure_latency(
     # under measurement, so clear them unconditionally.
     async with factory() as session:
         async with session.begin():
+            # table is one of the three hardcoded literals in this tuple, not user input.
             for table in ("session", "login_attempt", "owner"):
-                await session.execute(sa.text(f"DELETE FROM {table}"))  # noqa: S608
+                await session.execute(sa.text(f"DELETE FROM {table}"))  # noqa: S608 — table is one of the three hardcoded literals in this tuple, not user input
 
     app.dependency_overrides[get_db] = _override
     try:
@@ -391,7 +391,6 @@ async def _measure_latency(
 
 async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> dict[str, Any]:
     import sqlalchemy as sa
-
     from audr.assets.catalog import import_catalog
     from audr.config import get_settings
     from audr.jobs import __main__ as jobs_main
@@ -453,9 +452,9 @@ async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> d
     original_call_raw = RpcReader._call_raw
     original_record = jobs_main.record_balance
 
-    # ANN401: `Any` mirrors the real RpcReader._call_raw signature — results are
-    # per-method JSON (str, dict or list) and callers narrow them themselves.
-    async def _counting_call_raw(self: object, method: str, params: list) -> Any:  # noqa: ARG001, ANN401
+    # self/params are unused but required to match the patched RpcReader._call_raw
+    # signature; Any mirrors its real per-method JSON (str, dict or list) return type.
+    async def _counting_call_raw(self: object, method: str, params: list) -> Any:
         counts[method] += 1
         try:
             return _STUB_RESULTS[method]
@@ -533,7 +532,6 @@ async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> d
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     import sqlalchemy as sa
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
     from tests.fixtures.history_scale import generate as generate_scale_fixture
 
     engine = create_async_engine(args.db_url, echo=False)

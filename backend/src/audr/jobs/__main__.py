@@ -19,7 +19,6 @@ from audr.assets.constants import NATIVE_ETH_ADDRESS
 from audr.db import _get_session_factory
 from audr.jobs.asset_icons import handle_asset_icon_refresh
 from audr.jobs.canonicality import recheck_canonicality
-from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
 from audr.jobs.policy import get_shared_rpc_rate_limiter
@@ -27,6 +26,7 @@ from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import JobKind, get_job_params, upsert_worker_status
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
+from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.portfolio.balances import record_balance
 from audr.portfolio.discovery import (
     discover_tokens,
@@ -61,9 +61,7 @@ async def _scoped_wallet_id(session: AsyncSession, *, run_id: uuid.UUID) -> uuid
     return uuid.UUID(params["wallet_id"])
 
 
-async def _resolve_scoped_wallet(
-    session: AsyncSession, *, wallet_id: uuid.UUID
-) -> Wallet | None:
+async def _resolve_scoped_wallet(session: AsyncSession, *, wallet_id: uuid.UUID) -> Wallet | None:
     """Return the scoped wallet if it still exists and is active, else None."""
     wallet = await get_wallet(session, wallet_id=wallet_id)
     if wallet is None or wallet.status != "active":
@@ -410,14 +408,12 @@ async def _main() -> None:
 
         # Liveness heartbeat: GET /api/v1/status reads the newest worker_status
         # row and reports "unknown" when the table is empty (AUD-318).
-        await _record_worker_status(
-            factory, process_worker_id, "running" if did_work else "idle"
-        )
+        await _record_worker_status(factory, process_worker_id, "running" if did_work else "idle")
 
         if not did_work:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=_POLL_INTERVAL_S)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     await _record_worker_status(factory, process_worker_id, "stopped")

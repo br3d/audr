@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -317,35 +316,25 @@ async def _insert_event(
 async def _get_active_wallets(
     session: AsyncSession,
 ) -> list[tuple[uuid.UUID, str]]:
-    rows = await session.execute(
-        sa.text("SELECT id, address FROM wallet WHERE status = 'active'")
-    )
+    rows = await session.execute(sa.text("SELECT id, address FROM wallet WHERE status = 'active'"))
     return [(uuid.UUID(str(row[0])), str(row[1])) for row in rows.fetchall()]
 
 
 async def _get_tracked_token_addresses(session: AsyncSession) -> list[str]:
-    rows = await session.execute(
-        sa.text("SELECT token_address FROM asset WHERE excluded = false")
-    )
+    rows = await session.execute(sa.text("SELECT token_address FROM asset WHERE excluded = false"))
     return [str(row[0]) for row in rows.fetchall()]
 
 
-async def _get_checkpoint(
-    session: AsyncSession, wallet_id: uuid.UUID
-) -> int | None:
+async def _get_checkpoint(session: AsyncSession, wallet_id: uuid.UUID) -> int | None:
     row = await session.execute(
-        sa.text(
-            "SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"
-        ),
+        sa.text("SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"),
         {"wid": str(wallet_id)},
     )
     result = row.first()
     return int(result[0]) if result else None
 
 
-async def _upsert_checkpoint(
-    session: AsyncSession, wallet_id: uuid.UUID, block: int
-) -> None:
+async def _upsert_checkpoint(session: AsyncSession, wallet_id: uuid.UUID, block: int) -> None:
     await session.execute(
         sa.text(
             """
@@ -357,5 +346,3 @@ async def _upsert_checkpoint(
         ),
         {"wid": str(wallet_id), "block": block},
     )
-
-

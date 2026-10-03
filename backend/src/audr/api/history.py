@@ -22,12 +22,11 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
+from audr.api.auth import _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.history_query import (
     MAX_POINTS,
-    Period,
     SnapshotDetail,
     get_snapshot_detail,
     query_history,
@@ -109,11 +108,11 @@ async def get_history(
     if cursor is not None:
         try:
             cursor_uuid = uuid.UUID(cursor)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="cursor is not a valid UUID",
-            )
+            ) from exc
 
     page = await query_history(
         db,
@@ -126,9 +125,7 @@ async def get_history(
         HistoryEntryResponse(
             snapshot_id=str(e.snapshot_id) if not e.is_gap_marker else None,
             snapshotted_at=e.snapshotted_at.isoformat(),
-            total_value_usd=(
-                _fmt(e.total_value_usd) if e.total_value_usd is not None else None
-            ),
+            total_value_usd=(_fmt(e.total_value_usd) if e.total_value_usd is not None else None),
             quality=e.quality,
             included_wallet_count=e.included_wallet_count,
             included_asset_count=e.included_asset_count,
@@ -162,9 +159,7 @@ async def get_history_snapshot(
     Each line includes observation_id for exact balance provenance.  Lines are
     ordered by value_usd descending (unknown values last).
     """
-    detail: SnapshotDetail | None = await get_snapshot_detail(
-        db, snapshot_id=snapshot_id
-    )
+    detail: SnapshotDetail | None = await get_snapshot_detail(db, snapshot_id=snapshot_id)
     if detail is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,

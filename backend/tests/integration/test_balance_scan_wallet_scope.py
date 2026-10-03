@@ -36,7 +36,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for tbl in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608
+                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608 — tbl comes from the hardcoded _CLEAN_ORDER tuple above, not user input
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +54,7 @@ class _FakeRpcReader:
     def __init__(self, **_kwargs: Any) -> None:
         self.calls: list[tuple[str, ...]] = []
 
-    async def __aenter__(self) -> "_FakeRpcReader":
+    async def __aenter__(self) -> _FakeRpcReader:
         return self
 
     async def __aexit__(self, *_exc_info: object) -> bool:
@@ -119,13 +119,17 @@ async def test_handle_balance_scan_scoped_to_one_wallet(
 
     async with db_session_factory() as session:
         rows = (
-            await session.execute(
-                text(
-                    "SELECT w.address FROM balance_observation bo"
-                    " JOIN wallet w ON w.id = bo.wallet_id"
+            (
+                await session.execute(
+                    text(
+                        "SELECT w.address FROM balance_observation bo"
+                        " JOIN wallet w ON w.id = bo.wallet_id"
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert set(rows) == {_WALLET_A}
 
 

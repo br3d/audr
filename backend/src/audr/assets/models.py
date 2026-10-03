@@ -5,7 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, SmallInteger, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,7 +33,9 @@ class Asset(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     decimals: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     source: Mapped[str] = mapped_column(Text, nullable=False)
-    excluded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    excluded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     decimals_override: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     price_unavailable_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -72,9 +84,7 @@ class CatalogEntry(Base):
     __tablename__ = "catalog_entry"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    version_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("catalog_version.id"), nullable=False
-    )
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("catalog_version.id"), nullable=False)
     token_address: Mapped[str] = mapped_column(Text, nullable=False)
     symbol: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -100,9 +110,7 @@ class CmcMapEntry(Base):
     __tablename__ = "cmc_map_entry"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    version_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("cmc_map_version.id"), nullable=False
-    )
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cmc_map_version.id"), nullable=False)
     cmc_id: Mapped[int] = mapped_column(Integer, nullable=False)
     symbol: Mapped[str] = mapped_column(Text, nullable=False)
     # The token's address on Ethereum mainnet (platform.id == 1 in the CMC

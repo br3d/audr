@@ -67,19 +67,17 @@ async def get_asset_news(
         )
     try:
         asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="asset_id is not a valid UUID",
-        )
+        ) from exc
 
     exists = await db.execute(
         sa.text("SELECT 1 FROM asset WHERE id = :id"), {"id": str(asset_uuid)}
     )
     if exists.first() is None:
-        raise HTTPException(
-            status_code=http_status.HTTP_404_NOT_FOUND, detail="asset not found"
-        )
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="asset not found")
 
     count_row = await db.execute(
         sa.text("SELECT COUNT(*) FROM asset_news WHERE asset_id = :id"),

@@ -31,7 +31,7 @@ def upgrade() -> None:
         f"""
         UPDATE schedule SET freshness_s = {_NEW_S}
         WHERE kind = 'balance_scan' AND freshness_s = {_OLD_S}
-        """
+        """  # noqa: S608 -- _OLD_S/_NEW_S are hardcoded module constants, not user input
     )
 
 
@@ -40,5 +40,5 @@ def downgrade() -> None:
         f"""
         UPDATE schedule SET freshness_s = {_OLD_S}
         WHERE kind = 'balance_scan' AND freshness_s = {_NEW_S}
-        """
+        """  # noqa: S608 -- _OLD_S/_NEW_S are hardcoded module constants, not user input
     )

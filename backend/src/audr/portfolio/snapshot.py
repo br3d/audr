@@ -91,7 +91,8 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
     await session.execute(
         sa.text(
             """
-            INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, created_at, input_key)
+            INSERT INTO valuation_snapshot
+              (id, snapshotted_at, quality, published_at, created_at, input_key)
             VALUES (:id, :now, :quality, :now, :now, :input_key)
             """
         ),
@@ -114,7 +115,8 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
                   (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,
                    block_time, price_usd, value_usd, observation_id, created_at)
                 VALUES
-                  (:id, :snap, :wallet, :asset, :raw, :block, :block_time, :price, :value, :obs, :now)
+                  (:id, :snap, :wallet, :asset, :raw, :block, :block_time,
+                   :price, :value, :obs, :now)
                 """
             ),
             {
@@ -361,7 +363,5 @@ def _compute_quality(
     if priced == len(holdings):
         return "complete", priced
 
-    never_asked = any(
-        h.asset_id not in prices and not h.price_unavailable for h in holdings
-    )
+    never_asked = any(h.asset_id not in prices and not h.price_unavailable for h in holdings)
     return ("partial" if never_asked else "gaps"), priced

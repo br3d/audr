@@ -1,4 +1,6 @@
-"""Exceptional host password-reset command: revokes sessions, never replaces encryption keys (T087 / US4)."""
+"""Exceptional host password-reset command: revokes sessions, never replaces
+encryption keys (T087 / US4).
+"""
 
 from __future__ import annotations
 
@@ -43,22 +45,19 @@ async def reset_password(session: AsyncSession, *, new_password: str) -> dict:  
     # Step 4: Update the owner row.
     now = datetime.now(UTC)
     await session.execute(
-        sa.text(
-            "UPDATE owner SET argon2_hash = :hash, updated_at = :now WHERE id = :id"
-        ),
+        sa.text("UPDATE owner SET argon2_hash = :hash, updated_at = :now WHERE id = :id"),
         {"hash": new_hash, "now": now, "id": owner_id},
     )
 
     # Step 5: Count non-revoked sessions before revoking them.
-    result = await session.execute(
-        sa.text("SELECT COUNT(*) FROM session WHERE revoked = false")
-    )
+    result = await session.execute(sa.text("SELECT COUNT(*) FROM session WHERE revoked = false"))
     sessions_revoked: int = int(result.scalar() or 0)
 
     # Step 6: Mark all sessions as revoked.
     await session.execute(sa.text("UPDATE session SET revoked = true"))
 
-    # key_state is intentionally NOT touched here — encryption keys must never be replaced on password reset
+    # key_state is intentionally NOT touched here — encryption keys must never
+    # be replaced on password reset
 
     await session.commit()
 

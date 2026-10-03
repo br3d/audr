@@ -71,9 +71,7 @@ async def test_master_key_is_stable_across_calls(
 
 
 @pytest.mark.integration
-async def test_init_key_is_idempotent(
-    db_session: AsyncSession, test_secret_key: str
-) -> None:
+async def test_init_key_is_idempotent(db_session: AsyncSession, test_secret_key: str) -> None:
     """Calling init_key twice must not change the stored key or raise an error."""
     await init_key(db_session)
     key_first = await get_master_key(db_session)

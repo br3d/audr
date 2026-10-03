@@ -181,9 +181,7 @@ async def get_valid_session(db: AsyncSession, session_id: UUID) -> Session | Non
 
 async def revoke_session(db: AsyncSession, session_id: UUID) -> None:
     """Mark *session_id* as revoked (logout)."""
-    await db.execute(
-        update(Session).where(Session.id == session_id).values(revoked=True)
-    )
+    await db.execute(update(Session).where(Session.id == session_id).values(revoked=True))
     await db.commit()
 
 

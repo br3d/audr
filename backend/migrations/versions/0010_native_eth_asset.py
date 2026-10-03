@@ -113,13 +113,12 @@ def upgrade() -> None:
             if _table_exists(conn, table):
                 conn.execute(
                     sa.text(
-                        f"UPDATE {table} SET asset_id = :new WHERE asset_id = :old"  # noqa: S608
+                        # table is from the hardcoded _ASSET_REFERENCES tuple above, not user input.
+                        f"UPDATE {table} SET asset_id = :new WHERE asset_id = :old"  # noqa: S608 — table is from the hardcoded _ASSET_REFERENCES tuple above, not user input
                     ),
                     {"new": canonical_id, "old": legacy_id},
                 )
-        conn.execute(
-            sa.text("DELETE FROM asset WHERE id = :id"), {"id": legacy_id}
-        )
+        conn.execute(sa.text("DELETE FROM asset WHERE id = :id"), {"id": legacy_id})
 
 
 def downgrade() -> None:

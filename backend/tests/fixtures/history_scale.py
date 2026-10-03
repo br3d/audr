@@ -314,7 +314,7 @@ def _choose_pairs(
     # Deterministic pseudorandom selection via hash-based index.
     i = 0
     while len(pairs) < HELD_PAIR_COUNT:
-        h = int(hashlib.md5(f"{i}".encode()).hexdigest(), 16)  # noqa: S324
+        h = int(hashlib.md5(f"{i}".encode()).hexdigest(), 16)  # noqa: S324 — deterministic index derivation, not a security use of the hash
         w = wallets[h % WALLET_COUNT]
         a, dec = assets[(h // WALLET_COUNT) % ASSET_COUNT]
         if (w, a) not in seen:

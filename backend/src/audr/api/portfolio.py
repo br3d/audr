@@ -6,6 +6,7 @@ valuation snapshot, matching the PortfolioResponse contract shape.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -20,7 +21,9 @@ from audr.api.auth import _require_session
 from audr.assets.constants import is_native_eth
 from audr.auth.models import Session
 from audr.db import get_db
-from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
+from audr.portfolio.money import format_decimal, raw_to_quantity
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -235,7 +238,7 @@ async def get_portfolio(
             WHERE vl.snapshot_id = :snap_id
               {wallet_filter}
             ORDER BY vl.value_usd DESC NULLS LAST
-            """
+            """  # noqa: S608 -- wallet_filter is a fixed ":param" fragment; the value is bound, never interpolated
         ),
         {"snap_id": snapshot_id, **({"wallet_id": wallet_id} if wallet_id else {})},
     )
@@ -280,7 +283,13 @@ async def get_portfolio(
                 qty = raw_to_quantity(int(raw_amount_str), decimals_val)
                 quantity_str = format_decimal(qty)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to compute quantity for asset %s (raw_amount=%r, decimals=%r)",
+                    token_address,
+                    raw_amount_str,
+                    decimals_val,
+                    exc_info=True,
+                )
 
         price_usd_str: str | None = line["price_usd"]
         value_usd_str: str | None = line["value_usd"]
@@ -289,19 +298,27 @@ async def get_portfolio(
             try:
                 priced_subtotal += Decimal(value_usd_str)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to parse value_usd %r for asset %s; excluded from priced_subtotal",
+                    value_usd_str,
+                    token_address,
+                    exc_info=True,
+                )
 
         block_number = line["block_number"]
         is_stale_balance = (
-            block_number is not None
-            and max_block is not None
-            and int(block_number) < max_block
+            block_number is not None and max_block is not None and int(block_number) < max_block
         )
         if is_stale_balance and price_usd_str is not None and value_usd_str is not None:
             try:
                 stale_subtotal += Decimal(value_usd_str)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to parse value_usd %r for asset %s; excluded from stale_subtotal",
+                    value_usd_str,
+                    token_address,
+                    exc_info=True,
+                )
 
         block_time_val = line["block_time"]
         block_time_str: str | None = (
@@ -413,6 +430,11 @@ async def get_portfolio(
             try:
                 pct = (agg["value_usd"] / priced_subtotal * 100).quantize(Decimal("0.01"))
             except Exception:
+                logger.warning(
+                    "Failed to compute allocation percentage for asset %s; omitted",
+                    asset_id,
+                    exc_info=True,
+                )
                 continue
             allocations.append(
                 AllocationItemOut(

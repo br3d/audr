@@ -35,9 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.assets.models import CmcMapEntry, CmcMapVersion
 from audr.providers.coinmarketcap_public import CoinMarketCapProvider
 
-_VENDORED_MAP_PATH = (
-    importlib.resources.files("audr.assets") / "data" / "cmc_map_seed.json"
-)
+_VENDORED_MAP_PATH = importlib.resources.files("audr.assets") / "data" / "cmc_map_seed.json"
 
 _MAP_PAGE_SIZE = 5000
 _MAP_TTL = timedelta(days=1)
@@ -74,7 +72,7 @@ class CmcMapImportError(Exception):
 async def import_cmc_map(
     session: AsyncSession,
     *,
-    path: Path | Any = _VENDORED_MAP_PATH,
+    path: Path = _VENDORED_MAP_PATH,
 ) -> CmcMapVersion:
     """Import the vendored CMC map snapshot into cmc_map_version + cmc_map_entry.
 
@@ -128,9 +126,7 @@ async def is_cmc_map_stale(session: AsyncSession) -> bool:
     return datetime.now(UTC) - version.imported_at > _MAP_TTL
 
 
-async def resolve_cmc_ids(
-    session: AsyncSession, token_addresses: list[str]
-) -> dict[str, int]:
+async def resolve_cmc_ids(session: AsyncSession, token_addresses: list[str]) -> dict[str, int]:
     """Resolve lowercase ERC-20 addresses to CoinMarketCap ids.
 
     Matches the AddressResolver contract CoinMarketCapProvider.get_prices
@@ -222,7 +218,7 @@ def _normalise_raw_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return entries
 
 
-def _load_vendored_entries(path: Path | Any) -> tuple[list[dict[str, Any]], str]:
+def _load_vendored_entries(path: Path) -> tuple[list[dict[str, Any]], str]:
     try:
         raw = path.read_bytes()
     except OSError as exc:

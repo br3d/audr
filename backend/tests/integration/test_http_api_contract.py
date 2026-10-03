@@ -88,7 +88,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for tbl in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608
+                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608 — tbl comes from the hardcoded _CLEAN_ORDER tuple above, not user input
 
 
 @pytest.fixture(autouse=True)
@@ -435,9 +435,7 @@ async def test_wallets_patch_200(auth_client: tuple[httpx.AsyncClient, str]) -> 
     """PATCH /wallets/{id} → 200 updated wallet."""
     c, csrf = auth_client
     headers = {"x-csrf-token": csrf}
-    r_create = await c.post(
-        f"{_V1}/wallets", json={"address": _ETH_ADDR}, headers=headers
-    )
+    r_create = await c.post(f"{_V1}/wallets", json={"address": _ETH_ADDR}, headers=headers)
     wallet_id = r_create.json()["id"]
     r_patch = await c.patch(
         f"{_V1}/wallets/{wallet_id}",
@@ -509,9 +507,7 @@ async def test_assets_manual_post_409_duplicate(
     """POST /assets/manual duplicate → 409."""
     c, csrf = auth_client
     headers = {"x-csrf-token": csrf}
-    await c.post(
-        f"{_V1}/assets/manual", json={"contract_address": _CONTRACT_A}, headers=headers
-    )
+    await c.post(f"{_V1}/assets/manual", json={"contract_address": _CONTRACT_A}, headers=headers)
     r2 = await c.post(
         f"{_V1}/assets/manual", json={"contract_address": _CONTRACT_A}, headers=headers
     )
@@ -683,11 +679,17 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
     async with db_session_factory() as session:
         async with session.begin():
             await session.execute(
-                text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+                text(
+                    "INSERT INTO wallet (id, address, label, status)"
+                    " VALUES (:id, :addr, '', 'active')"
+                ),
                 {"id": wallet_a, "addr": "0x" + "a" * 40},
             )
             await session.execute(
-                text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+                text(
+                    "INSERT INTO wallet (id, address, label, status)"
+                    " VALUES (:id, :addr, '', 'active')"
+                ),
                 {"id": wallet_b, "addr": "0x" + "b" * 40},
             )
             await session.execute(
@@ -699,7 +701,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
             )
             await session.execute(
                 text(
-                    "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+                    "INSERT INTO valuation_snapshot"
+                    " (id, snapshotted_at, quality, published_at, input_key)"
                     " VALUES (:id, NOW(), 'complete', NOW(), :input_key)"
                 ),
                 {"id": snap_id, "input_key": snap_id},
@@ -711,7 +714,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
                 await session.execute(
                     text(
                         "INSERT INTO valuation_line"
-                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, price_usd, value_usd)"
+                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,"
+                        " price_usd, value_usd)"
                         " VALUES (:id, :snap, :wallet, :asset, :raw, 1, 100.0, :value)"
                     ),
                     {
@@ -849,9 +853,7 @@ async def test_provider_purge_preview_200(
 ) -> None:
     """GET /data/provider-purge-preview → 200 impact count."""
     c, _ = auth_client
-    r = await c.get(
-        f"{_V1}/data/provider-purge-preview", params={"provider": "coingecko"}
-    )
+    r = await c.get(f"{_V1}/data/provider-purge-preview", params={"provider": "coingecko"})
     assert r.status_code == 200
 
 
@@ -941,9 +943,7 @@ async def test_health_ready_worker_reflects_live_heartbeat(
         with patch("audr.db._get_session_factory", return_value=db_session_factory):
             system = await _collect_status()
 
-        assert system.worker.status != "unknown", (
-            "a live heartbeat must not report as 'unknown'"
-        )
+        assert system.worker.status != "unknown", "a live heartbeat must not report as 'unknown'"
         assert system.worker.status == "running"
     finally:
         async with db_session_factory() as session:
@@ -987,9 +987,7 @@ async def test_health_ready_503_when_migration_is_stale(
     from audr.api.health import _collect_status
 
     with (
-        patch(
-            "audr.operations.migrations._get_head_revision", return_value="0_nonexistent"
-        ),
+        patch("audr.operations.migrations._get_head_revision", return_value="0_nonexistent"),
         patch("audr.db._get_session_factory", return_value=db_session_factory),
     ):
         system = await _collect_status()
@@ -1006,7 +1004,8 @@ async def test_health_ready_503_when_migration_is_stale(
 
 @pytest.mark.integration
 async def test_error_envelope_shape_401(client: httpx.AsyncClient) -> None:
-    """Unauthenticated request → error envelope {error:{code,message,field_errors,retryable},request_id}.
+    """Unauthenticated request → error envelope
+    {error:{code,message,field_errors,retryable},request_id}.
 
     SD-5 resolved in AUD-320: HTTPException/validation handlers now emit the
     contract envelope instead of FastAPI's flat {"detail": ...}.
@@ -1115,9 +1114,7 @@ async def test_wallets_post_requires_csrf(client: httpx.AsyncClient) -> None:
 async def test_assets_manual_post_requires_csrf(client: httpx.AsyncClient) -> None:
     """POST /assets/manual without CSRF → 401 or 403."""
     await client.post(f"{_V1}/setup", json={"password": _PASSWORD})
-    r = await client.post(
-        f"{_V1}/assets/manual", json={"contract_address": _CONTRACT_A}
-    )
+    r = await client.post(f"{_V1}/assets/manual", json={"contract_address": _CONTRACT_A})
     assert r.status_code in (401, 403)
 
 

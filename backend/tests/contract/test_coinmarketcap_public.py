@@ -50,7 +50,9 @@ async def test_get_prices_by_ids_parses_batched_response() -> None:
     """A single request prices every requested id."""
     with respx.mock() as mock:
         mock.get(f"{_BASE}/public-api/v1/simple/price").mock(
-            return_value=Response(200, json=_simple_price_response([(1, 83528.19), (1027, 2690.18)]))
+            return_value=Response(
+                200, json=_simple_price_response([(1, 83528.19), (1027, 2690.18)])
+            )
         )
         provider = CoinMarketCapProvider(resolver=_resolver_for({}))
         prices = await provider.get_prices_by_ids([1, 1027])
@@ -139,9 +141,7 @@ async def test_get_prices_routes_eth_and_resolved_tokens() -> None:
                 200, json=_simple_price_response([(_ETH_CMC_ID, 2000.0), (_USDC_CMC_ID, 1.0)])
             )
         )
-        provider = CoinMarketCapProvider(
-            resolver=_resolver_for({_USDC_ADDR: _USDC_CMC_ID})
-        )
+        provider = CoinMarketCapProvider(resolver=_resolver_for({_USDC_ADDR: _USDC_CMC_ID}))
         prices = await provider.get_prices([_ETH_ADDR, _USDC_ADDR])
         await provider.close()
 
@@ -168,10 +168,7 @@ async def test_get_prices_unresolved_address_omitted() -> None:
 @pytest.mark.contract
 async def test_get_prices_preserves_full_decimal_precision() -> None:
     """Prices with many significant digits are stored exactly, not rounded through float."""
-    raw = (
-        b'{"data": [{"id": 1027, "price": 1234.567890123456789}],'
-        b' "status": {"error_code": "0"}}'
-    )
+    raw = b'{"data": [{"id": 1027, "price": 1234.567890123456789}], "status": {"error_code": "0"}}'
     expected = Decimal("1234.567890123456789")
     with respx.mock() as mock:
         mock.get(f"{_BASE}/public-api/v1/simple/price").mock(

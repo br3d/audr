@@ -25,7 +25,7 @@ class RetryPolicy:
         if self.jitter:
             import random  # noqa: S311 — non-crypto jitter, entropy not required
 
-            exp = random.uniform(exp * 0.5, exp)  # noqa: S311
+            exp = random.uniform(exp * 0.5, exp)  # noqa: S311 — non-crypto jitter, entropy not required
         return exp
 
     def is_retryable(self, attempt: int) -> bool:

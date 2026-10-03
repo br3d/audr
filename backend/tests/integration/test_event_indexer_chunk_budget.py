@@ -27,9 +27,7 @@ async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     return uuid.UUID(str(result.scalar_one()))
 
 
-async def _insert_checkpoint(
-    session: AsyncSession, wallet_id: uuid.UUID, block: int
-) -> None:
+async def _insert_checkpoint(session: AsyncSession, wallet_id: uuid.UUID, block: int) -> None:
     await session.execute(
         sa.text(
             "INSERT INTO event_indexer_checkpoint (wallet_id, last_processed_block) "
@@ -72,9 +70,7 @@ async def test_chunk_budget_caps_work_and_persists_partial_checkpoint(
     assert reader.get_logs.await_count == 6
 
     checkpoint_row = await db_session.execute(
-        sa.text(
-            "SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"
-        ),
+        sa.text("SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"),
         {"wid": str(wallet_id)},
     )
     assert checkpoint_row.scalar_one() == 2 * LOG_CHUNK_SIZE
@@ -116,9 +112,7 @@ async def test_chunk_budget_resumes_remaining_range_on_next_call(
     assert chunks_used == 3  # remaining chunks: [4001,6000] [6001,8000] [8001,10000]
 
     checkpoint_row = await db_session.execute(
-        sa.text(
-            "SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"
-        ),
+        sa.text("SELECT last_processed_block FROM event_indexer_checkpoint WHERE wallet_id = :wid"),
         {"wid": str(wallet_id)},
     )
     assert checkpoint_row.scalar_one() == current_block

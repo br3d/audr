@@ -1,4 +1,6 @@
-"""Revision-checked schedule management with freshness, budget validation, and usage projections (T081 / US4)."""
+"""Revision-checked schedule management with freshness, budget validation,
+and usage projections (T081 / US4).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +8,6 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
-
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -110,14 +111,15 @@ async def update_schedule(
 
     await session.execute(
         sa.text(
-            f"UPDATE schedule SET {', '.join(set_parts)} WHERE kind = :kind"  # noqa: S608
+            # set_parts is a fixed ":param" vocabulary; values are bound, never interpolated.
+            f"UPDATE schedule SET {', '.join(set_parts)} WHERE kind = :kind"  # noqa: S608 — set_parts is a fixed ":param" vocabulary; values are bound, never interpolated
         ),
         params,
     )
     await session.flush()
 
     updated = await get_schedule(session, kind=kind)
-    assert updated is not None
+    assert updated is not None  # noqa: S101 -- just written in this same transaction
     return updated
 
 
@@ -138,7 +140,7 @@ async def pause_schedule(session: AsyncSession, *, kind: str) -> dict:  # type: 
         await session.flush()
 
     updated = await get_schedule(session, kind=kind)
-    assert updated is not None
+    assert updated is not None  # noqa: S101 -- just written in this same transaction
     return updated
 
 
@@ -155,7 +157,7 @@ async def resume_schedule(session: AsyncSession, *, kind: str) -> dict:  # type:
     await session.flush()
 
     updated = await get_schedule(session, kind=kind)
-    assert updated is not None
+    assert updated is not None  # noqa: S101 -- just written in this same transaction
     return updated
 
 
@@ -189,9 +191,7 @@ async def is_due(session: AsyncSession, *, kind: str) -> bool:
     return elapsed_s >= freshness_s
 
 
-async def project_usage(
-    session: AsyncSession, *, kind: str, days: int = 30
-) -> dict:  # type: ignore[type-arg]
+async def project_usage(session: AsyncSession, *, kind: str, days: int = 30) -> dict:  # type: ignore[type-arg]
     """Project API call usage for *kind* over *days* days.
 
     Returns::

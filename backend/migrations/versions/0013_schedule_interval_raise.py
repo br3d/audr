@@ -34,7 +34,7 @@ def upgrade() -> None:
             f"""
             UPDATE schedule SET freshness_s = {new_s}
             WHERE kind = '{kind}' AND freshness_s = {old_s}
-            """
+            """  # noqa: S608 -- kind/old_s/new_s come from the hardcoded _RAISED_INTERVALS_S dict, not user input
         )
 
 
@@ -44,5 +44,5 @@ def downgrade() -> None:
             f"""
             UPDATE schedule SET freshness_s = {old_s}
             WHERE kind = '{kind}' AND freshness_s = {new_s}
-            """
+            """  # noqa: S608 -- kind/old_s/new_s come from the hardcoded _RAISED_INTERVALS_S dict, not user input
         )

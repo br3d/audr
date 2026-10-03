@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.settings.integrations import IntegrationRead, RevisionConflictError, get_integration, upsert_integration
+from audr.settings.integrations import (
+    IntegrationRead,
+    RevisionConflictError,
+    get_integration,
+    upsert_integration,
+)
 
 __all__ = [
     "RevisionConflictError",

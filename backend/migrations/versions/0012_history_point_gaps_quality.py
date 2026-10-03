@@ -22,7 +22,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE history_point DROP CONSTRAINT ck_history_point_ck_history_point_quality")
+    op.execute(
+        "ALTER TABLE history_point DROP CONSTRAINT ck_history_point_ck_history_point_quality"
+    )
     op.execute(
         "ALTER TABLE history_point ADD CONSTRAINT ck_history_point_ck_history_point_quality"
         " CHECK (quality IN ('complete', 'gaps', 'partial', 'stale', 'unknown'))"
@@ -31,7 +33,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("UPDATE history_point SET quality = 'partial' WHERE quality = 'gaps'")
-    op.execute("ALTER TABLE history_point DROP CONSTRAINT ck_history_point_ck_history_point_quality")
+    op.execute(
+        "ALTER TABLE history_point DROP CONSTRAINT ck_history_point_ck_history_point_quality"
+    )
     op.execute(
         "ALTER TABLE history_point ADD CONSTRAINT ck_history_point_ck_history_point_quality"
         " CHECK (quality IN ('complete', 'partial', 'stale', 'unknown'))"

@@ -66,9 +66,7 @@ async def test_persistent_volume_key_survives_restart(
     await init_key(db_session)
 
     # Confirm the row was written to the DB.
-    result = await db_session.execute(
-        text("SELECT name FROM key_state WHERE name = 'master_key'")
-    )
+    result = await db_session.execute(text("SELECT name FROM key_state WHERE name = 'master_key'"))
     assert result.first() is not None, "key_state row must exist after init_key"
 
     # Both calls must return the same 32-byte key (no init_key in-between).
@@ -172,11 +170,7 @@ async def test_worker_lease_recovered_after_crash(db_session: AsyncSession) -> N
 
     # Simulate a crashed worker by backdating the heartbeat past the lease timeout.
     await db_session.execute(
-        text(
-            "UPDATE job_run"
-            " SET heartbeat_at = now() - interval '10 minutes'"
-            " WHERE id = :id"
-        ),
+        text("UPDATE job_run SET heartbeat_at = now() - interval '10 minutes' WHERE id = :id"),
         {"id": crashed_run_id},
     )
     await db_session.flush()

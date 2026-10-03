@@ -50,18 +50,12 @@ async def check_migration_readiness(session: AsyncSession) -> dict:  # type: ign
             "head": str | None,      # latest revision known to alembic
         }
     """
-    result = await session.execute(
-        sa.text("SELECT version_num FROM alembic_version LIMIT 1")
-    )
+    result = await session.execute(sa.text("SELECT version_num FROM alembic_version LIMIT 1"))
     row = result.first()
     current: str | None = row[0] if row is not None else None
     head: str | None = _get_head_revision()
 
-    up_to_date: bool = (
-        current is not None
-        and head is not None
-        and current == head
-    )
+    up_to_date: bool = current is not None and head is not None and current == head
 
     return {
         "up_to_date": up_to_date,

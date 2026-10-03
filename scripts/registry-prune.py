@@ -78,6 +78,7 @@ import sys
 import urllib.error
 import urllib.request
 
+
 # No endpoint is baked in: this repository is public. The registry comes from
 # --registry, else $AUDR_REGISTRY_URL, else $AUDR_REGISTRY (the name compose.yaml
 # and deploy.env use, which is a bare host:port and so needs a scheme prefixed).
@@ -90,6 +91,7 @@ def _default_registry() -> str | None:
     if host:
         return host if "://" in host else f"http://{host}"
     return None
+
 
 # The registry is shared with an unrelated project (svetu-*). Scope every run to
 # repositories we own so a typo or a future --repo flag cannot reach them.
@@ -126,11 +128,14 @@ class RegistryError(RuntimeError):
 
 
 def _request(registry, path, method="GET", accept=MANIFEST_ACCEPT):
-    req = urllib.request.Request(
+    # `registry` is the operator's own --registry/$AUDR_REGISTRY_URL config, not
+    # untrusted input, so a bogus file:// scheme is a self-inflicted operator error,
+    # not an attacker-reachable vector.
+    req = urllib.request.Request(  # noqa: S310 — operator's own --registry config, not untrusted input
         registry.rstrip("/") + path, headers={"Accept": accept}, method=method
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — operator's own --registry config, not untrusted input
             return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, dict(exc.headers or {}), exc.read()
@@ -314,16 +319,36 @@ def main(argv=None):
         default=_default_registry(),
         help="registry base URL (default: $AUDR_REGISTRY_URL or $AUDR_REGISTRY)",
     )
-    parser.add_argument("--repo", action="append", dest="repos", metavar="REPO",
-                        help=f"repository to prune (default: {' '.join(DEFAULT_REPOS)})")
-    parser.add_argument("--keep", type=int, default=8, metavar="N",
-                        help="keep the N newest otherwise-prunable tags (default: 8)")
-    parser.add_argument("--protect", action="append", default=[], metavar="TAG",
-                        help="never prune this tag (repeatable)")
-    parser.add_argument("--env-file", default="/home/codex/audr/.env", metavar="PATH",
-                        help="deploy .env to read the live BACKEND_TAG from")
-    parser.add_argument("--apply", action="store_true",
-                        help="actually delete; without it the run is a dry run")
+    parser.add_argument(
+        "--repo",
+        action="append",
+        dest="repos",
+        metavar="REPO",
+        help=f"repository to prune (default: {' '.join(DEFAULT_REPOS)})",
+    )
+    parser.add_argument(
+        "--keep",
+        type=int,
+        default=8,
+        metavar="N",
+        help="keep the N newest otherwise-prunable tags (default: 8)",
+    )
+    parser.add_argument(
+        "--protect",
+        action="append",
+        default=[],
+        metavar="TAG",
+        help="never prune this tag (repeatable)",
+    )
+    parser.add_argument(
+        "--env-file",
+        default="/home/codex/audr/.env",
+        metavar="PATH",
+        help="deploy .env to read the live BACKEND_TAG from",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="actually delete; without it the run is a dry run"
+    )
     args = parser.parse_args(argv)
 
     repos = args.repos or DEFAULT_REPOS
@@ -341,9 +366,12 @@ def main(argv=None):
     if env_tags is None:
         # Not fatal, but the live tag is the one tag whose deletion would break
         # a rollback, so make the gap loud.
-        print(f"WARNING: could not read {args.env_file}; the live deployed tag is NOT "
-              f"protected by that source. Pass it via --protect if you are not on the "
-              f"deploy host.\n", file=sys.stderr)
+        print(
+            f"WARNING: could not read {args.env_file}; the live deployed tag is NOT "
+            f"protected by that source. Pass it via --protect if you are not on the "
+            f"deploy host.\n",
+            file=sys.stderr,
+        )
     else:
         protected |= env_tags
         print(f"live tags from {args.env_file}: {', '.join(sorted(env_tags)) or '<none>'}")

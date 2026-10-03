@@ -200,9 +200,7 @@ async def test_list_wallets_paginates_with_cursor(http_client: httpx.AsyncClient
     await _add_wallet(http_client, csrf, address=_ADDR_B, label="B")
     await _add_wallet(http_client, csrf, address=addr_c, label="C")
 
-    r1 = await http_client.get(
-        _WALLETS_URL, params={"limit": 2}, headers={"x-csrf-token": csrf}
-    )
+    r1 = await http_client.get(_WALLETS_URL, params={"limit": 2}, headers={"x-csrf-token": csrf})
     assert r1.status_code == 200
     page1 = r1.json()
     assert [w["address"] for w in page1["items"]] == [_ADDR_A, _ADDR_B]
@@ -243,9 +241,7 @@ async def test_get_wallet_by_id(http_client: httpx.AsyncClient) -> None:
     created = (await _add_wallet(http_client, csrf)).json()
     wallet_id = created["id"]
 
-    r = await http_client.get(
-        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.get(f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200
     assert r.json()["id"] == wallet_id
 
@@ -253,9 +249,7 @@ async def test_get_wallet_by_id(http_client: httpx.AsyncClient) -> None:
 @pytest.mark.integration
 async def test_get_wallet_unknown_id_returns_404(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_get_csrf(http_client)
-    r = await http_client.get(
-        f"{_WALLETS_URL}/{uuid.uuid4()}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.get(f"{_WALLETS_URL}/{uuid.uuid4()}", headers={"x-csrf-token": csrf})
     assert r.status_code == 404
 
 
@@ -288,9 +282,7 @@ async def test_stop_wallet(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_get_csrf(http_client)
     wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
 
-    r = await http_client.post(
-        f"{_WALLETS_URL}/{wallet_id}/stop", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.post(f"{_WALLETS_URL}/{wallet_id}/stop", headers={"x-csrf-token": csrf})
     assert r.status_code == 200
     assert r.json()["tracking_active"] is False
 
@@ -300,9 +292,7 @@ async def test_reactivate_wallet(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_get_csrf(http_client)
     wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
 
-    await http_client.post(
-        f"{_WALLETS_URL}/{wallet_id}/stop", headers={"x-csrf-token": csrf}
-    )
+    await http_client.post(f"{_WALLETS_URL}/{wallet_id}/stop", headers={"x-csrf-token": csrf})
     r = await http_client.post(
         f"{_WALLETS_URL}/{wallet_id}/reactivate", headers={"x-csrf-token": csrf}
     )
@@ -330,13 +320,9 @@ async def test_delete_wallet_removes_it_from_the_list(
 ) -> None:
     csrf = await _setup_and_get_csrf(http_client)
     wallet_id = (await _add_wallet(http_client, csrf)).json()["id"]
-    keep_id = (
-        await _add_wallet(http_client, csrf, address=_ADDR_B, label="Keep")
-    ).json()["id"]
+    keep_id = (await _add_wallet(http_client, csrf, address=_ADDR_B, label="Keep")).json()["id"]
 
-    r = await http_client.delete(
-        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.delete(f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200
     body = r.json()
     assert body["wallet_id"] == wallet_id
@@ -379,16 +365,11 @@ async def test_delete_wallet_also_removes_its_derived_records(
                 {"wid": wallet_id, "aid": asset_id},
             )
             await session.execute(
-                text(
-                    "INSERT INTO monitored_pair (wallet_id, asset_id)"
-                    " VALUES (:wid, :aid)"
-                ),
+                text("INSERT INTO monitored_pair (wallet_id, asset_id) VALUES (:wid, :aid)"),
                 {"wid": wallet_id, "aid": asset_id},
             )
 
-    r = await http_client.delete(
-        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.delete(f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200
     assert r.json()["deleted"]["balance_observation"] == 1
     assert r.json()["deleted"]["monitored_pair"] == 1
@@ -396,7 +377,7 @@ async def test_delete_wallet_also_removes_its_derived_records(
     async with db_session_factory() as session:
         for table in ("balance_observation", "monitored_pair"):
             left = await session.execute(
-                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),  # noqa: S608 -- table is from a fixed tuple literal
                 {"wid": wallet_id},
             )
             assert left.scalar() == 0, table
@@ -464,9 +445,7 @@ async def test_delete_wallet_with_valued_observation(
                 },
             )
 
-    r = await http_client.delete(
-        f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.delete(f"{_WALLETS_URL}/{wallet_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200, r.text
     deleted = r.json()["deleted"]
     assert deleted["valuation_line"] == 1
@@ -478,7 +457,7 @@ async def test_delete_wallet_with_valued_observation(
     async with db_session_factory() as session:
         for table in ("valuation_line", "balance_observation"):
             left = await session.execute(
-                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),  # noqa: S608 -- table is from a fixed tuple literal
                 {"wid": wallet_id},
             )
             assert left.scalar() == 0, table
@@ -497,9 +476,7 @@ async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
     """A snapshot that still carries another wallet's line must survive."""
     csrf = await _setup_and_get_csrf(http_client)
     doomed_id = (await _add_wallet(http_client, csrf)).json()["id"]
-    keeper_id = (
-        await _add_wallet(http_client, csrf, address=_ADDR_B)
-    ).json()["id"]
+    keeper_id = (await _add_wallet(http_client, csrf, address=_ADDR_B)).json()["id"]
 
     async with db_session_factory() as session:
         async with session.begin():
@@ -548,9 +525,7 @@ async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
                     },
                 )
 
-    r = await http_client.delete(
-        f"{_WALLETS_URL}/{doomed_id}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.delete(f"{_WALLETS_URL}/{doomed_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200, r.text
     assert r.json()["deleted"]["valuation_snapshot"] == 0
 
@@ -567,9 +542,7 @@ async def test_delete_unknown_wallet_returns_404(
     http_client: httpx.AsyncClient,
 ) -> None:
     csrf = await _setup_and_get_csrf(http_client)
-    r = await http_client.delete(
-        f"{_WALLETS_URL}/{uuid.uuid4()}", headers={"x-csrf-token": csrf}
-    )
+    r = await http_client.delete(f"{_WALLETS_URL}/{uuid.uuid4()}", headers={"x-csrf-token": csrf})
     assert r.status_code == 404
 
 
