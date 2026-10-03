@@ -25,11 +25,12 @@ vi.mock('../api/client', () => {
 })
 
 import WalletsPage from '../pages/WalletsPage'
-import { fetchWallets, patchWallet } from '../api/client'
+import { fetchWallets, patchWallet, triggerJob } from '../api/client'
 import type { WalletItem } from '../api/client'
 
 const mockFetchWallets = vi.mocked(fetchWallets)
 const mockPatchWallet = vi.mocked(patchWallet)
+const mockTriggerJob = vi.mocked(triggerJob)
 
 const WALLET_1: WalletItem = {
   id: 'w1',
@@ -151,5 +152,98 @@ describe('WalletsPage', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('Hot wallet'))
     expect(mockFetchWallets).toHaveBeenCalledTimes(2)
     expect(mockFetchWallets).toHaveBeenNthCalledWith(2, 'cursor-abc')
+  })
+
+  it('posts wallet_id when a card refresh button is clicked', async () => {
+    mockFetchWallets.mockResolvedValue(makeWalletsResponse())
+    mockTriggerJob.mockResolvedValue({ run_id: 'r1', coalesced: false })
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('My Cold Wallet'))
+
+    const refreshBtn = container.querySelector(
+      `button[aria-label="Refresh balances for ${WALLET_1.address}"]`,
+    ) as HTMLButtonElement
+    expect(refreshBtn).toBeTruthy()
+    await act(async () => { refreshBtn.click() })
+
+    expect(mockTriggerJob).toHaveBeenCalledWith('balances', WALLET_1.id)
+  })
+
+  it('posts wallet_id when a card discover button is clicked', async () => {
+    mockFetchWallets.mockResolvedValue(makeWalletsResponse())
+    mockTriggerJob.mockResolvedValue({ run_id: 'r1', coalesced: false })
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('My Cold Wallet'))
+
+    const discoverBtn = container.querySelector(
+      `button[aria-label="Discover tokens for ${WALLET_1.address}"]`,
+    ) as HTMLButtonElement
+    expect(discoverBtn).toBeTruthy()
+    await act(async () => { discoverBtn.click() })
+
+    expect(mockTriggerJob).toHaveBeenCalledWith('discovery', WALLET_1.id)
+  })
+
+  it('shows the queued/error message on its own card only, not a sibling card', async () => {
+    const WALLET_2: WalletItem = {
+      ...WALLET_1,
+      id: 'w2',
+      address: '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      label: 'Hot wallet',
+    }
+    mockFetchWallets.mockResolvedValue(makeWalletsResponse([WALLET_1, WALLET_2]))
+    mockTriggerJob.mockResolvedValueOnce({ run_id: 'r1', coalesced: false })
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('Hot wallet'))
+
+    const refreshBtn = container.querySelector(
+      `button[aria-label="Refresh balances for ${WALLET_1.address}"]`,
+    ) as HTMLButtonElement
+    await act(async () => { refreshBtn.click() })
+
+    await vi.waitFor(() => {
+      const cards = Array.from(container.querySelectorAll('li.wallet-card'))
+      expect(cards[0].textContent).toContain('Balance refresh queued.')
+      expect(cards[1].textContent).not.toContain('Balance refresh queued.')
+    })
+  })
+
+  it('still posts the page-level refresh button with no wallet_id', async () => {
+    mockFetchWallets.mockResolvedValue(makeWalletsResponse())
+    mockTriggerJob.mockResolvedValue({ run_id: 'r1', coalesced: false })
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('My Cold Wallet'))
+
+    const pageRefreshBtn = container.querySelector(
+      'button[aria-label="Refresh all balances"]',
+    ) as HTMLButtonElement
+    expect(pageRefreshBtn).toBeTruthy()
+    await act(async () => { pageRefreshBtn.click() })
+
+    expect(mockTriggerJob).toHaveBeenCalledWith('balances')
+    expect(mockTriggerJob).not.toHaveBeenCalledWith('balances', WALLET_1.id)
+  })
+
+  it('disables per-card job buttons for a non-tracked wallet', async () => {
+    const stoppedWallet = { ...WALLET_1, tracking_active: false }
+    mockFetchWallets.mockResolvedValue(makeWalletsResponse([stoppedWallet]))
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('My Cold Wallet'))
+
+    const refreshBtn = container.querySelector(
+      `button[aria-label="Refresh balances for ${WALLET_1.address}"]`,
+    ) as HTMLButtonElement
+    const discoverBtn = container.querySelector(
+      `button[aria-label="Discover tokens for ${WALLET_1.address}"]`,
+    ) as HTMLButtonElement
+    expect(refreshBtn.disabled).toBe(true)
+    expect(discoverBtn.disabled).toBe(true)
+    expect(refreshBtn.title).toMatch(/resume tracking/i)
+    expect(discoverBtn.title).toMatch(/resume tracking/i)
   })
 })
