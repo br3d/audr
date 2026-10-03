@@ -169,6 +169,12 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           VERSION: ${{ steps.meta.outputs.version }}
           RELEASE: ${{ steps.meta.outputs.release }}
+          # Bound explicitly rather than read from $GITHUB_SHA inside the
+          # script: the health-gate compares against it, and an empty value
+          # would turn every deploy into a failed gate and an automatic
+          # rollback — a pipeline-wide outage caused by a missing variable.
+          # The preflight below refuses to start instead.
+          EXPECT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           # Both come from the workflow `env:` block above — REGISTRY from the
@@ -184,7 +190,8 @@ jobs:
           cd "$DEPLOY_DIR"
 
           # ---- 1. secrets preflight (NEVER regenerate) ----------------------
-          log "Preflight in $DEPLOY_DIR (tag=$TAG)"
+          log "Preflight in $DEPLOY_DIR (tag=$TAG version=${VERSION:-?})"
+          [ -n "${EXPECT_COMMIT:-}" ] || { log "FATAL: EXPECT_COMMIT empty — the health-gate could never pass"; exit 2; }
           [ -f .env ] || { log "FATAL: .env missing — refusing (would break DB auth)"; exit 2; }
           [ -f secrets/db_password.txt ] || { log "FATAL: secrets/db_password.txt missing"; exit 2; }
           grep -q '^DB_PASSWORD=' .env  || { log "FATAL: DB_PASSWORD missing in .env"; exit 2; }
@@ -390,7 +397,7 @@ jobs:
             spa_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:80/ 2>/dev/null || echo 000)"
             ver="$(curl -s -m 5 http://localhost:80/api/v1/version 2>/dev/null || true)"
             case "$ready" in *'"status":"ok"'*) ready_ok=1 ;; *) ready_ok=0 ;; esac
-            case "$ver" in *"\"commit\":\"${GITHUB_SHA}\""*) ver_ok=1 ;; *) ver_ok=0 ;; esac
+            case "$ver" in *"\"commit\":\"${EXPECT_COMMIT}\""*) ver_ok=1 ;; *) ver_ok=0 ;; esac
             if [ "$state" = healthy ] && [ "$ready_ok" = 1 ] && [ "$spa_code" = 200 ] && [ "$ver_ok" = 1 ]; then
               ok=1; log "healthy on attempt $i (api=$state ready=ok spa=$spa_code version=$ver)"; break
             fi
@@ -398,7 +405,7 @@ jobs:
           done
           if [ "$ok" != 1 ]; then
             log "health-gate FAILED (api state=$state spa=$spa_code ready=${ready:-<none>} version=${ver:-<none>})"
-            log "expected commit ${GITHUB_SHA}"
+            log "expected commit ${EXPECT_COMMIT}"
             docker compose ps || true
             false
           fi
