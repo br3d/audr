@@ -332,3 +332,13 @@ jobs:
           # ---- 7. advance Harbor :latest ONLY after health passes -----------
           docker push "$BACKEND:latest" || log "warn: push $BACKEND:latest failed"
           log "Deploy OK — tag=$TAG"
+
+      # Every deploy mints a new per-sha image on this runner and nothing used
+      # to remove them: by 2026-10-03 the host held 299 images + 3.8GB of build
+      # cache at 89% of a 32GB root (AUD-395). Runs on failure paths too —
+      # that is when the disk is most likely to be the actual cause — and the
+      # retention window in host-gc.sh keeps the rollback image resident. See
+      # that script's header for why pruning this host cannot disarm rollback.
+      - name: Reclaim host disk
+        if: always()
+        run: bash scripts/host-gc.sh
