@@ -30,6 +30,10 @@ _SOURCE_TO_METADATA_SOURCE: dict[str, str] = {
     "chain": "chain",
 }
 
+# Worst-status precedence for aggregating per-line read_status into a single
+# per-asset allocation row (AUD-404): error > stale > pending > ok.
+_STATUS_RANK: dict[str, int] = {"ok": 0, "pending": 1, "stale": 2, "error": 3}
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -68,8 +72,13 @@ class HoldingOut(BaseModel):
 class AllocationItemOut(BaseModel):
     asset_id: str
     symbol: str
-    value_usd: str
+    value_usd: str | None
     percentage: str
+    quantity: str | None
+    price_usd: str | None
+    wallet_count: int
+    read_status: str
+    included: bool
     logo_url: str | None = None
 
 
@@ -251,9 +260,9 @@ async def get_portfolio(
 
     # 4. Build holdings and compute totals.
     holdings: list[HoldingOut] = []
+    holding_is_stale: list[bool] = []
     priced_subtotal = Decimal(0)
     stale_subtotal = Decimal(0)
-    unpriced_asset_count = 0
     max_observed: datetime | None = None
 
     for line in lines:
@@ -281,8 +290,6 @@ async def get_portfolio(
                 priced_subtotal += Decimal(value_usd_str)
             except Exception:
                 pass
-        else:
-            unpriced_asset_count += 1
 
         block_number = line["block_number"]
         is_stale_balance = (
@@ -331,6 +338,7 @@ async def get_portfolio(
                 logo_url=_icon_url(str(line["asset_id"])),
             )
         )
+        holding_is_stale.append(is_stale_balance)
 
     # total_usd is null unless every unpriced holding has been confirmed
     # unpriceable by the provider ("gaps") — a holding that has simply never
@@ -345,31 +353,102 @@ async def get_portfolio(
         priced_subtotal_str = format_decimal(priced_subtotal)
         stale_contribution_str = format_decimal(stale_subtotal)
 
-    # 5. Build allocations from included priced holdings.
+    # 5. Aggregate allocations by asset_id across wallets (AUD-404). Two
+    # wallets holding the same asset must collapse into one row — summing
+    # value/quantity and tracking wallet_count/read_status/included across
+    # the contributing lines — rather than one row per (wallet, asset).
+    asset_order: list[str] = []
+    asset_aggs: dict[str, dict] = {}
+
+    for holding, is_stale in zip(holdings, holding_is_stale, strict=True):
+        agg = asset_aggs.get(holding.asset_id)
+        if agg is None:
+            matching = next(
+                (ln for ln in lines if str(ln["asset_id"]) == holding.asset_id),
+                None,
+            )
+            agg = {
+                "symbol": str(matching["symbol"]) if matching else "?",
+                "wallet_ids": set(),
+                "value_usd": Decimal(0),
+                "has_priced_line": False,
+                "quantity": Decimal(0),
+                "quantity_known": True,
+                "price_usd": None,
+                "status": "ok",
+                "included": False,
+            }
+            asset_aggs[holding.asset_id] = agg
+            asset_order.append(holding.asset_id)
+
+        agg["wallet_ids"].add(holding.wallet_id)
+        if holding.included:
+            agg["included"] = True
+
+        if holding.quantity is not None and agg["quantity_known"]:
+            agg["quantity"] += Decimal(holding.quantity)
+        else:
+            agg["quantity_known"] = False
+
+        if holding.value_usd is not None:
+            agg["has_priced_line"] = True
+            agg["value_usd"] += Decimal(holding.value_usd)
+            if agg["price_usd"] is None and holding.price_usd is not None:
+                agg["price_usd"] = holding.price_usd
+
+        line_status = "stale" if is_stale else "ok"
+        if _STATUS_RANK[line_status] > _STATUS_RANK[agg["status"]]:
+            agg["status"] = line_status
+
+    unpriced_asset_count = sum(
+        1 for asset_id in asset_order if not asset_aggs[asset_id]["has_priced_line"]
+    )
+
     allocations: list[AllocationItemOut] = []
     if priced_subtotal > 0:
-        for holding in holdings:
-            if holding.value_usd is not None:
-                try:
-                    val = Decimal(holding.value_usd)
-                    pct = (val / priced_subtotal * 100).quantize(Decimal("0.01"))
-                    # Look up symbol from the line.
-                    matching = next(
-                        (ln for ln in lines if str(ln["asset_id"]) == holding.asset_id),
-                        None,
-                    )
-                    symbol = str(matching["symbol"]) if matching else "?"
-                    allocations.append(
-                        AllocationItemOut(
-                            asset_id=holding.asset_id,
-                            symbol=symbol,
-                            value_usd=holding.value_usd,
-                            percentage=str(pct),
-                            logo_url=_icon_url(holding.asset_id),
-                        )
-                    )
-                except Exception:
-                    pass
+        for asset_id in asset_order:
+            agg = asset_aggs[asset_id]
+            if not agg["has_priced_line"]:
+                continue
+            try:
+                pct = (agg["value_usd"] / priced_subtotal * 100).quantize(Decimal("0.01"))
+            except Exception:
+                continue
+            allocations.append(
+                AllocationItemOut(
+                    asset_id=asset_id,
+                    symbol=agg["symbol"],
+                    value_usd=format_decimal(agg["value_usd"]),
+                    percentage=str(pct),
+                    quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
+                    price_usd=agg["price_usd"],
+                    wallet_count=len(agg["wallet_ids"]),
+                    read_status=agg["status"],
+                    included=agg["included"],
+                    logo_url=_icon_url(asset_id),
+                )
+            )
+
+    # Unpriced assets are surfaced in allocations too (sorted after the
+    # priced ones) — dropping the Holdings page must not make them invisible.
+    for asset_id in asset_order:
+        agg = asset_aggs[asset_id]
+        if agg["has_priced_line"]:
+            continue
+        allocations.append(
+            AllocationItemOut(
+                asset_id=asset_id,
+                symbol=agg["symbol"],
+                value_usd=None,
+                percentage="0",
+                quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
+                price_usd=None,
+                wallet_count=len(agg["wallet_ids"]),
+                read_status=agg["status"],
+                included=agg["included"],
+                logo_url=_icon_url(asset_id),
+            )
+        )
 
     quality = _map_quality(quality_str, total_is_null=total_usd_str is None)
     valuation_time_str: str | None = None

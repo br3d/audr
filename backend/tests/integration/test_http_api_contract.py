@@ -664,6 +664,96 @@ async def test_portfolio_get_200(auth_client: tuple[httpx.AsyncClient, str]) -> 
 
 
 @pytest.mark.integration
+async def test_portfolio_allocations_shape_aggregated_per_asset(
+    auth_client: tuple[httpx.AsyncClient, str],
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """GET /portfolio → allocations carry the AUD-404 aggregated shape.
+
+    One row per asset_id (two wallets holding the same asset collapse into
+    one row), with quantity/price_usd/wallet_count/read_status/included
+    alongside value_usd/percentage, and holdings stays per-(wallet, asset).
+    """
+    c, _ = auth_client
+    snap_id = str(uuid.uuid4())
+    wallet_a = str(uuid.uuid4())
+    wallet_b = str(uuid.uuid4())
+    asset_id = str(uuid.uuid4())
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+                {"id": wallet_a, "addr": "0x" + "a" * 40},
+            )
+            await session.execute(
+                text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+                {"id": wallet_b, "addr": "0x" + "b" * 40},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO asset (id, token_address, symbol, name, decimals, source)"
+                    " VALUES (:id, :addr, 'ETH', 'ETH', 18, 'catalog')"
+                ),
+                {"id": asset_id, "addr": "0x" + "c" * 40},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+                    " VALUES (:id, NOW(), 'complete', NOW(), :input_key)"
+                ),
+                {"id": snap_id, "input_key": snap_id},
+            )
+            for wallet_id, raw, value in (
+                (wallet_a, "1000000000000000000", "100.0"),
+                (wallet_b, "2000000000000000000", "200.0"),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO valuation_line"
+                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, price_usd, value_usd)"
+                        " VALUES (:id, :snap, :wallet, :asset, :raw, 1, 100.0, :value)"
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "snap": snap_id,
+                        "wallet": wallet_id,
+                        "asset": asset_id,
+                        "raw": raw,
+                        "value": value,
+                    },
+                )
+
+    r = await c.get(f"{_V1}/portfolio")
+    assert r.status_code == 200
+    data = r.json()
+
+    assert len(data["holdings"]) == 2
+
+    assert len(data["allocations"]) == 1
+    alloc = data["allocations"][0]
+    for key in (
+        "asset_id",
+        "symbol",
+        "value_usd",
+        "percentage",
+        "quantity",
+        "price_usd",
+        "wallet_count",
+        "read_status",
+        "included",
+        "logo_url",
+    ):
+        assert key in alloc, f"missing allocation key: {key}"
+
+    assert alloc["asset_id"] == asset_id
+    assert alloc["value_usd"] == "300.000000000000000000"
+    assert alloc["quantity"] == "3.000000000000000000"
+    assert alloc["wallet_count"] == 2
+    assert alloc["included"] is True
+
+
+@pytest.mark.integration
 async def test_portfolio_401_unauthenticated(client: httpx.AsyncClient) -> None:
     """GET /portfolio → 401 when unauthenticated."""
     r = await client.get(f"{_V1}/portfolio")

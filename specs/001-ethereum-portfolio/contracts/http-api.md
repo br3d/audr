@@ -108,10 +108,23 @@ holdings, allocations.
   not refresh balance freshness. Repeating the same observation does not add history.
 - Each holding identifies wallet_id, asset_id, address/native identity, raw_balance,
   decimals, quantity, price_usd, value_usd, included, metadata_source, read_status,
-  block time, read time and last-success times.
+  block time, read time and last-success times. `holdings` stays one row per
+  (wallet, asset) — it is not aggregated.
 - Excluded assets do not contribute; response explains valuation scope.
+- `allocations` is aggregated **one row per asset_id** across all wallets (AUD-404):
+  two wallets holding the same asset produce exactly one row, not a duplicate. Each
+  row adds `quantity` (summed across contributing wallets; null if any contributing
+  line has an unresolvable decimals/amount — never silently under-reported),
+  `price_usd`, `wallet_count` (distinct contributing wallets), `read_status` (worst
+  of error > stale > pending > ok across contributing lines, via the same staleness
+  rule as stale_contribution_usd) and `included` (false only when every contributing
+  line is excluded). Unpriced assets are included with `value_usd: null` and
+  `percentage: "0"`, sorted after the priced rows — dropping the Holdings page must
+  not make them invisible. The top-level `unpriced_asset_count` counts distinct
+  unpriced assets, not lines.
 - Allocation percentages refer to included priced subtotal; if zero or unknown,
-  percentages are null and the UI shows no fabricated pie slices.
+  percentages are null and the UI shows no fabricated pie slices. Priced rows'
+  percentages still sum to ~100% regardless of how many unpriced rows are present.
 - A complete positive-value release-1 network allocation is Ethereum 100%.
 - Quote attribution and discovery/catalog explanation accompany the data.
 

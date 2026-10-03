@@ -125,11 +125,12 @@ case-insensitively. Tracking an address asserts nothing about controlling it.
 | GET | `/api/v1/portfolio` | session | The full portfolio envelope from the latest published snapshot. |
 
 The `/portfolio` envelope carries `snapshot_id`, `valuation_time`,
-`currency: "USD"`, `priced_subtotal_usd`, `total_usd`, a `quality` flag set
-(`incomplete`, `stale_balances`, `stale_prices`, `mixed_observation_times`,
-`discovery_overdue`, `verification_pending`, `invalidated`), balance block
-number and block time, observation times, coverage, per-holding lines and
-allocations.
+`currency: "USD"`, `priced_subtotal_usd`, `total_usd`, `unpriced_asset_count`,
+a `quality` flag set (`incomplete`, `stale_balances`, `stale_prices`,
+`mixed_observation_times`, `discovery_overdue`, `verification_pending`,
+`invalidated`), balance block number and block time, observation times,
+coverage, per-holding lines (`holdings`, one row per wallet/asset — unchanged
+for the per-wallet metric cards and wallet views) and `allocations`.
 
 The accounting rule: `total_usd` equals the priced subtotal **only** when every
 included holding has both a usable quantity and a usable price. Otherwise
@@ -138,6 +139,22 @@ included holding has both a usable quantity and a usable price. Otherwise
 carried-forward balances — a subset, not an addition. Allocation percentages
 refer to the included priced subtotal; when that is zero or unknown they are
 `null` and the UI draws no slices.
+
+**Allocations (AUD-404)** are aggregated **per asset_id**, not per holding —
+two wallets holding the same asset collapse into a single row, so an asset
+never appears twice. Each row carries `asset_id`, `symbol`, `value_usd`
+(summed across contributing wallets, or `null` if the asset is unpriced),
+`percentage` (`"0"` for unpriced rows), `quantity` (summed token amount, or
+`null` if any contributing line has an unresolvable decimals/amount — never
+silently under-reported), `price_usd`, `wallet_count` (distinct wallets
+holding the asset), `read_status` (worst of `error` > `stale` > `pending` >
+`ok` across contributing lines, using the same staleness rule as
+`stale_contribution_usd`), `included` (`false` only when every contributing
+line is excluded) and `logo_url`. Unpriced assets are included in
+`allocations` (sorted after the priced rows, which is also why `holdings` is
+kept unchanged — removing the Holdings page must not make unpriced assets
+invisible) and do not distort the priced rows' percentages, which still sum
+to ~100%. `unpriced_asset_count` counts distinct unpriced assets, not lines.
 
 ### Assets
 

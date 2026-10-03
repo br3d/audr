@@ -253,6 +253,12 @@ async def test_portfolio_returns_snapshot_with_holdings(
     assert alloc["asset_id"] == asset_id
     assert alloc["symbol"] == "WETH"
     assert alloc["percentage"] == "100.00"
+    assert alloc["value_usd"] == value
+    assert alloc["quantity"] == "2.000000000000000000"
+    assert alloc["price_usd"] == price
+    assert alloc["wallet_count"] == 1
+    assert alloc["read_status"] == "ok"
+    assert alloc["included"] is True
 
     # Icon proxy URL (AUD-385): emitted unconditionally, regardless of
     # whether the icon cache actually has an entry for this asset yet.
@@ -498,3 +504,183 @@ async def test_portfolio_wallet_id_filter(
     holdings = r.json()["holdings"]
     assert all(h["wallet_id"] == wallet_a for h in holdings)
     assert len(holdings) == 1
+
+
+@pytest.mark.integration
+async def test_portfolio_allocations_aggregate_same_asset_across_wallets(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """AUD-404: two wallets holding ETH must yield one allocation row, not two.
+
+    This is the AUD-403 dashboard regression (ETH shown at 22.92% and 7.85%
+    instead of once at ~31%) and the frontend duplicate-React-key bug —
+    allocations are aggregated per asset_id, summing value/quantity and
+    counting wallets, while holdings stays one row per (wallet, asset).
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_a = await _seed_wallet(db_session_factory, "0x" + "a" * 40)
+    wallet_b = await _seed_wallet(db_session_factory, "0x" + "b" * 40)
+    asset_id = await _seed_asset(db_session_factory, symbol="ETH", decimals=18)
+
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_a,
+                "asset_id": asset_id,
+                "raw_amount": "1000000000000000000",  # 1 ETH
+                "block_number": 20000000,
+                "price_usd": "3000.0",
+                "value_usd": "3000.0",
+            },
+            {
+                "wallet_id": wallet_b,
+                "asset_id": asset_id,
+                "raw_amount": "2000000000000000000",  # 2 ETH
+                "block_number": 20000000,
+                "price_usd": "3000.0",
+                "value_usd": "6000.0",
+            },
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+
+    # holdings stays one row per (wallet, asset).
+    assert len(data["holdings"]) == 2
+
+    # allocations collapses to a single row for the shared asset.
+    assert len(data["allocations"]) == 1
+    alloc = data["allocations"][0]
+    assert alloc["asset_id"] == asset_id
+    assert alloc["value_usd"] == "9000.000000000000000000"
+    assert alloc["quantity"] == "3.000000000000000000"
+    assert alloc["wallet_count"] == 2
+    assert alloc["percentage"] == "100.00"
+    assert alloc["included"] is True
+
+
+@pytest.mark.integration
+async def test_portfolio_allocations_include_unpriced_asset(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Unpriced holdings must surface in allocations, sorted after priced rows.
+
+    Holdings-only visibility is being removed with the Holdings page
+    (AUD-403), so an unpriced asset would otherwise disappear entirely.
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    priced_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "a" * 40, symbol="ETH")
+    dust_asset_id = await _seed_asset(db_session_factory, token_address="0x" + "b" * 40, symbol="DUST")
+
+    await _seed_snapshot(
+        db_session_factory,
+        quality="gaps",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": priced_asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            },
+            {
+                "wallet_id": wallet_id,
+                "asset_id": dust_asset_id,
+                "price_usd": None,
+                "value_usd": None,
+            },
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data["unpriced_asset_count"] == 1
+    assert len(data["allocations"]) == 2
+
+    priced_alloc, unpriced_alloc = data["allocations"]
+    assert priced_alloc["asset_id"] == priced_asset_id
+    assert priced_alloc["percentage"] == "100.00"
+
+    assert unpriced_alloc["asset_id"] == dust_asset_id
+    assert unpriced_alloc["value_usd"] is None
+    assert unpriced_alloc["percentage"] == "0"
+    assert unpriced_alloc["price_usd"] is None
+
+
+@pytest.mark.integration
+async def test_portfolio_allocation_read_status_reflects_stale_contributing_line(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """An allocation's read_status is the worst among its contributing lines.
+
+    Reuses the staleness rule already computed for stale_contribution_usd
+    (a line's block_number behind the snapshot's max block is "stale").
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_a = await _seed_wallet(db_session_factory, "0x" + "a" * 40)
+    wallet_b = await _seed_wallet(db_session_factory, "0x" + "b" * 40)
+    asset_id = await _seed_asset(db_session_factory, symbol="ETH", decimals=18)
+
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_a,
+                "asset_id": asset_id,
+                "block_number": 20000100,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            },
+            {
+                "wallet_id": wallet_b,
+                "asset_id": asset_id,
+                "block_number": 20000000,  # behind the max -> stale
+                "price_usd": "50.0",
+                "value_usd": "50.0",
+            },
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["allocations"]) == 1
+    assert data["allocations"][0]["read_status"] == "stale"
+
+
+@pytest.mark.integration
+async def test_portfolio_allocations_wallet_filter_scopes_aggregation(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """?wallet_id= keeps scoping allocations, not just holdings."""
+    await _setup_and_get_csrf(http_client)
+    wallet_a = await _seed_wallet(db_session_factory, "0x" + "a" * 40)
+    wallet_b = await _seed_wallet(db_session_factory, "0x" + "b" * 40)
+    asset_id = await _seed_asset(db_session_factory)
+
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {"wallet_id": wallet_a, "asset_id": asset_id, "price_usd": "1.0", "value_usd": "1.0"},
+            {"wallet_id": wallet_b, "asset_id": asset_id, "price_usd": "2.0", "value_usd": "2.0"},
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL, params={"wallet_id": wallet_a})
+    assert r.status_code == 200
+    allocations = r.json()["allocations"]
+    assert len(allocations) == 1
+    assert allocations[0]["wallet_count"] == 1
+    assert allocations[0]["value_usd"] == "1.000000000000000000"
