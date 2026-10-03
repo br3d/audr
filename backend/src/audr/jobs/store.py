@@ -8,6 +8,7 @@ Claim semantics:
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -84,6 +85,7 @@ class JobRun:
     heartbeat_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+    params: dict[str, Any] | None
 
 
 async def claim_job(
@@ -215,21 +217,29 @@ async def enqueue_job(
     *,
     kind: JobKind,
     max_retries: int = 3,
+    params: dict[str, Any] | None = None,
 ) -> uuid.UUID:
     """Insert a ``pending`` job run as an on-demand queue entry.
 
     Unlike :func:`claim_job` (which starts a run immediately as ``in_progress``),
     this only records a request.  A worker running :func:`claim_pending_job`
     picks it up on its next poll and executes it.  Used for interactively
-    triggered jobs such as integration validation (AUD-313).
+    triggered jobs such as integration validation (AUD-313), and for
+    per-wallet-scoped balance_scan/discovery requests (AUD-399/AUD-400) via
+    ``params={"wallet_id": ...}``.
     """
     run_id = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO job_run (id, kind, status, max_retries)"
-            " VALUES (:id, :kind, 'pending', :max_retries)"
+            "INSERT INTO job_run (id, kind, status, max_retries, params)"
+            " VALUES (:id, :kind, 'pending', :max_retries, CAST(:params AS jsonb))"
         ),
-        {"id": run_id, "kind": kind.value, "max_retries": max_retries},
+        {
+            "id": run_id,
+            "kind": kind.value,
+            "max_retries": max_retries,
+            "params": json.dumps(params) if params is not None else None,
+        },
     )
     await session.flush()
     return run_id
@@ -428,7 +438,8 @@ async def get_job_run(
         sa.text(
             """
             SELECT id, kind, status, retry_count, max_retries, error,
-                   checkpoint, claimed_at, heartbeat_at, completed_at, created_at
+                   checkpoint, claimed_at, heartbeat_at, completed_at, created_at,
+                   params
             FROM job_run WHERE id = :id
             """
         ),
@@ -449,7 +460,22 @@ async def get_job_run(
         heartbeat_at=row[8],
         completed_at=row[9],
         created_at=row[10],
+        params=row[11],
     )
+
+
+async def get_job_params(
+    session: AsyncSession, *, run_id: uuid.UUID
+) -> dict[str, Any] | None:
+    """Return the ``params`` blob stored on *run_id*, or None if unset."""
+    result = await session.execute(
+        sa.text("SELECT params FROM job_run WHERE id = :id"),
+        {"id": run_id},
+    )
+    row = result.first()
+    if row is None or row[0] is None:
+        return None
+    return dict(row[0])
 
 
 async def _expire_stale_leases(session: AsyncSession, *, kind: JobKind) -> None:
