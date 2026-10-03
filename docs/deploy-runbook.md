@@ -128,6 +128,28 @@ window is belt-and-braces on top of that, keeping the previous release resident
 so the common rollback needs no pull at all; `docker image prune` never
 considers an image a running container references.
 
+### CI test images are the other accumulator
+
+Release images are not the only thing that grows. `ci.yaml` namespaces its
+compose project per run (`audr-test-ci-<run>-<attempt>`, from AUD-310, so
+concurrent runs cannot destroy each other's database), which means the images
+compose builds are named per run too — about 1GB of `-backend-tests` plus
+`-migrate-test` on every CI run. A unique name can never be a cache hit for a
+later run, so they are garbage the moment the job ends, yet `docker compose
+down -v` removes containers, volumes and networks but *not* images. Under the
+48h release window alone they outlived their usefulness by two days: the first
+measurement after the GC step shipped found 27 such images from 16 past runs
+still resident, and CI pushed the host from 44% to 60% in a couple of hours.
+
+So they are deleted at the source: `ci.yaml`'s teardown step removes the images
+matching its own `$COMPOSE_PROJECT-*` — scoped to that run, so a concurrent CI
+job on the other runner slot is untouched. `host-gc.sh` then reaps any
+`audr-test-ci-*` image older than `TEST_IMAGE_MAX_AGE_HOURS` (default 6) as a
+second line of defence, for the case where the runner was killed before its
+teardown step could run. That reaper uses `docker image rm` *without* `-f`, so
+an image a container still references is refused rather than pulled out from
+under a live run.
+
 ## Registry tag retention
 
 The registry at `192.168.1.90:8085` is a plain CNCF `distribution` registry

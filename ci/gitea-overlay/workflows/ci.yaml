@@ -93,6 +93,20 @@ jobs:
           for net in $(docker network ls --filter 'name=^audr-test-' --format '{{.Name}}'); do
             docker network rm "$net" >/dev/null 2>&1 || true
           done
+          # `down` removes containers, volumes and networks but NOT the images
+          # compose just built. Because the project name is unique per run, those
+          # images (`$COMPOSE_PROJECT-backend-tests`, `-migrate-test`, ~1GB a run)
+          # can never be a cache hit for any later run — they are garbage the
+          # moment this job ends. Left to scripts/host-gc.sh they would survive
+          # its 48h retention window, and at ~1GB per CI run that was the
+          # dominant source of the disk growth AUD-395 is about. Delete them
+          # here, at the source. Scoped to this run's own project name, so a
+          # concurrent CI job on the other runner slot is untouched.
+          imgs="$(docker images --filter "reference=${COMPOSE_PROJECT}-*" -q | sort -u)"
+          if [ -n "$imgs" ]; then
+            # shellcheck disable=SC2086
+            docker image rm -f $imgs >/dev/null 2>&1 || true
+          fi
 
   frontend-tests:
     # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match

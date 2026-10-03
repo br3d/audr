@@ -40,6 +40,11 @@ CACHE_MAX_AGE="${CACHE_MAX_AGE:-48h}"
 # Warn when the root filesystem is still this full after a prune — the signal
 # that retention is too generous or something else is eating the disk.
 WARN_PCT="${WARN_PCT:-80}"
+# ci.yaml names its compose project `audr-test-ci-<run>-<attempt>`, so the test
+# images it builds are unique per run and can never be a cache hit for a later
+# one. ci.yaml deletes its own at teardown; this window only has to cover the
+# case where the runner was killed before that step ran, so it is short.
+TEST_IMAGE_MAX_AGE_HOURS="${TEST_IMAGE_MAX_AGE_HOURS:-6}"
 
 log(){ echo "[host-gc] $*"; }
 
@@ -70,6 +75,24 @@ if ! docker image prune -af --filter "until=$IMAGE_MAX_AGE" 2>&1 | sed 's/^/[hos
   log "WARN: image prune failed"
   rc=1
 fi
+
+# Orphaned per-run CI test images. These are worthless the moment their run
+# ends (see TEST_IMAGE_MAX_AGE_HOURS), so they do not deserve the 48h window
+# the release images get. `docker image rm` without -f refuses an image a
+# container still references, which is what keeps a live concurrent CI job on
+# the other runner slot safe; the age window is the second guard.
+cutoff=$(( $(date +%s) - TEST_IMAGE_MAX_AGE_HOURS * 3600 ))
+reaped=0
+for id in $(docker images --filter 'reference=audr-test-ci-*' -q 2>/dev/null | sort -u); do
+  created="$(docker image inspect --format '{{.Created}}' "$id" 2>/dev/null)" || continue
+  [ -n "$created" ] || continue
+  created_ts="$(date -d "$created" +%s 2>/dev/null)" || continue
+  if [ -z "$created_ts" ] || [ "$created_ts" -ge "$cutoff" ]; then continue; fi
+  if docker image rm "$id" >/dev/null 2>&1; then
+    reaped=$((reaped + 1))
+  fi
+done
+[ "$reaped" = 0 ] || log "reaped $reaped orphaned CI test image(s) older than ${TEST_IMAGE_MAX_AGE_HOURS}h"
 
 log "after:  $(disk_line)"
 
