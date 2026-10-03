@@ -45,7 +45,7 @@ The dev RPC URL embeds a provider API key, so it must never reach git.
 ```bash
 # one-off: store the URL locally, then seed
 AUDR_SEED_RPC_URL='https://mainnet.example/v3/<key>' bash scripts/setup-secrets.sh
-./scripts/seed_dev.sh                     # or: ./scripts/seed_dev.sh http://192.168.1.228
+./scripts/seed_dev.sh                     # or: ./scripts/seed_dev.sh "$AUDR_BASE_URL"
 ```
 
 The script saves the URL through `PUT /api/v1/integrations/rpc` (encrypted at

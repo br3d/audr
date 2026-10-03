@@ -4,11 +4,16 @@
 # Usage: ./scripts/deploy.sh [TAG]
 #   TAG — image tag to deploy (as produced by scripts/build.sh). Defaults to the
 #         BACKEND_TAG already pinned in the remote .env.
-# Requires: SSH key at ./id_ed25519 (mode 600) or AUDR_SSH_KEY env var.
+# Requires: SSH key at ./id_ed25519 (mode 600) or AUDR_SSH_KEY env var, plus
+#   AUDR_DEPLOY_HOST and AUDR_REGISTRY from the environment or deploy.env
+#   (see deploy.env.example). None of them is baked into this public repo.
 # Exits non-zero on any failure.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/deploy-env.sh
+. "${ROOT}/scripts/lib/deploy-env.sh"
+audr_load_deploy_env "${ROOT}"
 
 # scripts/ci.sh has always called `deploy.sh "${TAG}"`, but this script used to
 # ignore positional arguments entirely — so the tag CI had just built was
@@ -17,7 +22,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # and advanced the database underneath it (2026-10-01).
 DEPLOY_TAG="${1:-}"
 
-DEPLOY_HOST="${DEPLOY_HOST:-codex@192.168.1.228}"
+DEPLOY_HOST="${DEPLOY_HOST:-${AUDR_DEPLOY_HOST:-}}"
+audr_require DEPLOY_HOST "SSH destination of the deploy host, e.g. deploy@audr.example.internal."
+REGISTRY="${REGISTRY:-${AUDR_REGISTRY:-}}"
+audr_require REGISTRY "Registry compose.yaml resolves \${AUDR_REGISTRY} against, e.g. registry.example.internal:5000."
 SSH_KEY="${AUDR_SSH_KEY:-${ROOT}/id_ed25519}"
 SSH="ssh -i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
 # The live compose project runs out of /home/codex/audr — that is the directory
@@ -26,7 +34,7 @@ SSH="ssh -i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
 # /srv/audr are stale copies left from earlier bring-ups; deploying into one of
 # them pulls images and runs migrations against the live database using a stale
 # password, which is how AUD-360's deploy first failed (2026-10-01).
-REMOTE_DIR="${REMOTE_DIR:-/home/codex/audr}"
+REMOTE_DIR="${REMOTE_DIR:-${AUDR_REMOTE_DIR:-/home/codex/audr}}"
 
 if [ -n "${DEPLOY_TAG}" ]; then
   echo "==> Deploying tag ${DEPLOY_TAG} to ${DEPLOY_HOST}:${REMOTE_DIR}"
@@ -39,11 +47,32 @@ scp -i "${SSH_KEY}" -o StrictHostKeyChecking=accept-new \
   "${ROOT}/compose.yaml" "${DEPLOY_HOST}:${REMOTE_DIR}/compose.yaml"
 
 # Pull new images, run migrations, restart services
-$SSH "${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" "${DEPLOY_TAG}" <<'REMOTE'
+$SSH "${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" "${DEPLOY_TAG}" "${REGISTRY}" <<'REMOTE'
 set -euo pipefail
 REMOTE_DIR="$1"
 DEPLOY_TAG="${2:-}"
+REGISTRY="${3:?registry not passed from the local side}"
 cd "${REMOTE_DIR}"
+
+# Write a single KEY=value into the remote .env, replacing any existing line.
+#
+# Deliberately no .env backup here: only these keys change, and .env also holds
+# DB_PASSWORD and SECRET_KEY — a copy per deploy would scatter the secrets
+# across the host for no recovery value.
+touch .env
+env_set() {
+  if grep -q "^$1=" .env; then
+    sed -i "s|^$1=.*|$1=$2|" .env
+  else
+    printf '%s=%s\n' "$1" "$2" >> .env
+  fi
+}
+
+# compose.yaml interpolates ${AUDR_REGISTRY} rather than hardcoding the registry
+# (the repo is public). Pin it on every deploy so a host whose .env predates
+# that change — or a fresh bring-up — resolves the image instead of falling back
+# to the localhost:5000 placeholder.
+env_set AUDR_REGISTRY "${REGISTRY}"
 
 # Pin the requested tag before pulling so every later step — pull, migrate,
 # up -d, and the image verification below — agrees on what is being deployed.
@@ -52,16 +81,7 @@ if [ -n "${DEPLOY_TAG}" ]; then
   # Only BACKEND_TAG since AUD-388: there is one image now. A stale FRONTEND_TAG
   # line may still sit in the remote .env from before that change; it is inert,
   # because no service in compose.yaml interpolates it any more.
-  #
-  # Deliberately no .env backup here: only the tag line changes, and .env also
-  # holds DB_PASSWORD and SECRET_KEY — a copy per deploy would scatter the
-  # secrets across the host for no recovery value.
-  touch .env
-  if grep -q "^BACKEND_TAG=" .env; then
-    sed -i "s|^BACKEND_TAG=.*|BACKEND_TAG=${DEPLOY_TAG}|" .env
-  else
-    printf 'BACKEND_TAG=%s\n' "${DEPLOY_TAG}" >> .env
-  fi
+  env_set BACKEND_TAG "${DEPLOY_TAG}"
 fi
 
 echo "  -> Pulling latest image"

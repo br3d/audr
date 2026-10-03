@@ -144,6 +144,9 @@ scripts/            setup-secrets, seed_dev, test, build, deploy, smoke-test,
                     benchmark, registry-prune, gen_third_party, sync-ci-overlay,
                     gen_brand_assets
 ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
+.github/workflows/  GitHub Actions CI for pull requests (lint + the full suite)
+deploy.env.example  Template for the untracked deploy.env: registry and deploy
+                    host for the scripts/ helpers (no addresses are tracked)
 compose.yaml        The production/local stack
 compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
 Dockerfile          3-stage build: frontend-builder, backend-builder, runtime
@@ -224,6 +227,9 @@ debugging against containers, and the shared-checkout worktree rules — is in
 ---
 
 ## Security notes
+
+Found a vulnerability? Please report it privately — see
+[SECURITY.md](SECURITY.md). Do not open a public issue for it.
 
 - Provider credentials (RPC URLs, API keys) are encrypted at rest with
   AES-256-GCM under a master key that is itself wrapped by `SECRET_KEY`. They are

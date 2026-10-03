@@ -12,8 +12,13 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/deploy-env.sh
+. "$REPO_DIR/scripts/lib/deploy-env.sh"
+audr_load_deploy_env "$REPO_DIR"
+
 SRC="$REPO_DIR/ci/gitea-overlay/workflows"
-HOST="${AUDR_DEPLOY_HOST:-codex@192.168.1.228}"
+HOST="${AUDR_DEPLOY_HOST:-}"
+audr_require AUDR_DEPLOY_HOST "SSH destination of the deploy host that runs the mirror, e.g. deploy@audr.example.internal."
 KEY="${AUDR_SSH_KEY:-$REPO_DIR/id_ed25519}"
 REMOTE_DIR=".config/audr-mirror/overlay/.gitea/workflows"
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$HOST")

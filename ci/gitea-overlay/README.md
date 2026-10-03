@@ -2,7 +2,7 @@
 
 The audr build/test/deploy pipeline runs on **Gitea Actions**, not GitHub Actions.
 GitHub `br3d/audr` is the canonical repo; a one-way mirror on the deploy host
-(`192.168.1.228`) replays it into Gitea `dfbot/audr` and, for `main` only, bakes
+replays it into Gitea `dfbot/audr` and, for `main` only, bakes
 the three workflow files in this directory into the mirrored commit as
 `.gitea/workflows/`. See `docs/deploy-runbook.md`.
 
@@ -18,7 +18,7 @@ without ever becoming a live trigger path.
 ## Authority and drift
 
 The **running** copies live at `~/.config/audr-mirror/overlay/.gitea/workflows/`
-on `192.168.1.228`; the mirror script reads that directory, not this one. The
+on the deploy host; the mirror script reads that directory, not this one. The
 files here are the source of record and the recovery copy — before this directory
 existed, `deploy.yaml` (including the whole migration-aware rollback and image
 pinning added after the 2026-09-29 outage) existed nowhere but that one host
@@ -31,6 +31,12 @@ Edit here, commit, then push to the host:
 scripts/sync-ci-overlay.sh          # diff repo vs host, then apply on confirmation
 scripts/sync-ci-overlay.sh --check  # diff only; exit 1 if they differ
 ```
+
+Both need `AUDR_DEPLOY_HOST` (environment or `deploy.env` — see
+`deploy.env.example`): this repository is public, so no host address is tracked
+in it. For the same reason the workflows read the image registry from the Gitea
+repository variable `AUDR_REGISTRY` (Settings → Actions → Variables) and refuse
+to run if it is unset.
 
 `--check` is the drift guard: run it whenever the pipeline behaves unexpectedly,
 since a hand-edit on the host is invisible to code review until the diff is run.

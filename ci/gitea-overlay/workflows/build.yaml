@@ -1,10 +1,11 @@
 name: Build & Push Images
 
-# DISABLED auto-trigger (AUD-294 incident 2026-09-28): the deployed code on
-# 192.168.1.228 (~/audr @ 9ae03b6, migration 008) is NOT committed to this repo's
-# main (stops at 007), so builds from main produce STALE images that break the DB
-# schema on deploy. Manual dispatch only until the deployed code is reconciled
-# into git. Harbor is anonymous (no login).
+# DISABLED auto-trigger (AUD-294 incident 2026-09-28): the deployed code on the
+# deploy host (~/audr @ 9ae03b6, migration 008) was NOT committed to this repo's
+# main (stopped at 007), so builds from main produced STALE images that broke the
+# DB schema on deploy. Manual dispatch only until the deployed code is
+# reconciled into git. The registry is anonymous (no login); its endpoint comes
+# from the Gitea repository variable AUDR_REGISTRY, not from this file.
 on:
   workflow_dispatch:
 
@@ -16,13 +17,22 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: 192.168.1.90:8085
+  REGISTRY: ${{ vars.AUDR_REGISTRY }}
 
 jobs:
   build-push:
     runs-on: host
     steps:
       - uses: actions/checkout@v4
+      - name: Check registry configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY:-}" ]; then
+            echo "FATAL: repository variable AUDR_REGISTRY is not set"
+            echo "       Set it under Settings -> Actions -> Variables (host:port of the image registry)."
+            exit 2
+          fi
+          echo "registry = $REGISTRY"
       - name: Compute tags
         id: meta
         run: |

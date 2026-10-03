@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run a quick smoke test against the live deployment.
 # Usage: ./scripts/smoke-test.sh [BASE_URL]
-#   BASE_URL defaults to http://192.168.1.228 (the api container publishes 80)
+#   BASE_URL defaults to $AUDR_BASE_URL, else http://localhost (the api container
+#   publishes 80, so the default is right when run on the deploy host itself;
+#   set AUDR_BASE_URL in deploy.env to probe it from elsewhere)
 # Exits non-zero if any check fails.
 #
 # Assertions are written against ROUTES THAT ACTUALLY EXIST (AUD-328).  Two
@@ -18,7 +20,12 @@
 #     this script does not use it — we want to read 401/404 back verbatim.
 set -euo pipefail
 
-BASE_URL="${1:-${AUDR_BASE_URL:-http://192.168.1.228}}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/deploy-env.sh
+. "${ROOT}/scripts/lib/deploy-env.sh"
+audr_load_deploy_env "${ROOT}"
+
+BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost}}"
 PASS=0
 FAIL=0
 

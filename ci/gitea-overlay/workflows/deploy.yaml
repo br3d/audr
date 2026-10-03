@@ -2,8 +2,8 @@ name: Build & Deploy (guarded)
 
 # Guarded build + auto-deploy pipeline for the audr stack (AUD-294).
 #
-# One serialized job on the self-hosted host runner (192.168.1.228, which is
-# also the deploy host). Build and deploy live in ONE job so ordering and image
+# One serialized job on the self-hosted `host` runner, which is also the deploy
+# host. Build and deploy live in ONE job so ordering and image
 # freshness are guaranteed — no cross-workflow race.
 #
 # Serialization used to come for free from the runner's capacity of 1. That
@@ -55,7 +55,12 @@ name: Build & Deploy (guarded)
 #      deploy never leaves a poisoned :latest in the registry.
 #
 # Triggers: push to main (guarded auto-deploy), release tags v*, and manual
-# workflow_dispatch. Harbor (192.168.1.90:8085) is anonymous — no docker login.
+# workflow_dispatch.
+#
+# The registry endpoint is NOT in this file: the GitHub repository is public, so
+# it lives in the Gitea repository variable `AUDR_REGISTRY` (Settings → Actions →
+# Variables) and the job refuses to start without it. The registry is anonymous —
+# no docker login.
 on:
   workflow_dispatch:
     inputs:
@@ -75,7 +80,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: 192.168.1.90:8085
+  REGISTRY: ${{ vars.AUDR_REGISTRY }}
   DEPLOY_DIR: /home/codex/audr
 
 jobs:
@@ -83,6 +88,19 @@ jobs:
     runs-on: host
     steps:
       - uses: actions/checkout@v4
+
+      # Fail here rather than three steps in: an unset variable would otherwise
+      # build and push `/audr-backend:<sha>` to Docker Hub's namespace resolution
+      # and only blow up at the pull.
+      - name: Check registry configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY:-}" ]; then
+            echo "FATAL: repository variable AUDR_REGISTRY is not set"
+            echo "       Set it under Settings -> Actions -> Variables (host:port of the image registry)."
+            exit 2
+          fi
+          echo "registry = $REGISTRY"
 
       - name: Compute tags
         id: meta
@@ -119,8 +137,11 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          REGISTRY="192.168.1.90:8085"
-          DEPLOY_DIR="/home/codex/audr"
+          # Both come from the workflow `env:` block above — REGISTRY from the
+          # AUDR_REGISTRY repository variable, which the preflight step has
+          # already proven non-empty.
+          REGISTRY="${REGISTRY:?registry not configured}"
+          DEPLOY_DIR="${DEPLOY_DIR:?deploy dir not configured}"
           BACKEND="$REGISTRY/audr-backend"
           HEALTH_RETRIES="${HEALTH_RETRIES:-40}"
           HEALTH_SLEEP="${HEALTH_SLEEP:-3}"
@@ -137,6 +158,14 @@ jobs:
 
           # DB_PASSWORD is needed for the direct alembic invocations below.
           set -a; . ./.env; set +a
+
+          # compose.yaml interpolates ${AUDR_REGISTRY} instead of hardcoding the
+          # endpoint (the GitHub repo is public). Export it before the first
+          # compose call — an exported value also wins over the .env file in
+          # compose's precedence order — and persist it into $DEPLOY_DIR/.env
+          # further down, so a manual `docker compose` on the host resolves the
+          # same image instead of the localhost:5000 placeholder default.
+          export AUDR_REGISTRY="$REGISTRY"
 
           # DB must be reachable before we touch the stack.
           timeout --foreground 180 docker compose up -d db
@@ -184,6 +213,7 @@ jobs:
             # resolving the stale value and silently skipping the recreate.
             export "$1=$2"
           }
+          env_set AUDR_REGISTRY "$REGISTRY"
           PREV_BACKEND_TAG="$(env_get BACKEND_TAG)";  PREV_BACKEND_TAG="${PREV_BACKEND_TAG:-latest}"
           log "pre-deploy pinned tag: backend=$PREV_BACKEND_TAG"
 
