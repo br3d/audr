@@ -97,6 +97,37 @@ listening. Since AUD-388 a 200 on `/` is also meaningful — the SPA is served b
 the `api` container, so it cannot answer at all while the API is down — but it
 still says nothing about the database, which is the usual thing broken here.
 
+## Deploy host disk retention
+
+The host runner is also the deploy host, so every push to `main` mints a new
+~500MB `audr-backend:<sha>` image on the same 32GB root filesystem that carries
+the live stack's database volume. Nothing removed them until AUD-395: by
+2026-10-03 the host held 299 images (14.9GB) plus 3.8GB of build cache at 89%
+full — about four more deploys before a build would have hit ENOSPC, taking the
+database down with it rather than failing politely.
+
+`scripts/host-gc.sh` now runs as a `if: always()` step at the end of both
+`deploy.yaml` and `build.yaml`. It prunes build cache and unreferenced images
+older than 48h, warns when the root filesystem is still ≥80% full afterwards,
+and always exits 0 — a GC problem must never fail an otherwise healthy deploy.
+Confirm it ran by looking for `[host-gc] after: ...` in the job log.
+
+```bash
+# ad-hoc run: copy it over, since the runner's checkout dir is not stable
+scp -i id_ed25519 scripts/host-gc.sh codex@192.168.1.228:/tmp/
+ssh -i id_ed25519 codex@192.168.1.228 'bash /tmp/host-gc.sh --dry-run'   # report only
+ssh -i id_ed25519 codex@192.168.1.228 'IMAGE_MAX_AGE=24h CACHE_MAX_AGE=24h bash /tmp/host-gc.sh'
+```
+
+Pruning this host cannot disarm rollback. `deploy.yaml`'s snapshot step pushes
+`:rollback` to the registry precisely so the rollback path does not depend on
+the host's local cache surviving a prune, and `restore_image()` recovers in
+three steps: local, then the immutable per-sha tag in the registry, then
+`:rollback`. Host-local images are a cache, not the source of truth. The 48h
+window is belt-and-braces on top of that, keeping the previous release resident
+so the common rollback needs no pull at all; `docker image prune` never
+considers an image a running container references.
+
 ## Registry tag retention
 
 The registry at `192.168.1.90:8085` is a plain CNCF `distribution` registry
