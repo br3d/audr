@@ -41,3 +41,7 @@ jobs:
         run: |
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.sha }}"
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.version }}"
+      # Same host runner, same image accumulation as deploy.yaml (AUD-395).
+      - name: Reclaim host disk
+        if: always()
+        run: bash scripts/host-gc.sh
