@@ -523,8 +523,8 @@ export interface PurgeInput {
 
 // --- Jobs API ---
 
-export function triggerJob(kind: JobKind): Promise<JobRef> {
-  return post<JobRef>('/jobs', { kind })
+export function triggerJob(kind: JobKind, walletId?: string): Promise<JobRef> {
+  return post<JobRef>('/jobs', walletId ? { kind, wallet_id: walletId } : { kind })
 }
 
 export function fetchJob(id: string): Promise<JobRun> {

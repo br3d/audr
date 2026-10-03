@@ -251,6 +251,8 @@ function WalletCard({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [jobMsg, setJobMsg] = useState<string | null>(null)
+  const [jobPending, setJobPending] = useState<'balances' | 'discovery' | null>(null)
 
   async function handleSaveLabel(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -279,6 +281,36 @@ function WalletCard({
       )
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleRefreshWallet() {
+    setError(null)
+    setJobMsg(null)
+    setJobPending('balances')
+    try {
+      await triggerJob('balances', wallet.id)
+      setJobMsg('Balance refresh queued.')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue refresh.')
+    } finally {
+      setJobPending(null)
+    }
+  }
+
+  async function handleDiscoverWallet() {
+    setError(null)
+    setJobMsg(null)
+    setJobPending('discovery')
+    try {
+      await triggerJob('discovery', wallet.id)
+      setJobMsg(
+        'Token discovery queued. Refreshing known balances does not discover new contracts outside catalog or manual coverage.',
+      )
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to queue discovery.')
+    } finally {
+      setJobPending(null)
     }
   }
 
@@ -350,6 +382,35 @@ function WalletCard({
         <span className="muted-text">{coverageText}</span>
         <button
           type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => void handleRefreshWallet()}
+          disabled={saving || !wallet.tracking_active || jobPending !== null}
+          aria-label={`Refresh balances for ${wallet.address}`}
+          title={
+            wallet.tracking_active
+              ? undefined
+              : 'Resume tracking to refresh balances for this address.'
+          }
+        >
+          <IconRefresh width={14} height={14} />
+          {jobPending === 'balances' ? 'Refreshing…' : 'Refresh balances'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => void handleDiscoverWallet()}
+          disabled={saving || !wallet.tracking_active || jobPending !== null}
+          aria-label={`Discover tokens for ${wallet.address}`}
+          title={
+            wallet.tracking_active
+              ? undefined
+              : 'Resume tracking to discover tokens for this address.'
+          }
+        >
+          {jobPending === 'discovery' ? 'Discovering…' : 'Discover tokens'}
+        </button>
+        <button
+          type="button"
           className={`btn btn-sm ${wallet.tracking_active ? 'btn-ghost' : 'btn-secondary'}`}
           onClick={handleToggleTracking}
           disabled={saving}
@@ -373,6 +434,12 @@ function WalletCard({
           Delete
         </button>
       </div>
+
+      {jobMsg !== null && (
+        <p role="status" className="muted-text mt-8">
+          {jobMsg}
+        </p>
+      )}
 
       {!wallet.tracking_active && (
         <p className="muted-text mt-8">
@@ -485,18 +552,20 @@ export default function WalletsPage() {
           type="button"
           className="btn btn-secondary"
           onClick={handleRefresh}
-          aria-label="Refresh balances"
+          aria-label="Refresh all balances"
+          title="Refresh balances for every tracked address — spends an RPC call per address."
         >
           <IconRefresh width={14} height={14} />
-          Refresh balances
+          Refresh all balances
         </button>
         <button
           type="button"
           className="btn btn-secondary"
           onClick={handleDiscover}
-          aria-label="Discover tokens"
+          aria-label="Discover tokens (all)"
+          title="Discover tokens for every tracked address — spends an RPC call per address."
         >
-          Discover tokens
+          Discover tokens (all)
         </button>
         {jobMsg !== null && <p role="status" className="muted-text">{jobMsg}</p>}
         {jobError !== null && <p role="alert" className="alert alert-danger">{jobError}</p>}
