@@ -114,7 +114,7 @@ def upgrade() -> None:
                 conn.execute(
                     sa.text(
                         # table is from the hardcoded _ASSET_REFERENCES tuple above, not user input.
-                        f"UPDATE {table} SET asset_id = :new WHERE asset_id = :old"  # noqa: S608
+                        f"UPDATE {table} SET asset_id = :new WHERE asset_id = :old"  # noqa: S608 — table is from the hardcoded _ASSET_REFERENCES tuple above, not user input
                     ),
                     {"new": canonical_id, "old": legacy_id},
                 )

@@ -88,7 +88,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for tbl in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608
+                await session.execute(text(f"DELETE FROM {tbl}"))  # noqa: S608 — tbl comes from the hardcoded _CLEAN_ORDER tuple above, not user input
 
 
 @pytest.fixture(autouse=True)

@@ -115,7 +115,7 @@ async def get_events(
 
     # `where` is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
     count_row = await db.execute(
-        sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),  # noqa: S608
+        sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         params,
     )
     total = count_row.scalar_one()
@@ -130,7 +130,7 @@ async def get_events(
             {where}
             ORDER BY block_number DESC, log_index DESC
             LIMIT :limit OFFSET :offset
-            """  # noqa: S608
+            """  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )
@@ -232,12 +232,12 @@ async def get_allowances(
         FROM onchain_event
         {where}
         ORDER BY wallet_id, token_address, to_address, block_number DESC, log_index DESC
-    """  # noqa: S608
+    """  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
 
     having = "WHERE raw_amount >= :threshold" if unlimited_only else ""
 
     count_row = await db.execute(
-        sa.text(f"SELECT COUNT(*) FROM ({latest_cte}) latest {having}"),  # noqa: S608
+        sa.text(f"SELECT COUNT(*) FROM ({latest_cte}) latest {having}"),  # noqa: S608 — latest_cte/having are fixed vocabularies of ":param" fragments; values are bound, never interpolated
         params,
     )
     total = count_row.scalar_one()
@@ -251,7 +251,7 @@ async def get_allowances(
             {having}
             ORDER BY block_number DESC
             LIMIT :limit OFFSET :offset
-            """  # noqa: S608
+            """  # noqa: S608 — latest_cte/having are fixed vocabularies of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )

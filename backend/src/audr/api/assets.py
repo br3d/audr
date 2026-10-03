@@ -352,7 +352,7 @@ async def patch_asset(
     if updates:
         updates.append("updated_at = :now")
         # updates is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
-        sql = f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"  # noqa: S608
+        sql = f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"  # noqa: S608 — updates is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         await db.execute(sa.text(sql), params)
         await db.commit()
 

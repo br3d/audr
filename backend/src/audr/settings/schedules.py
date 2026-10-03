@@ -112,7 +112,7 @@ async def update_schedule(
     await session.execute(
         sa.text(
             # set_parts is a fixed ":param" vocabulary; values are bound, never interpolated.
-            f"UPDATE schedule SET {', '.join(set_parts)} WHERE kind = :kind"  # noqa: S608
+            f"UPDATE schedule SET {', '.join(set_parts)} WHERE kind = :kind"  # noqa: S608 — set_parts is a fixed ":param" vocabulary; values are bound, never interpolated
         ),
         params,
     )

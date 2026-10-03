@@ -309,7 +309,7 @@ async def _bucket_seconds(
     if "since" in params:
         count_params["since"] = params["since"]
     # since_clause is a fixed ":param" fragment; the value is bound, never interpolated.
-    sql = f"SELECT COUNT(*) FROM history_point hp WHERE 1=1 {since_clause}"  # noqa: S608
+    sql = f"SELECT COUNT(*) FROM history_point hp WHERE 1=1 {since_clause}"  # noqa: S608 — since_clause is a fixed ":param" fragment; the value is bound, never interpolated
     raw_count = (await session.execute(sa.text(sql), count_params)).scalar_one()
     if raw_count <= _THIN_TARGET_POINTS:
         return None

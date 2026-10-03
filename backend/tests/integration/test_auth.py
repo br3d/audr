@@ -403,7 +403,7 @@ async def test_change_password_old_password_rejected(http_client: httpx.AsyncCli
 # Persistent login throttle tests
 # ---------------------------------------------------------------------------
 
-from audr.auth.service import THROTTLE_MAX_FAILURES  # noqa: E402
+from audr.auth.service import THROTTLE_MAX_FAILURES  # noqa: E402 — imported near point of use
 
 
 @pytest.mark.integration

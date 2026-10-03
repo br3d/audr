@@ -154,7 +154,7 @@ async def delete_wallet(
             # _OWNED_VALUATION_LINE is a fixed fragment; its value is bound, not interpolated.
             await session.execute(
                 sa.text(
-                    "SELECT DISTINCT snapshot_id FROM valuation_line"  # noqa: S608
+                    "SELECT DISTINCT snapshot_id FROM valuation_line"  # noqa: S608 — _OWNED_VALUATION_LINE is a fixed ":param" fragment, not interpolated
                     f" WHERE {_OWNED_VALUATION_LINE}"
                 ),
                 params,

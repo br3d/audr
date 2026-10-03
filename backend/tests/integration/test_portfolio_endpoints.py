@@ -92,7 +92,7 @@ async def _seed_snapshot(
             # published_clause is one of two hardcoded literals, not user input.
             await session.execute(
                 text(
-                    "INSERT INTO valuation_snapshot"  # noqa: S608
+                    "INSERT INTO valuation_snapshot"  # noqa: S608 — published_clause is one of two hardcoded literals, not user input
                     " (id, snapshotted_at, quality, published_at, input_key)"
                     f" VALUES (:id, NOW(), :quality, {published_clause}, :input_key)"
                 ),

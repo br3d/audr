@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.jobs.__main__ import _discover_for_active_wallets
 from audr.jobs.store import (
-    JobKind,  # noqa: F401
-    claim_job,  # noqa: F401
+    JobKind,
+    claim_job,
 )
 from audr.portfolio.balances import get_holdings, record_balance
 from audr.portfolio.discovery import (

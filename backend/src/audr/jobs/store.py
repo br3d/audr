@@ -471,7 +471,7 @@ async def _expire_stale_leases(session: AsyncSession, *, kind: JobKind) -> None:
     """Move in_progress runs whose heartbeat has expired back to pending."""
     # _LEASE_TIMEOUT_INTERVAL is a module constant, not user input — safe to embed.
     _sql = (
-        f"UPDATE job_run SET status = 'pending', worker_id = NULL"  # noqa: S608
+        f"UPDATE job_run SET status = 'pending', worker_id = NULL"  # noqa: S608 — _LEASE_TIMEOUT_INTERVAL is a module constant, not user input
         f" WHERE kind = :kind AND status = 'in_progress'"
         f" AND heartbeat_at < now() - interval '{_LEASE_TIMEOUT_INTERVAL}'"
     )
