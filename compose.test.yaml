@@ -80,6 +80,13 @@ services:
       - test-net
     volumes:
       - ./backend:/workspace/backend:ro
+      # AUD-407: tests/unit/test_version.py asserts that the single version
+      # number is identical in all four files that carry it. Two of those live
+      # outside ./backend, so without these mounts the guard could only skip —
+      # and version drift reaching main unnoticed is the exact failure it is
+      # there to prevent.
+      - ./VERSION:/workspace/VERSION:ro
+      - ./frontend/package.json:/workspace/frontend/package.json:ro
     profiles:
       - backend
 

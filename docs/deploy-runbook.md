@@ -92,11 +92,21 @@ docker run --rm --network audr_internal -w /app \
 # contains the DB's revision. Check the downgrade is safe first (a table the
 # downgrade drops must be empty).
 
-# 4. Bring the stack back and verify with the same three signals as the gate.
+# 4. Bring the stack back and verify with the same four signals as the gate.
 cd ~/audr && timeout --foreground 300 docker compose up -d --remove-orphans
 curl -s http://localhost/health/ready   # must contain "status":"ok"
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/
+curl -s http://localhost/api/v1/version # version + commit actually running
 ```
+
+After a manual recovery the live version is deliberately *not* the one this
+checkout carries, so pin the expectation when smoke-testing it:
+
+```bash
+AUDR_EXPECT_VERSION=<the version you rolled back to> ./scripts/smoke-test.sh
+```
+
+See `docs/releases.md` for the versioning and image-tagging scheme.
 
 `GET /health/ready` is the trustworthy public signal, because it performs a real
 DB and master-key check inside FastAPI rather than merely proving something is

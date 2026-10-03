@@ -178,6 +178,10 @@ Branching and merging follow [docs/engineering-workflow.md](docs/engineering-wor
 branch off `main`, run the suite, and **merge your own branch**. This project
 does not use pull requests.
 
+Releases are semantic versions cut with `./scripts/release.sh major|minor|patch`;
+the running build reports itself at `GET /api/v1/version` and in the bottom-left
+of the sidebar. See [docs/releases.md](docs/releases.md).
+
 Full developer setup — the e2e suite, lint and type checks, migrations,
 debugging against containers, and the shared-checkout worktree rules — is in
 [docs/development.md](docs/development.md).
@@ -211,6 +215,7 @@ debugging against containers, and the shared-checkout worktree rules — is in
 |---|---|
 | [containers.md](docs/containers.md) | Why each compose service exists, what was removed, what could still go |
 | [deploy-runbook.md](docs/deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
+| [releases.md](docs/releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [security-at-rest.md](docs/security-at-rest.md) | Encryption-at-rest threat model and recommendation |
 | [third-party.md](docs/third-party.md) | Licence attribution and exact release image/dependency pins |
 | [brand.md](docs/brand.md) | Where the logo files live, how the derived assets are generated, how to use the mark |

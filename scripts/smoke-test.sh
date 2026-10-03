@@ -75,6 +75,15 @@ check "Frontend SPA loads"                "${BASE_URL}/" 200 '<div id="root"'
 # used to provide, and the single most likely thing to regress if the static
 # mount in audr.api.spa is ever reordered or replaced.
 check "SPA deep-route refresh /folio"     "${BASE_URL}/folio" 200 '<div id="root"'
+# AUD-407: the deployment reports a semantic version, and it is the one this
+# checkout carries. Asserting the exact number — not merely that the route
+# answers — is what turns the smoke test into a deploy check: a stale image that
+# is otherwise perfectly healthy fails here and nowhere else.
+#
+# Set AUDR_EXPECT_VERSION to pin a different number, e.g. when smoke-testing a
+# rollback, where the live build is deliberately older than this working copy.
+EXPECT_VERSION="${AUDR_EXPECT_VERSION:-$(tr -d ' \t\r\n' < "${ROOT}/VERSION")}"
+check "Deployed version is ${EXPECT_VERSION}" "${BASE_URL}/api/v1/version" 200 "\"version\":\"${EXPECT_VERSION}\""
 
 echo ""
 echo "==> Results: ${PASS} passed, ${FAIL} failed"
