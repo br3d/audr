@@ -24,7 +24,7 @@ from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
 from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.jobs.quotes import handle_quote_refresh
-from audr.jobs.store import JobKind, upsert_worker_status
+from audr.jobs.store import JobKind, get_job_params, upsert_worker_status
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
 from audr.portfolio.balances import record_balance
@@ -38,7 +38,8 @@ from audr.portfolio.history import materialize_history_point
 from audr.portfolio.snapshot import publish_valuation_snapshot
 from audr.providers.rpc_reader import RpcReader
 from audr.providers.rpc_targets import RpcUrlError, get_rpc_endpoints
-from audr.wallets.service import list_wallets
+from audr.wallets.models import Wallet
+from audr.wallets.service import get_wallet, list_wallets
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +47,66 @@ _POLL_INTERVAL_S = 5.0
 _ETH_MAINNET_CHAIN_ID = 1
 
 
+async def _scoped_wallet_id(session: AsyncSession, *, run_id: uuid.UUID) -> uuid.UUID | None:
+    """Return the wallet this run is scoped to, or None for "all active wallets".
+
+    AUD-399/AUD-400: a per-wallet "Refresh balances" / "Discover tokens" request
+    carries ``params = {"wallet_id": ...}`` on its job_run row. No params (the
+    scheduled-run case) means no scope — callers must fall back to iterating
+    every active wallet, unchanged from before this feature.
+    """
+    params = await get_job_params(session, run_id=run_id)
+    if not params or params.get("wallet_id") is None:
+        return None
+    return uuid.UUID(params["wallet_id"])
+
+
+async def _resolve_scoped_wallet(
+    session: AsyncSession, *, wallet_id: uuid.UUID
+) -> Wallet | None:
+    """Return the scoped wallet if it still exists and is active, else None."""
+    wallet = await get_wallet(session, wallet_id=wallet_id)
+    if wallet is None or wallet.status != "active":
+        return None
+    return wallet
+
+
 async def handle_discovery(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Build ERC-20 discovery candidate lists for all active wallets."""
-    await _discover_for_active_wallets(session, run_id=run_id)
+    wallet_id = await _scoped_wallet_id(session, run_id=run_id)
+    await _discover_for_active_wallets(session, run_id=run_id, wallet_id=wallet_id)
     await session.commit()
 
 
-async def _discover_for_active_wallets(session: AsyncSession, *, run_id: uuid.UUID) -> None:
+async def _discover_for_active_wallets(
+    session: AsyncSession, *, run_id: uuid.UUID, wallet_id: uuid.UUID | None = None
+) -> None:
     """Run discovery for every active wallet, keyed per-wallet within the run's checkpoint.
 
     The run's checkpoint is a single job_run.checkpoint JSON blob shared by all
     wallets in this run, so it must be sub-keyed by wallet address — otherwise
     the "processed" set left behind by wallet N is read back as wallet N+1's
     checkpoint and makes it skip every catalog address already seen.
+
+    ``wallet_id`` (AUD-399/AUD-400) restricts this to a single wallet instead
+    of every active one. If that wallet no longer exists or is no longer
+    active, this logs and returns without scanning anything else — falling
+    back to "all active wallets" would be exactly the RPC blow-up a scoped
+    request exists to avoid.
     """
-    wallets = await list_wallets(session)
+    if wallet_id is not None:
+        wallet = await _resolve_scoped_wallet(session, wallet_id=wallet_id)
+        if wallet is None:
+            logger.info(
+                "discovery skipped — scoped wallet %s not found or inactive run_id=%s",
+                wallet_id,
+                run_id,
+            )
+            return
+        wallets = [wallet]
+    else:
+        wallets = await list_wallets(session)
+
     run_checkpoint = await get_discovery_checkpoint(session, run_id=run_id) or {}
     for wallet in wallets:
         if wallet.status != "active":
@@ -94,29 +140,63 @@ async def _discover_for_active_wallets(session: AsyncSession, *, run_id: uuid.UU
 
 
 async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """Scan ETH and ERC-20 balances for all active wallets at the current block."""
+    """Scan ETH and ERC-20 balances for all active wallets at the current block.
+
+    ``wallet_id`` (AUD-399/AUD-400) restricts this to a single wallet instead
+    of every active one — the wallet-card "Refresh balances" action, so one
+    address can be refreshed without burning RPC calls on every tracked
+    wallet. If that wallet no longer exists or is no longer active, this logs
+    and returns without making any RPC calls at all — falling back to "all
+    active wallets" would be exactly the RPC blow-up a scoped request exists
+    to avoid.
+    """
+    wallet_id = await _scoped_wallet_id(session, run_id=run_id)
+    if wallet_id is not None:
+        scoped_wallet = await _resolve_scoped_wallet(session, wallet_id=wallet_id)
+        if scoped_wallet is None:
+            logger.info(
+                "balance_scan skipped — scoped wallet %s not found or inactive run_id=%s",
+                wallet_id,
+                run_id,
+            )
+            return
+
     try:
         rpc_endpoints = await get_rpc_endpoints(session)
     except RpcUrlError:
         logger.exception("balance_scan skipped — RPC URL failed validation run_id=%s", run_id)
         return
 
-    wallets = await list_wallets(session)
-    active = [w for w in wallets if w.status == "active"]
-    if not active:
-        return
-
-    rows = await session.execute(
-        sa.text(
-            """
-            SELECT w.address, a.token_address
-            FROM monitored_pair mp
-            JOIN wallet w ON w.id = mp.wallet_id
-            JOIN asset  a ON a.id = mp.asset_id
-            WHERE w.status = 'active'
-            """
+    if wallet_id is not None:
+        active = [scoped_wallet]
+        rows = await session.execute(
+            sa.text(
+                """
+                SELECT w.address, a.token_address
+                FROM monitored_pair mp
+                JOIN wallet w ON w.id = mp.wallet_id
+                JOIN asset  a ON a.id = mp.asset_id
+                WHERE w.id = :wallet_id AND w.status = 'active'
+                """
+            ),
+            {"wallet_id": wallet_id},
         )
-    )
+    else:
+        wallets = await list_wallets(session)
+        active = [w for w in wallets if w.status == "active"]
+        if not active:
+            return
+        rows = await session.execute(
+            sa.text(
+                """
+                SELECT w.address, a.token_address
+                FROM monitored_pair mp
+                JOIN wallet w ON w.id = mp.wallet_id
+                JOIN asset  a ON a.id = mp.asset_id
+                WHERE w.status = 'active'
+                """
+            )
+        )
     monitored: dict[str, list[str]] = {}
     for wallet_addr, token_addr in rows:
         monitored.setdefault(wallet_addr, []).append(token_addr)

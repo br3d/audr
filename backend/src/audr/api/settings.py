@@ -33,6 +33,7 @@ from audr.settings.schedules import (
     resume_schedule,
     update_schedule,
 )
+from audr.wallets.service import get_wallet
 
 router = APIRouter(prefix="/api/v1")
 
@@ -47,6 +48,11 @@ _DB_TO_FE: dict[str, str] = {
     "valuation": "valuation",
 }
 _FE_TO_DB: dict[str, str] = {v: k for k, v in _DB_TO_FE.items()}
+
+# Kinds that may be scoped to a single wallet (AUD-399/AUD-400) — the
+# per-wallet "Refresh balances" / "Discover tokens" actions on the wallet
+# card. Any other kind rejects a wallet_id with 422.
+_WALLET_SCOPED_KINDS: frozenset[str] = frozenset({"balances", "discovery"})
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +190,7 @@ class JobRef(BaseModel):
 
 class TriggerJobInput(BaseModel):
     kind: str
+    wallet_id: uuid.UUID | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +467,13 @@ async def trigger_job(
     claims and dispatches it via :func:`claim_pending_job`, so the ID returned
     here is always a real, eventually-executed run rather than a zombie the
     worker will never pick up.
+
+    ``wallet_id`` scopes ``balances``/``discovery`` requests to a single wallet
+    (AUD-399/AUD-400) — the wallet-card "Refresh balances" / "Discover tokens"
+    actions, so a single address can be refreshed without re-scanning every
+    tracked wallet. Coalescing is scope-aware: a global request never swallows
+    a per-wallet one and vice versa, and two requests for different wallets
+    never coalesce onto each other.
     """
     kind_db = _FE_TO_DB.get(body.kind)
     if kind_db is None:
@@ -475,21 +489,43 @@ async def trigger_job(
             detail=f"unsupported kind: {body.kind!r}",
         ) from None
 
-    # Coalesce if a run is already queued or running — the worker will pick up
-    # the existing request; no need to stack another.
+    wallet_id_str: str | None = None
+    if body.wallet_id is not None:
+        if body.kind not in _WALLET_SCOPED_KINDS:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"wallet_id is not supported for kind: {body.kind!r}",
+            )
+        wallet = await get_wallet(db, wallet_id=body.wallet_id)
+        if wallet is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail="wallet not found",
+            )
+        wallet_id_str = str(body.wallet_id)
+
+    # Coalesce if a run of the same kind AND the same scope is already queued
+    # or running — the worker will pick up the existing request; no need to
+    # stack another. A global run (params IS NULL) and a per-wallet run never
+    # match each other, and two different wallet ids never match each other.
     existing = await db.execute(
         sa.text(
             "SELECT id FROM job_run WHERE kind = :kind"
             " AND status IN ('pending', 'in_progress')"
+            " AND ("
+            "   (CAST(:wallet_id AS text) IS NULL AND params IS NULL)"
+            "   OR (params ->> 'wallet_id' = CAST(:wallet_id AS text))"
+            " )"
             " ORDER BY created_at DESC LIMIT 1"
         ),
-        {"kind": kind_db},
+        {"kind": kind_db, "wallet_id": wallet_id_str},
     )
     existing_row = existing.first()
     if existing_row is not None:
         return JobRef(run_id=str(existing_row[0]), coalesced=True)
 
-    run_id = await enqueue_job(db, kind=job_kind)
+    params = {"wallet_id": wallet_id_str} if wallet_id_str is not None else None
+    run_id = await enqueue_job(db, kind=job_kind, params=params)
     await db.commit()
     return JobRef(run_id=str(run_id), coalesced=False)
 
