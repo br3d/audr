@@ -4,6 +4,19 @@ audr ships as **one image** — API, worker and SPA — so it has **one version
 number**, not one per component. That number is a [semantic
 version](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## Where we are in the numbering
+
+audr stays on **0.x until the founder calls a public release**. Patch and minor
+bumps are the only ones in play until then; `1.0.0` is cut on the founder's
+word, not automatically when the next breaking change lands. The reason is that
+while the only operator is us, a MAJOR bump carries no information nobody in
+the room already has — the number starts earning its keep once there are
+operators upgrading installs they did not build.
+
+Practical consequence: a change that would be MAJOR by the table below is
+released as a MINOR while we are on 0.x, with the manual step written in the
+release notes.
+
 ## What the parts mean here
 
 This is a self-hosted application with a database behind it, so the usual
