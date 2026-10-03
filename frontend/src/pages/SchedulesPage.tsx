@@ -187,11 +187,16 @@ export default function SchedulesPage() {
       // Send only the two fields this page owns. Echoing the whole GET payload
       // back also sent next_due_at and a possibly stale freshness_seconds, and
       // the server used to let the latter override interval_seconds (AUD-397).
+      // A row with no interval set comes back as interval_seconds: 0, which the
+      // server rejects with 422 — and the PATCH is all-or-nothing, so echoing it
+      // back would fail the whole save over a schedule this page doesn't manage.
       const schedules = Object.fromEntries(
-        Object.entries(current.schedules ?? {}).map(([kind, config]) => [
-          kind,
-          { enabled: config.enabled, interval_seconds: config.interval_seconds },
-        ]),
+        Object.entries(current.schedules ?? {})
+          .filter(([, config]) => config.interval_seconds > 0)
+          .map(([kind, config]) => [
+            kind,
+            { enabled: config.enabled, interval_seconds: config.interval_seconds },
+          ]),
       )
       await patchSettings({ revision: data.revision, schedules })
       setSaveMsg('Schedule settings saved.')
