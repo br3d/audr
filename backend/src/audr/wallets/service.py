@@ -151,9 +151,11 @@ async def delete_wallet(
     # never included this address.
     touched_snapshots = list(
         (
+            # _OWNED_VALUATION_LINE is a fixed fragment; its value is bound, not interpolated.
             await session.execute(
                 sa.text(
-                    f"SELECT DISTINCT snapshot_id FROM valuation_line WHERE {_OWNED_VALUATION_LINE}"
+                    "SELECT DISTINCT snapshot_id FROM valuation_line"  # noqa: S608
+                    f" WHERE {_OWNED_VALUATION_LINE}"
                 ),
                 params,
             )
@@ -166,7 +168,7 @@ async def delete_wallet(
     # first trips fk_valuation_line_observation_id_balance_observation (AUD-394).
     await _delete(
         "valuation_line",
-        f"DELETE FROM valuation_line WHERE {_OWNED_VALUATION_LINE}",
+        f"DELETE FROM valuation_line WHERE {_OWNED_VALUATION_LINE}",  # noqa: S608 -- fixed ":param" fragment
     )
     # Child of balance_observation — must go before its parent.
     await _delete(

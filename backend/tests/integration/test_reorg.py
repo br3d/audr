@@ -25,7 +25,6 @@ from audr.jobs.canonicality import (
 )
 from audr.portfolio.history import materialize_history_point
 
-
 pytestmark = pytest.mark.anyio
 
 
@@ -168,7 +167,8 @@ async def test_invalidate_observation_inserts_record(
     row = (
         await db_session.execute(
             sa.text(
-                "SELECT reason, reorg_depth FROM balance_observation_invalidation WHERE observation_id = :obs"
+                "SELECT reason, reorg_depth FROM balance_observation_invalidation"
+                " WHERE observation_id = :obs"
             ),
             {"obs": str(obs_id)},
         )
@@ -343,7 +343,8 @@ async def test_recheck_canonicality_catches_late_invalidations(
     await db_session.execute(
         sa.text(
             """
-            INSERT INTO balance_observation_invalidation (id, observation_id, reason, invalidated_at)
+            INSERT INTO balance_observation_invalidation
+              (id, observation_id, reason, invalidated_at)
             VALUES (:id, :obs, 'reorg', now())
             """
         ),

@@ -144,7 +144,7 @@ async def test_valuation_pipeline_populates_holdings_and_history(
 
     # Run the valuation pipeline (mirrors handle_valuation).
     snap = await publish_valuation_snapshot(db_session)
-    hp = await materialize_history_point(db_session, snapshot_id=snap.snapshot_id)
+    await materialize_history_point(db_session, snapshot_id=snap.snapshot_id)
     await db_session.flush()
 
     # holdings API backend returns non-empty rows

@@ -1,4 +1,6 @@
-"""Exceptional host password-reset command: revokes sessions, never replaces encryption keys (T087 / US4)."""
+"""Exceptional host password-reset command: revokes sessions, never replaces
+encryption keys (T087 / US4).
+"""
 
 from __future__ import annotations
 
@@ -54,7 +56,8 @@ async def reset_password(session: AsyncSession, *, new_password: str) -> dict:  
     # Step 6: Mark all sessions as revoked.
     await session.execute(sa.text("UPDATE session SET revoked = true"))
 
-    # key_state is intentionally NOT touched here — encryption keys must never be replaced on password reset
+    # key_state is intentionally NOT touched here — encryption keys must never
+    # be replaced on password reset
 
     await session.commit()
 

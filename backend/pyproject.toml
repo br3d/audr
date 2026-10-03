@@ -107,3 +107,7 @@ ignore = []
 "tests/**/*.py" = ["S101", "S105", "S106", "ANN"]
 "src/audr/api/**/*.py" = ["B008"]
 "src/audr/auth/dependencies.py" = ["B008"]
+# Verbatim pg_dump schema, verified byte-for-byte against a live upgrade (AUD-306).
+# Long lines are auto-generated Alembic constraint/index names; wrapping them for
+# cosmetic line-length is not worth risking a typo in a verified baseline.
+"migrations/versions/0001_baseline.py" = ["E501"]

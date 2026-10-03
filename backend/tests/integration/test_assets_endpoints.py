@@ -49,7 +49,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for table in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {table}"))
+                await session.execute(text(f"DELETE FROM {table}"))  # noqa: S608 -- table is from the fixed _CLEAN_ORDER tuple
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +96,8 @@ async def _insert_asset(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO asset (id, token_address, symbol, name, decimals, source, excluded)"
+                    "INSERT INTO asset"
+                    " (id, token_address, symbol, name, decimals, source, excluded)"
                     " VALUES (:id, :addr, :sym, :name, :dec, :src, :ex)"
                 ),
                 {

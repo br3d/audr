@@ -39,7 +39,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.assets.cmc_catalog import resolve_cmc_ids
-from audr.assets.constants import NATIVE_ETH_ADDRESS
+from audr.assets.constants import (
+    NATIVE_ETH_ADDRESS,  # noqa: F401 -- re-export pinned by test_native_eth_identity.py
+)
 from audr.jobs.policy import get_shared_cmc_rate_limiter
 from audr.jobs.store import JobKind, enqueue_job
 from audr.operations.status import ComponentStatus, QuoteStatus
@@ -162,7 +164,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
         try:
             if provider_name == "coingecko":
                 api_key = await get_coingecko_api_key(session)
-                assert api_key is not None  # get_active_quote_provider already checked
+                assert api_key is not None  # noqa: S101 -- get_active_quote_provider already checked
                 async with CoinGeckoProvider(api_key=api_key) as provider:
                     fetched_prices = await provider.get_prices(stale_addresses)
             else:

@@ -16,6 +16,14 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from audr.jobs.__main__ import _discover_for_active_wallets
+from audr.jobs.store import (
+    JobKind,  # noqa: F401
+    claim_job,  # noqa: F401
+)
+from audr.portfolio.balances import get_holdings, record_balance
 from audr.portfolio.discovery import (
     DiscoveryResult,
     discover_tokens,
@@ -23,14 +31,6 @@ from audr.portfolio.discovery import (
     persist_discovery_candidates,
     save_discovery_checkpoint,
 )
-from audr.portfolio.balances import get_holdings, record_balance
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from audr.jobs.store import (
-    JobKind,  # noqa: F401
-    claim_job,  # noqa: F401
-)
-from audr.jobs.__main__ import _discover_for_active_wallets
 
 
 @pytest.mark.integration

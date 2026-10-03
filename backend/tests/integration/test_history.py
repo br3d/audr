@@ -1,4 +1,5 @@
-"""Integration tests for portfolio history: immutability, idempotency, gap markers, membership (T064 / US3 / AUD-77).
+"""Integration tests for portfolio history: immutability, idempotency, gap markers,
+membership (T064 / US3 / AUD-77).
 
 Tests use the rolled-back db_session fixture — no permanent state.
 """
@@ -14,9 +15,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.portfolio.history import materialize_history_point
-from audr.portfolio.history_query import MAX_POINTS, query_history, get_snapshot_detail
+from audr.portfolio.history_query import get_snapshot_detail, query_history
 from audr.portfolio.snapshot import publish_valuation_snapshot
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

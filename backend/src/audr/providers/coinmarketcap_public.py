@@ -99,7 +99,7 @@ class CoinMarketCapProvider:
         # delay is deliberately higher than RetryPolicy()'s 1.0s.
         self._retry_policy = retry_policy or RetryPolicy(base_delay_s=4.0, max_delay_s=60.0)
 
-    async def __aenter__(self) -> "CoinMarketCapProvider":
+    async def __aenter__(self) -> CoinMarketCapProvider:
         return self
 
     async def __aexit__(self, *_: object) -> None:

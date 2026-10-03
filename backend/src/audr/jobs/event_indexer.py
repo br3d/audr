@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from decimal import Decimal
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession

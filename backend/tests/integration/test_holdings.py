@@ -12,11 +12,12 @@ Covers:
 """
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from audr.portfolio.balances import (
     get_holdings,
     record_balance,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.integration

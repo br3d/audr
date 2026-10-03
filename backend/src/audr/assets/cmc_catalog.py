@@ -72,7 +72,7 @@ class CmcMapImportError(Exception):
 async def import_cmc_map(
     session: AsyncSession,
     *,
-    path: Path | Any = _VENDORED_MAP_PATH,
+    path: Path = _VENDORED_MAP_PATH,
 ) -> CmcMapVersion:
     """Import the vendored CMC map snapshot into cmc_map_version + cmc_map_entry.
 
@@ -218,7 +218,7 @@ def _normalise_raw_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return entries
 
 
-def _load_vendored_entries(path: Path | Any) -> tuple[list[dict[str, Any]], str]:
+def _load_vendored_entries(path: Path) -> tuple[list[dict[str, Any]], str]:
     try:
         raw = path.read_bytes()
     except OSError as exc:

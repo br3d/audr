@@ -117,11 +117,14 @@ class RegistryError(RuntimeError):
 
 
 def _request(registry, path, method="GET", accept=MANIFEST_ACCEPT):
-    req = urllib.request.Request(
+    # `registry` is the operator's own --registry/$AUDR_REGISTRY_URL config, not
+    # untrusted input, so a bogus file:// scheme is a self-inflicted operator error,
+    # not an attacker-reachable vector.
+    req = urllib.request.Request(  # noqa: S310
         registry.rstrip("/") + path, headers={"Accept": accept}, method=method
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
             return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, dict(exc.headers or {}), exc.read()

@@ -35,7 +35,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for table in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {table}"))
+                await session.execute(text(f"DELETE FROM {table}"))  # noqa: S608 -- table is from the fixed _CLEAN_ORDER tuple
 
 
 @pytest.fixture(autouse=True)

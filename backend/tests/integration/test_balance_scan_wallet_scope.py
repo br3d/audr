@@ -54,7 +54,7 @@ class _FakeRpcReader:
     def __init__(self, **_kwargs: Any) -> None:
         self.calls: list[tuple[str, ...]] = []
 
-    async def __aenter__(self) -> "_FakeRpcReader":
+    async def __aenter__(self) -> _FakeRpcReader:
         return self
 
     async def __aexit__(self, *_exc_info: object) -> bool:

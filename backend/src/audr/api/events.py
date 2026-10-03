@@ -92,11 +92,11 @@ async def get_events(
     if wallet_id is not None:
         try:
             wallet_uuid = uuid.UUID(wallet_id)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="wallet_id is not a valid UUID",
-            )
+            ) from exc
 
     conditions = []
     params: dict = {"limit": limit, "offset": offset}
@@ -113,8 +113,9 @@ async def get_events(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    # `where` is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
     count_row = await db.execute(
-        sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),
+        sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),  # noqa: S608
         params,
     )
     total = count_row.scalar_one()
@@ -129,7 +130,7 @@ async def get_events(
             {where}
             ORDER BY block_number DESC, log_index DESC
             LIMIT :limit OFFSET :offset
-            """
+            """  # noqa: S608
         ),
         params,
     )
@@ -204,11 +205,11 @@ async def get_allowances(
     if wallet_id is not None:
         try:
             wallet_uuid = uuid.UUID(wallet_id)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="wallet_id is not a valid UUID",
-            )
+            ) from exc
 
     conditions = ["event_type = 'approval'"]
     params: dict = {
@@ -222,7 +223,8 @@ async def get_allowances(
     where = "WHERE " + " AND ".join(conditions)
 
     # Latest Approval per (wallet, token, spender); to_address holds the
-    # spender for approval-typed rows (see jobs/event_indexer.py).
+    # spender for approval-typed rows (see jobs/event_indexer.py). `where` is a
+    # fixed vocabulary of ":param" fragments; values are bound, never interpolated.
     latest_cte = f"""
         SELECT DISTINCT ON (wallet_id, token_address, to_address)
             wallet_id, token_address, to_address AS spender_address,
@@ -230,12 +232,12 @@ async def get_allowances(
         FROM onchain_event
         {where}
         ORDER BY wallet_id, token_address, to_address, block_number DESC, log_index DESC
-    """
+    """  # noqa: S608
 
     having = "WHERE raw_amount >= :threshold" if unlimited_only else ""
 
     count_row = await db.execute(
-        sa.text(f"SELECT COUNT(*) FROM ({latest_cte}) latest {having}"),
+        sa.text(f"SELECT COUNT(*) FROM ({latest_cte}) latest {having}"),  # noqa: S608
         params,
     )
     total = count_row.scalar_one()
@@ -249,7 +251,7 @@ async def get_allowances(
             {having}
             ORDER BY block_number DESC
             LIMIT :limit OFFSET :offset
-            """
+            """  # noqa: S608
         ),
         params,
     )

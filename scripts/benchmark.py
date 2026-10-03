@@ -304,7 +304,6 @@ async def _measure_latency(
 ) -> dict[str, Any]:
     import httpx
     import sqlalchemy as sa
-
     from audr.api.app import app
     from audr.db import get_db
 
@@ -391,7 +390,6 @@ async def _measure_latency(
 
 async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> dict[str, Any]:
     import sqlalchemy as sa
-
     from audr.assets.catalog import import_catalog
     from audr.config import get_settings
     from audr.jobs import __main__ as jobs_main
@@ -533,7 +531,6 @@ async def _measure_catalog_calls(factory: async_sessionmaker[AsyncSession]) -> d
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     import sqlalchemy as sa
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
     from tests.fixtures.history_scale import generate as generate_scale_fixture
 
     engine = create_async_engine(args.db_url, echo=False)

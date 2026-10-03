@@ -6,10 +6,7 @@ import csv
 import io
 import logging
 from collections.abc import AsyncGenerator
-from datetime import datetime
-from datetime import timezone as _tz
-
-_UTC = _tz.utc
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -94,7 +91,7 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
     return {
         "schema_version": 1,
         "record_type": "current_portfolio",
-        "exported_at": datetime.now(_UTC).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "holdings": holdings,
     }
 
@@ -253,7 +250,7 @@ async def export_full_history(
     return {
         "schema_version": 1,
         "record_type": "full_history",
-        "exported_at": datetime.now(_UTC).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "snapshots": snap_order,
     }
 
@@ -269,7 +266,7 @@ async def stream_history_csv(
     session: AsyncSession,
     from_: datetime | None = None,
     to_: datetime | None = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Stream the full valuation history as CSV chunks, row by row.
 
     Uses a server-side cursor (session.stream) so the entire result set is

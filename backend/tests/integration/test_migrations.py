@@ -28,7 +28,7 @@ _OWNER_PASSWORD = "migration-test-password-abc"
 @pytest.fixture(autouse=True)
 async def _reseed_owner_and_key_state(
     db_session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncGenerator[None, None]:
+) -> AsyncGenerator[None]:
     """Truncate and reseed owner + key_state before each test.
 
     Uses committed sessions so the rows are visible to subsequent transactions

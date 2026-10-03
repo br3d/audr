@@ -1,4 +1,6 @@
-"""Password-protected provider-data purge with preview, job fencing, and chain-record preservation (T086 / US4)."""
+"""Password-protected provider-data purge with preview, job fencing, and
+chain-record preservation (T086 / US4).
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,5 @@
-"""History selection: 24h/7d/30d/all with <=2,000 points, gap markers, cursor pagination (T070 / US3 / AUD-83).
+"""History selection: 24h/7d/30d/all with <=2,000 points, gap markers, cursor
+pagination (T070 / US3 / AUD-83).
 
 query_history():
   Selects up to MAX_POINTS actual recorded history_point rows for the requested
@@ -25,8 +26,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy.ext.asyncio import AsyncSession
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 
 MAX_POINTS = 2_000
 _MIN_GAP_SECONDS = 4 * 3600  # 4 hours
@@ -151,7 +152,7 @@ async def query_history(
                   {cursor_clause}
                 ORDER BY hp.snapshotted_at DESC
                 LIMIT :limit
-                """
+                """  # noqa: S608 -- since_clause/cursor_clause are fixed ":param" fragments; values are bound, never interpolated
             ),
             params,
         )
@@ -194,7 +195,7 @@ async def query_history(
                   {cursor_clause}
                 ORDER BY snapshotted_at DESC
                 LIMIT :limit
-                """
+                """  # noqa: S608 -- since_clause/cursor_clause are fixed ":param" fragments; values are bound, never interpolated
             ),
             params,
         )
@@ -307,17 +308,14 @@ async def _bucket_seconds(
     count_params: dict[str, object] = {}
     if "since" in params:
         count_params["since"] = params["since"]
-    raw_count = (
-        await session.execute(
-            sa.text(f"SELECT COUNT(*) FROM history_point hp WHERE 1=1 {since_clause}"),
-            count_params,
-        )
-    ).scalar_one()
+    # since_clause is a fixed ":param" fragment; the value is bound, never interpolated.
+    sql = f"SELECT COUNT(*) FROM history_point hp WHERE 1=1 {since_clause}"  # noqa: S608
+    raw_count = (await session.execute(sa.text(sql), count_params)).scalar_one()
     if raw_count <= _THIN_TARGET_POINTS:
         return None
 
     hours = _DEFAULT_PERIOD_HOURS[period]
-    assert hours is not None  # thinned periods always have a bounded window
+    assert hours is not None  # noqa: S101 -- thinned periods always have a bounded window
     return max(1, (hours * 3600) // _THIN_TARGET_POINTS)
 
 

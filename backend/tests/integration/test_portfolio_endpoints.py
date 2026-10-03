@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from decimal import Decimal
 
 import httpx
 import pytest
@@ -45,7 +44,7 @@ async def _wipe(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with db_session_factory() as session:
         async with session.begin():
             for table in _CLEAN_ORDER:
-                await session.execute(text(f"DELETE FROM {table}"))
+                await session.execute(text(f"DELETE FROM {table}"))  # noqa: S608 -- table is from the fixed _CLEAN_ORDER tuple
 
 
 @pytest.fixture(autouse=True)
@@ -90,9 +89,11 @@ async def _seed_snapshot(
     async with db_session_factory() as session:
         async with session.begin():
             published_clause = "NOW()" if published else "NULL"
+            # published_clause is one of two hardcoded literals, not user input.
             await session.execute(
                 text(
-                    f"INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+                    "INSERT INTO valuation_snapshot"  # noqa: S608
+                    " (id, snapshotted_at, quality, published_at, input_key)"
                     f" VALUES (:id, NOW(), :quality, {published_clause}, :input_key)"
                 ),
                 {"id": snap_id, "quality": quality, "input_key": snap_id},
@@ -110,8 +111,10 @@ async def _seed_snapshot(
                 await session.execute(
                     text(
                         "INSERT INTO valuation_line"
-                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, block_time, price_usd, value_usd)"
-                        " VALUES (:id, :snap, :wallet, :asset, :raw, :block, :block_time, :price, :value)"
+                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,"
+                        " block_time, price_usd, value_usd)"
+                        " VALUES (:id, :snap, :wallet, :asset, :raw, :block, :block_time,"
+                        " :price, :value)"
                     ),
                     {
                         "id": str(uuid.uuid4()),
@@ -137,7 +140,8 @@ async def _seed_wallet(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address, label, status)"
+                    " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_id, "addr": address.lower()},
             )

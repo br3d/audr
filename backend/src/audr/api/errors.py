@@ -106,7 +106,7 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
       - a dict carrying `code`/`message` → used directly, remaining keys as extras
       - any other dict → status-derived code/message, all keys as extras
     """
-    assert isinstance(exc, StarletteHTTPException)  # registered for this type only
+    assert isinstance(exc, StarletteHTTPException)  # noqa: S101 -- registered for this type only
     code: str | None = None
     message: str | None = None
     field_errors: dict[str, str] | None = None
@@ -143,7 +143,7 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
 
 async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Render request-validation failures as 422 with per-field messages."""
-    assert isinstance(exc, RequestValidationError)  # registered for this type only
+    assert isinstance(exc, RequestValidationError)  # noqa: S101 -- registered for this type only
     field_errors: dict[str, str] = {}
     for err in exc.errors():
         loc = [str(part) for part in err.get("loc", ()) if part != "body"]

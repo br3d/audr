@@ -41,7 +41,7 @@ class CatalogImportError(Exception):
 async def import_catalog(
     session: AsyncSession,
     *,
-    path: Path | Any = _VENDORED_CATALOG_PATH,
+    path: Path = _VENDORED_CATALOG_PATH,
     chain_id: int = CATALOG_CHAIN_ID,
 ) -> CatalogVersion:
     """Import the vendored token catalog into catalog_version + catalog_entry.
@@ -124,7 +124,7 @@ async def list_catalog_entries(
     return list(result.scalars())
 
 
-def _load_entries(path: Path | Any, *, chain_id: int) -> tuple[list[dict[str, Any]], str]:
+def _load_entries(path: Path, *, chain_id: int) -> tuple[list[dict[str, Any]], str]:
     """Read and parse the catalog JSON file at *path*.
 
     Returns the chain-filtered token entries plus an opaque content-hash

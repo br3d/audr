@@ -1,4 +1,5 @@
-"""Canonicality rechecks: detect reorg-affected history points and schedule re-scans (T068 / US3 / AUD-81).
+"""Canonicality rechecks: detect reorg-affected history points and schedule
+re-scans (T068 / US3 / AUD-81).
 
 invalidate_observation():
   Insert a balance_observation_invalidation record for an observation affected by

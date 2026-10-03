@@ -17,7 +17,6 @@ from audr.portfolio.history import materialize_history_point
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
 from audr.portfolio.snapshot import _compute_quality, publish_valuation_snapshot
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -113,7 +112,8 @@ async def _insert_quote_set(
     )
     await session.execute(
         sa.text(
-            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd) VALUES (:id, :qset, :asset, :price)"
+            "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd)"
+            " VALUES (:id, :qset, :asset, :price)"
         ),
         {
             "id": str(uuid.uuid4()),

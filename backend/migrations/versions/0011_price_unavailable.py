@@ -33,10 +33,12 @@ depends_on = None
 def upgrade() -> None:
     op.execute("ALTER TABLE asset ADD COLUMN price_unavailable_since timestamptz")
     op.execute(
-        "ALTER TABLE valuation_snapshot DROP CONSTRAINT ck_valuation_snapshot_ck_valuation_snapshot_quality"
+        "ALTER TABLE valuation_snapshot DROP CONSTRAINT"
+        " ck_valuation_snapshot_ck_valuation_snapshot_quality"
     )
     op.execute(
-        "ALTER TABLE valuation_snapshot ADD CONSTRAINT ck_valuation_snapshot_ck_valuation_snapshot_quality"
+        "ALTER TABLE valuation_snapshot ADD CONSTRAINT"
+        " ck_valuation_snapshot_ck_valuation_snapshot_quality"
         " CHECK (quality IN ('complete', 'gaps', 'partial', 'stale', 'unknown'))"
     )
 
@@ -47,10 +49,12 @@ def downgrade() -> None:
     # narrower constraint is reinstated.
     op.execute("UPDATE valuation_snapshot SET quality = 'partial' WHERE quality = 'gaps'")
     op.execute(
-        "ALTER TABLE valuation_snapshot DROP CONSTRAINT ck_valuation_snapshot_ck_valuation_snapshot_quality"
+        "ALTER TABLE valuation_snapshot DROP CONSTRAINT"
+        " ck_valuation_snapshot_ck_valuation_snapshot_quality"
     )
     op.execute(
-        "ALTER TABLE valuation_snapshot ADD CONSTRAINT ck_valuation_snapshot_ck_valuation_snapshot_quality"
+        "ALTER TABLE valuation_snapshot ADD CONSTRAINT"
+        " ck_valuation_snapshot_ck_valuation_snapshot_quality"
         " CHECK (quality IN ('complete', 'partial', 'stale', 'unknown'))"
     )
     op.execute("ALTER TABLE asset DROP COLUMN price_unavailable_since")

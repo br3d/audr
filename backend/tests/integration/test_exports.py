@@ -18,7 +18,6 @@ Covers:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -235,9 +234,9 @@ async def test_export_json_schema_version(db_session: AsyncSession) -> None:
 async def test_export_csv_schema_version(db_session: AsyncSession) -> None:
     """CSV output begins with a metadata comment that declares schema_version: 1."""
     csv_text = await render_portfolio_csv(db_session)
-    comment_lines = [l for l in csv_text.splitlines() if l.startswith("#")]
+    comment_lines = [line for line in csv_text.splitlines() if line.startswith("#")]
     assert comment_lines, "Expected at least one comment line starting with '#'"
-    schema_version_line = next((l for l in comment_lines if "schema_version" in l), None)
+    schema_version_line = next((line for line in comment_lines if "schema_version" in line), None)
     assert schema_version_line is not None, "No comment line containing 'schema_version' found"
     assert "1" in schema_version_line
 
@@ -327,7 +326,7 @@ async def test_export_csv_unknown_not_zero(db_session: AsyncSession) -> None:
     csv_text = await render_portfolio_csv(db_session)
 
     # Strip comment lines before feeding to csv.DictReader.
-    data_lines = [l for l in csv_text.splitlines() if not l.startswith("#")]
+    data_lines = [line for line in csv_text.splitlines() if not line.startswith("#")]
     reader = csv.DictReader(data_lines)
     rows = list(reader)
 
@@ -363,9 +362,7 @@ async def test_export_excluded_asset_omitted(db_session: AsyncSession) -> None:
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=included_id)
     await _insert_monitored_pair(db_session, wallet_id=wallet_id, asset_id=excluded_id)
 
-    obs_included = await _insert_balance_observation(
-        db_session, wallet_id=wallet_id, asset_id=included_id
-    )
+    await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=included_id)
     await _insert_balance_observation(db_session, wallet_id=wallet_id, asset_id=excluded_id)
 
     data = await export_current_portfolio(db_session)

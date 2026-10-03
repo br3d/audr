@@ -23,10 +23,9 @@ import uuid
 from decimal import Decimal
 
 import pytest
+import respx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-import respx
 
 from audr.auth.service import AuthenticationError
 from audr.jobs.quotes import handle_quote_refresh
@@ -686,8 +685,9 @@ async def test_quote_refresh_marks_empty_on_zero_observations(
     checks in handle_quote_refresh find the job_run and integration without needing
     separate committed sessions.
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
+
+    import httpx
 
     run_id = uuid.uuid4()
 
@@ -754,8 +754,9 @@ async def test_quote_refresh_provider_error_raises_and_marks_quote_set_failed(
     raising, so the worker's separate fail_job() session can record the run
     as failed without depending on this transaction.
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
+
+    import httpx
 
     from audr.providers.coingecko_demo import CoinGeckoError
 
@@ -832,8 +833,9 @@ async def test_quote_refresh_provider_error_worker_records_failed_run(
 ) -> None:
     """End-to-end: Worker.run_once marks the job_run 'failed', not 'completed',
     when the handler it dispatches raises on a provider error (AUD-318)."""
-    import httpx
     from unittest.mock import AsyncMock, patch
+
+    import httpx
 
     from audr.jobs.store import get_job_run
     from audr.jobs.worker import Worker

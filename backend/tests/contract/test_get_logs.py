@@ -11,13 +11,13 @@ from httpx import Response
 from audr.providers.rpc_reader import (
     LOG_CHUNK_SIZE,
     TRANSFER_TOPIC,
+    LogEntry,
     MalformedResponseError,
     RpcError,
     RpcReader,
     _pad_address_topic,
-    decode_transfer_amount,
-    LogEntry,
     _topic_to_address,
+    decode_transfer_amount,
 )
 
 

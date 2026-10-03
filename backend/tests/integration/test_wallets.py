@@ -377,7 +377,7 @@ async def test_delete_wallet_also_removes_its_derived_records(
     async with db_session_factory() as session:
         for table in ("balance_observation", "monitored_pair"):
             left = await session.execute(
-                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),  # noqa: S608 -- table is from a fixed tuple literal
                 {"wid": wallet_id},
             )
             assert left.scalar() == 0, table
@@ -457,7 +457,7 @@ async def test_delete_wallet_with_valued_observation(
     async with db_session_factory() as session:
         for table in ("valuation_line", "balance_observation"):
             left = await session.execute(
-                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),
+                text(f"SELECT count(*) FROM {table} WHERE wallet_id = :wid"),  # noqa: S608 -- table is from a fixed tuple literal
                 {"wid": wallet_id},
             )
             assert left.scalar() == 0, table

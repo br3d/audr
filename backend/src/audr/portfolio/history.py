@@ -120,7 +120,8 @@ async def materialize_history_point(
     )
 
     logger.info(
-        "history_point materialized id=%s snapshot=%s quality=%s total_usd=%s wallets=%d assets=%d has_gap=%s",
+        "history_point materialized id=%s snapshot=%s quality=%s total_usd=%s"
+        " wallets=%d assets=%d has_gap=%s",
         point_id,
         snapshot_id,
         quality,

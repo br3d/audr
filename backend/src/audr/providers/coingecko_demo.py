@@ -77,7 +77,7 @@ class CoinGeckoProvider:
             follow_redirects=False,
         )
 
-    async def __aenter__(self) -> "CoinGeckoProvider":
+    async def __aenter__(self) -> CoinGeckoProvider:
         return self
 
     async def __aexit__(self, *_: object) -> None:

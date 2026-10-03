@@ -22,12 +22,11 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
+from audr.api.auth import _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.history_query import (
     MAX_POINTS,
-    Period,
     SnapshotDetail,
     get_snapshot_detail,
     query_history,
@@ -109,11 +108,11 @@ async def get_history(
     if cursor is not None:
         try:
             cursor_uuid = uuid.UUID(cursor)
-        except ValueError:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="cursor is not a valid UUID",
-            )
+            ) from exc
 
     page = await query_history(
         db,

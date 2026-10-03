@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,11 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
+from audr.api.auth import _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.balances import get_holdings
-from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
+from audr.portfolio.money import format_decimal, raw_to_quantity
 from audr.portfolio.snapshot import get_latest_snapshot_lines
 from audr.wallets.models import Wallet
 

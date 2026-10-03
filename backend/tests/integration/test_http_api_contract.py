@@ -680,13 +680,15 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address, label, status)"
+                    " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_a, "addr": "0x" + "a" * 40},
             )
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address, label, status)"
+                    " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_b, "addr": "0x" + "b" * 40},
             )
@@ -699,7 +701,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
             )
             await session.execute(
                 text(
-                    "INSERT INTO valuation_snapshot (id, snapshotted_at, quality, published_at, input_key)"
+                    "INSERT INTO valuation_snapshot"
+                    " (id, snapshotted_at, quality, published_at, input_key)"
                     " VALUES (:id, NOW(), 'complete', NOW(), :input_key)"
                 ),
                 {"id": snap_id, "input_key": snap_id},
@@ -711,7 +714,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
                 await session.execute(
                     text(
                         "INSERT INTO valuation_line"
-                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number, price_usd, value_usd)"
+                        " (id, snapshot_id, wallet_id, asset_id, raw_amount, block_number,"
+                        " price_usd, value_usd)"
                         " VALUES (:id, :snap, :wallet, :asset, :raw, 1, 100.0, :value)"
                     ),
                     {
@@ -1000,7 +1004,8 @@ async def test_health_ready_503_when_migration_is_stale(
 
 @pytest.mark.integration
 async def test_error_envelope_shape_401(client: httpx.AsyncClient) -> None:
-    """Unauthenticated request → error envelope {error:{code,message,field_errors,retryable},request_id}.
+    """Unauthenticated request → error envelope
+    {error:{code,message,field_errors,retryable},request_id}.
 
     SD-5 resolved in AUD-320: HTTPException/validation handlers now emit the
     contract envelope instead of FastAPI's flat {"detail": ...}.

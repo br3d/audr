@@ -199,7 +199,7 @@ async def list_assets(
             {where_clause}
             ORDER BY a.id
             LIMIT :limit
-            """
+            """  # noqa: S608 -- where_clause is built from a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )
@@ -351,10 +351,9 @@ async def patch_asset(
 
     if updates:
         updates.append("updated_at = :now")
-        await db.execute(
-            sa.text(f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"),
-            params,
-        )
+        # updates is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
+        sql = f"UPDATE asset SET {', '.join(updates)} WHERE id = :id"  # noqa: S608
+        await db.execute(sa.text(sql), params)
         await db.commit()
 
     updated = await _get_asset_by_id(db, asset_id)
