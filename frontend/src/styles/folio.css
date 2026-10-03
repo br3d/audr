@@ -142,6 +142,21 @@ body {
   overflow-x: hidden;
 }
 
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 20px 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-name {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
 .space-card {
   padding: 16px 20px;
   display: flex;
@@ -1395,30 +1410,52 @@ body {
   box-shadow: var(--shadow-md);
 }
 
+/* ---- Brand ----
+   The logo is single-colour line art shipped as two transparent PNGs, one
+   inked white for the dark theme and one inked near-black for the light theme.
+   Swapping here rather than in React keeps the auth screens — which render
+   outside the theme provider — correct on both themes. */
+
+.brand-mark,
+.brand-lockup {
+  display: inline-block;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  /* The mark is wider than it is tall (roughly 1.2:1). */
+  width: 34px;
+  height: 28px;
+  background-image: url('/brand/audr-mark-dark.png');
+}
+
+.brand-lockup {
+  width: 72px;
+  height: 81px;
+  background-image: url('/brand/audr-logo-dark.png');
+}
+
+[data-theme='light'] .brand-mark {
+  background-image: url('/brand/audr-mark-light.png');
+}
+
+[data-theme='light'] .brand-lockup {
+  background-image: url('/brand/audr-logo-light.png');
+}
+
 .auth-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
   margin-bottom: 28px;
 }
 
-.auth-logo-mark {
-  width: 32px;
-  height: 32px;
-  background: var(--accent);
-  border-radius: var(--r-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: var(--text-sm);
-  font-weight: 700;
-}
-
-.auth-logo-name {
-  font-size: var(--text-lg);
-  font-weight: 700;
-  color: var(--text-primary);
+.auth-logo .brand-lockup {
+  width: 84px;
+  height: 94px;
 }
 
 .auth-title {

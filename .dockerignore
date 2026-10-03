@@ -67,5 +67,8 @@ test-results
 # --- Docs and specs (not needed to build the app) ---
 docs/
 specs/
+# Logo masters and derived PNGs. The SPA loads its own copies from
+# frontend/public/brand, so the build context does not need these.
+assets/
 README.md
 LICENSE

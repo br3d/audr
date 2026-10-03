@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/audr-logo-dark-512.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/audr-logo-light-512.png">
+    <img src="assets/brand/audr-logo-light-512.png" alt="audr" width="170">
+  </picture>
+</p>
+
 # audr
 
 A standalone, self-hosted Ethereum portfolio tracker. You run it on your own
@@ -131,8 +139,10 @@ backend/            FastAPI application, worker, Alembic migrations, pytest suit
   tests/            unit/ contract/ integration/ fixtures/
 frontend/           React SPA (src/pages, src/components, src/api) + Vitest specs
 tests/e2e/          Playwright end-to-end specs (run locally, not in CI)
+assets/brand/       Logo masters and the derived transparent PNGs (docs/brand.md)
 scripts/            setup-secrets, seed_dev, test, build, deploy, smoke-test,
-                    benchmark, registry-prune, gen_third_party, sync-ci-overlay
+                    benchmark, registry-prune, gen_third_party, sync-ci-overlay,
+                    gen_brand_assets
 ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
 compose.yaml        The production/local stack
 compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
@@ -200,6 +210,7 @@ debugging against containers, and the shared-checkout worktree rules — is in
 | [deploy-runbook.md](docs/deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
 | [security-at-rest.md](docs/security-at-rest.md) | Encryption-at-rest threat model and recommendation |
 | [third-party.md](docs/third-party.md) | Licence attribution and exact release image/dependency pins |
+| [brand.md](docs/brand.md) | Where the logo files live, how the derived assets are generated, how to use the mark |
 
 **Verification**
 

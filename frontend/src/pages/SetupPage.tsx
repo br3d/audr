@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { setup, ApiError } from '../api/client'
+import { BrandLockup } from '../components/Logo'
 
 interface Props {
   onSetupComplete: () => void
@@ -51,8 +52,7 @@ export default function SetupPage({ onSetupComplete }: Props) {
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-logo">
-          <div className="auth-logo-mark">A</div>
-          <span className="auth-logo-name">audr</span>
+          <BrandLockup />
         </div>
         <h1 className="auth-title">Set up audr</h1>
         <p className="auth-subtitle">
