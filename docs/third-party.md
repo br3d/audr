@@ -41,14 +41,15 @@ longer redistributed in any form: the API serves the SPA itself.
 ### 1.2 Published images
 
 `scripts/build.sh` and the Gitea `build`/`deploy` workflows tag each build with
-the 12-character git SHA of the source commit and also move `latest`. Registry:
-`192.168.1.90:8085`.
+the 12-character git SHA of the source commit and also move `latest`. They push
+to the registry named by `$AUDR_REGISTRY` (`deploy.env` locally, a Gitea
+repository variable in CI); this repository is public and records no endpoint.
 
 | Repository | Tag | Manifest digest (as of 2026-10-02) |
 | --- | --- | --- |
-| `192.168.1.90:8085/audr-backend` | `latest` | `sha256:9e9f2dfe31ffb030f1dca8eb6721832f8912e33407e1a1631495146a880f5c0e` |
+| `$AUDR_REGISTRY/audr-backend` | `latest` | `sha256:9e9f2dfe31ffb030f1dca8eb6721832f8912e33407e1a1631495146a880f5c0e` |
 
-One image since AUD-388. The `192.168.1.90:8085/audr-frontend` repository is no
+One image since AUD-388. The `audr-frontend` repository is no
 longer built or pushed; whatever tags remain in the registry are orphans from
 before that change.
 
@@ -58,7 +59,7 @@ tag — the git SHA tag, not `latest`:
 
 ```bash
 curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-  http://192.168.1.90:8085/v2/audr-backend/manifests/<git-sha-tag> \
+  "http://$AUDR_REGISTRY/v2/audr-backend/manifests/<git-sha-tag>" \
   | grep -i docker-content-digest
 ```
 

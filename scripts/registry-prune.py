@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Tag-retention pruner for the audr image registry (AUD-333 item 5).
 
-The registry at 192.168.1.90:8085 is a plain CNCF `distribution` registry
-behind nginx — NOT Harbor. It therefore has no built-in tag-retention feature
-to configure: retention has to be enforced from the outside, which is what this
-script is. It talks only the /v2 HTTP API, so it needs no shell on the registry
-host (we do not have one).
+The audr image registry is a plain CNCF `distribution` registry behind nginx —
+NOT Harbor. It therefore has no built-in tag-retention feature to configure:
+retention has to be enforced from the outside, which is what this script is. It
+talks only the /v2 HTTP API, so it needs no shell on the registry host (we do
+not have one).
 
 WHAT IT DOES NOT DO
 -------------------
 Deleting a manifest only unlinks it. The blobs behind it are reclaimed solely
 by `registry garbage-collect -c /etc/docker/registry/config.yml`, which must run
-as a process on the registry host. Until someone with shell on 192.168.1.90
-runs that (AUD-333 item 4), this script frees *catalog clutter*, not disk. Every
+as a process on the registry host. Until someone with a shell on that host runs
+it (AUD-333 item 4), this script frees *catalog clutter*, not disk. Every
 run says so at the end rather than letting the operator assume bytes came back.
 
 RETENTION RULES (a tag survives if ANY apply)
@@ -70,12 +70,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_REGISTRY = "http://192.168.1.90:8085"
+# No endpoint is baked in: this repository is public. The registry comes from
+# --registry, else $AUDR_REGISTRY_URL, else $AUDR_REGISTRY (the name compose.yaml
+# and deploy.env use, which is a bare host:port and so needs a scheme prefixed).
+# See deploy.env.example.
+def _default_registry() -> str | None:
+    url = os.environ.get("AUDR_REGISTRY_URL")
+    if url:
+        return url
+    host = os.environ.get("AUDR_REGISTRY")
+    if host:
+        return host if "://" in host else f"http://{host}"
+    return None
 
 # The registry is shared with an unrelated project (svetu-*). Scope every run to
 # repositories we own so a typo or a future --repo flag cannot reach them.
@@ -286,7 +298,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--registry", default=DEFAULT_REGISTRY)
+    parser.add_argument(
+        "--registry",
+        default=_default_registry(),
+        help="registry base URL (default: $AUDR_REGISTRY_URL or $AUDR_REGISTRY)",
+    )
     parser.add_argument("--repo", action="append", dest="repos", metavar="REPO",
                         help=f"repository to prune (default: {' '.join(DEFAULT_REPOS)})")
     parser.add_argument("--keep", type=int, default=8, metavar="N",
@@ -322,6 +338,12 @@ def main(argv=None):
         print(f"live tags from {args.env_file}: {', '.join(sorted(env_tags)) or '<none>'}")
 
     mode = "APPLY (deleting)" if args.apply else "DRY RUN (nothing will be deleted)"
+    if not args.registry:
+        parser.error(
+            "no registry configured — pass --registry, or set AUDR_REGISTRY_URL / "
+            "AUDR_REGISTRY (see deploy.env.example)"
+        )
+
     print(f"registry: {args.registry}\nmode: {mode}\nkeep newest: {args.keep}\n")
 
     failures = 0
@@ -390,7 +412,7 @@ def main(argv=None):
         print(
             "NOTE: blobs are NOT reclaimed yet. Disk on the registry host is freed only by\n"
             "  registry garbage-collect -c /etc/docker/registry/config.yml\n"
-            "run on 192.168.1.90, which we have no shell on (AUD-333 item 4)."
+            "run on the registry host, which we have no shell on (AUD-333 item 4)."
         )
     else:
         print("Dry run complete — re-run with --apply to delete.")

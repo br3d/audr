@@ -1,7 +1,7 @@
 name: CI
 
 # Runs the project test suite on pushes to main and on pull requests.
-# Executes on the self-hosted `host` runner (deploy host 192.168.1.228) so that
+# Executes on the self-hosted `host` runner (the deploy host) so that
 # docker compose bind-mounts in compose.test.yaml resolve against the checkout.
 #
 # The push trigger is filtered to `main` on purpose. This file reaches Gitea

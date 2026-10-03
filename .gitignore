@@ -38,6 +38,9 @@ secrets/
 .env.local
 .env.*.local
 
+# Local deployment targets (registry, deploy host) — template is deploy.env.example
+deploy.env
+
 # Local test-suite logs written by scripts/test.sh
 .test-backend.log
 .test-frontend.log

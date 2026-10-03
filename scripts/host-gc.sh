@@ -3,7 +3,7 @@
 #
 # Why this exists (AUD-395): every push to main runs deploy.yaml, which builds
 # and tags a new `audr-backend:<sha>` image on the host runner. Nothing ever
-# removed them. By 2026-10-03 the host at 192.168.1.228 had accumulated 299
+# removed them. By 2026-10-03 the deploy host had accumulated 299
 # images (14.9GB) plus 3.8GB of build cache and sat at 89% of a 32GB root —
 # roughly 3.5GB free, or about four more deploys before a build would fail on
 # ENOSPC. Disk exhaustion on this host does not fail politely: it takes the

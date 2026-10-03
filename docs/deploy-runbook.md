@@ -1,4 +1,11 @@
-# Deploy runbook (audr stack on 192.168.1.228)
+# Deploy runbook (audr stack on the self-hosted deploy host)
+
+This repository is public, so it records no host addresses. Throughout this
+document `$AUDR_DEPLOY_HOST` is the `user@host` of the deploy host and
+`$AUDR_REGISTRY` the `host:port` of the image registry; both come from an
+untracked `deploy.env` at the repo root (copy `deploy.env.example`) or from the
+environment, and the CI workflows read the registry from the Gitea repository
+variable `AUDR_REGISTRY`.
 
 The deploy pipeline is a single guarded Gitea Actions job, `.gitea/workflows/deploy.yaml`.
 The copy that actually **runs** lives in the Gitea mirror overlay on the deploy
@@ -79,7 +86,7 @@ docker run --rm --entrypoint sh <candidate-image> -c 'ls /app/migrations/version
 set -a; . ~/audr/.env; set +a
 docker run --rm --network audr_internal -w /app \
   -e DATABASE_URL="postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr" \
-  192.168.1.90:8085/audr-backend:<image-with-the-newer-revisions> \
+  "$AUDR_REGISTRY/audr-backend:<image-with-the-newer-revisions>" \
   python -m alembic downgrade <target-rev>
 # …or roll forward by pinning BACKEND_TAG to an image whose migration tree
 # contains the DB's revision. Check the downgrade is safe first (a table the
@@ -114,9 +121,9 @@ Confirm it ran by looking for `[host-gc] after: ...` in the job log.
 
 ```bash
 # ad-hoc run: copy it over, since the runner's checkout dir is not stable
-scp -i id_ed25519 scripts/host-gc.sh codex@192.168.1.228:/tmp/
-ssh -i id_ed25519 codex@192.168.1.228 'bash /tmp/host-gc.sh --dry-run'   # report only
-ssh -i id_ed25519 codex@192.168.1.228 'IMAGE_MAX_AGE=24h CACHE_MAX_AGE=24h bash /tmp/host-gc.sh'
+scp -i id_ed25519 scripts/host-gc.sh "$AUDR_DEPLOY_HOST:/tmp/"
+ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'bash /tmp/host-gc.sh --dry-run'   # report only
+ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'IMAGE_MAX_AGE=24h CACHE_MAX_AGE=24h bash /tmp/host-gc.sh'
 ```
 
 Pruning this host cannot disarm rollback. `deploy.yaml`'s snapshot step pushes
@@ -152,7 +159,7 @@ under a live run.
 
 ## Registry tag retention
 
-The registry at `192.168.1.90:8085` is a plain CNCF `distribution` registry
+The registry (`$AUDR_REGISTRY`) is a plain CNCF `distribution` registry
 behind nginx — **not Harbor**, despite the name used in older notes. It exposes
 only the `/v2` API (`/api/v2.0/systeminfo` 404s), so there is no retention
 feature to switch on: retention is enforced from outside by
@@ -198,10 +205,10 @@ with an unrelated project (`svetu-backend`, `svetu-frontend`, 91 tags each).
 are reclaimed solely by
 
 ```bash
-registry garbage-collect -c /etc/docker/registry/config.yml   # on 192.168.1.90
+registry garbage-collect -c /etc/docker/registry/config.yml   # on the registry host
 ```
 
-which must run as a process on the registry host. We have no shell on
-`192.168.1.90`, so that half stays open and is tracked separately — until it
+which must run as a process on the registry host. We have no shell there,
+so that half stays open and is tracked separately — until it
 runs, pruning buys catalog clarity, not bytes. The same gap is why
 `library/aud-pushtest` still appears in `/v2/_catalog` with `tags: null`.
