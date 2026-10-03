@@ -268,7 +268,8 @@ Rules that are not negotiable:
 ```bash
 docker compose ps
 docker compose logs -f api worker
-docker compose exec api curl -s http://localhost:8000/health/ready
+docker compose exec api python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/ready').read().decode())"
 docker compose exec db psql -U audr -d audr
 docker compose exec db psql -U audr -d audr -tAc \
   'select version_num from alembic_version'
@@ -278,7 +279,10 @@ docker compose exec db psql -U audr -d audr -c \
 
 Remember that the container's `:8000` is not reachable from the host — the
 stack publishes `api` on `:80`, so debug through that or `exec` into the
-container.
+container. The backend image ships no `curl` (AUD-379 dropped the apt layer so
+the release image is fully digest-pinned), which is why the HTTP probe above
+goes through the interpreter; from the host, `curl http://localhost/health/ready`
+still works.
 
 ---
 
