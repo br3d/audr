@@ -129,5 +129,5 @@ async def upsert_integration(
 
     await session.flush()
     result = await get_integration(session, kind=kind, decrypt_fields=False)
-    assert result is not None  # noqa: S101
+    assert result is not None  # noqa: S101 -- just written in this same transaction
     return result

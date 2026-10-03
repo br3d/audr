@@ -204,6 +204,8 @@ _SELECT_SCHEDULE_COLS = """
 """
 
 
+# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
 def _row_to_schedule_read(row: Any) -> ScheduleRead:  # noqa: ANN401
     return ScheduleRead(
         kind=row[1],
@@ -230,6 +232,8 @@ def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
     )
 
 
+# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
 def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401
     """Return (frontend_kind, ScheduleConfig) from a schedule table row."""
     kind_db: str = row[1]
@@ -248,6 +252,8 @@ def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: AN
     )
 
 
+# ANN401: row is a positional SQLAlchemy Row, unpacked by position below;
+# there is no narrower static type for an ad-hoc `sa.text()` result.
 def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401
     """Map a job_run table row to the frontend-shaped JobRunResponse."""
     job_id, kind_db, status, retry_count, error, claimed_at, completed_at, created_at = row
@@ -275,6 +281,7 @@ def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401
 async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
     """Build the SettingsResponse from the current schedule table state."""
     result = await db.execute(
+        # _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated.
         sa.text(f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule ORDER BY kind")  # noqa: S608
     )
     rows = result.fetchall()
@@ -347,6 +354,7 @@ async def patch_settings(
             if len(sets) > 1:  # more than just the revision bump
                 await db.execute(
                     sa.text(
+                        # sets is a fixed ":param" vocabulary; values are bound, never interpolated.
                         "UPDATE schedule SET "  # noqa: S608
                         + ", ".join(sets)
                         + " WHERE kind = :kind"
@@ -570,6 +578,7 @@ async def list_jobs(
 
     rows_result = await db.execute(
         sa.text(
+            # where_clause is a fixed ":param" vocabulary; values are bound, never interpolated.
             f"""
             SELECT id, kind, status, retry_count, error,
                    claimed_at, completed_at, created_at

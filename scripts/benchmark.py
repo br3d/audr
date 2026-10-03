@@ -160,9 +160,9 @@ def _summarise(samples_ms: list[float]) -> dict[str, float]:
 
 def _git_commit() -> str:
     try:
+        # S603/S607: fixed argv, shell=False; resolving `git` from PATH is intended —
+        # this only stamps the report with the commit under test.
         out = subprocess.run(  # noqa: S603
-            # noqa: S607 — resolving git from PATH is intended; this only stamps
-            # the report with the commit under test.
             ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
@@ -241,6 +241,7 @@ async def _row_counts(session: AsyncSession) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     for table in _COUNT_TABLES:
+        # table comes from the hardcoded _COUNT_TABLES tuple above, not user input.
         result = await session.execute(sa.text(f"SELECT COUNT(*) FROM {table}"))  # noqa: S608
         counts[table] = int(result.scalar_one())
     return counts
@@ -278,6 +279,7 @@ async def _truncate_all(session: AsyncSession) -> None:
     if not tables:
         return
     quoted = ", ".join(f'"{t}"' for t in tables)
+    # tables/quoted come from information_schema.tables, not user input, and are identifier-quoted.
     await session.execute(sa.text(f"TRUNCATE {quoted} CASCADE"))  # noqa: S608
 
 
@@ -316,6 +318,7 @@ async def _measure_latency(
     # under measurement, so clear them unconditionally.
     async with factory() as session:
         async with session.begin():
+            # table is one of the three hardcoded literals in this tuple, not user input.
             for table in ("session", "login_attempt", "owner"):
                 await session.execute(sa.text(f"DELETE FROM {table}"))  # noqa: S608
 
