@@ -155,9 +155,9 @@ backend/            FastAPI application, worker, Alembic migrations, pytest suit
 frontend/           React SPA (src/pages, src/components, src/api) + Vitest specs
 tests/e2e/          Playwright end-to-end specs (run locally, not in CI)
 assets/brand/       Logo masters and the derived transparent PNGs (docs/brand.md)
-scripts/            setup-secrets, seed_dev, test, build, deploy, smoke-test,
-                    benchmark, registry-prune, gen_third_party, sync-ci-overlay,
-                    gen_brand_assets
+scripts/            Operator helpers (setup-secrets, backup, restore, seed_dev)
+                    plus the build/release/maintenance set — scripts/README.md
+                    says which is which
 ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
 .github/workflows/  Public GitHub Actions: the test gate and the manual
                     container release (docs/github-actions.md)
@@ -213,6 +213,10 @@ debugging against containers, and the shared-checkout worktree rules — is in
 ---
 
 ## Documentation index
+
+The same list grouped by *who you are* rather than by topic is in
+[docs/README.md](docs/README.md) — start there if you only want the files that
+apply to running audr.
 
 **Start here**
 
