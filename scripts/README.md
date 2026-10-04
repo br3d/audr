@@ -36,7 +36,7 @@ or an SSH key, and they act on infrastructure outside your installation.
 
 | Script | What it does |
 |---|---|
-| `host-gc.sh` | Bounds the deploy host's Docker disk usage. Every push to `main` builds a new image on the host runner and nothing else removes them |
+| `host-gc.sh` | Bounds the deploy host's Docker disk usage. Every push to `main` builds a new image on the host runner and nothing else removes them. Retention is age-based *and* capped by count, and escalates to shorter windows on its own while the disk is above the warn threshold |
 | `registry-prune.py` | Enforces a tag-retention policy on the image registry over the `/v2` HTTP API, since the registry has no built-in retention and we have no shell on it |
 | `test_registry_prune.py` | Dependency-free unit tests for the pruner: `python3 scripts/test_registry_prune.py`. Not in the pytest suite, which runs in a container that cannot see `scripts/` |
 | `benchmark.py` | Two reports: warm dashboard/history read latency against the reference scale fixture, and the catalog's logical RPC call count. Results are published in [`docs/benchmark.md`](../docs/benchmark.md) |
