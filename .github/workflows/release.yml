@@ -35,18 +35,14 @@ on:
         type: boolean
         required: false
         default: true
-      move_latest:
-        description: 'Also move the :latest tag to this build.'
-        type: boolean
-        required: false
-        default: false
       create_github_release:
-        description: 'Create a GitHub Release for the tag (only valid when building a v* release tag).'
+        description: 'Create the GitHub Release when the built commit is the v<version> tag (ignored on any other commit).'
         type: boolean
         required: false
-        default: false
+        default: true
 
-# One publish at a time: concurrent runs would race on the :latest tag.
+# One publish at a time: two concurrent runs of the same ref would push the
+# same tag twice and race on the GitHub Release.
 concurrency:
   group: release-ghcr
   cancel-in-progress: false
@@ -69,6 +65,7 @@ jobs:
       image: ${{ steps.plan.outputs.image }}
       tags: ${{ steps.plan.outputs.tags }}
       is_release: ${{ steps.plan.outputs.is_release }}
+      want_release: ${{ steps.plan.outputs.want_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,7 +80,6 @@ jobs:
           # containing shell metacharacters would otherwise be executed.
           OWNER: ${{ github.repository_owner }} # package names must be lowercase; a login need not be
           INPUT_REF: ${{ inputs.ref }}
-          MOVE_LATEST: ${{ inputs.move_latest }}
           WANT_RELEASE: ${{ inputs.create_github_release }}
           PUSH_IMAGE: ${{ inputs.push_image }}
         run: |
@@ -105,18 +101,27 @@ jobs:
             is_release=true
           fi
 
+          # No `:latest` on GHCR, by decision on AUD-409. A floating tag in a
+          # public registry is the one tag whose meaning an operator cannot
+          # verify — it names a different image next week — and ours would
+          # float only when someone happened to dispatch a build, which is
+          # worse than not existing. Operators pin `<version>` or
+          # `<version>-g<sha12>`; the README and docs/operations.md spell out
+          # which. The private registry keeps its own `:latest` for the deploy
+          # host (docs/releases.md) — that one is moved by the health-gated
+          # Gitea job, not by a manual dispatch.
           tags="${image}:${version}-g${short}"
           if [ "$is_release" = true ]; then
             tags="${tags},${image}:${version}"
           fi
-          if [ "$MOVE_LATEST" = true ]; then
-            tags="${tags},${image}:latest"
-          fi
 
-          if [ "$WANT_RELEASE" = true ] && [ "$is_release" != true ]; then
-            echo "FATAL: create_github_release was requested, but ${ref} (${short}) is not the v${version} release tag." >&2
-            echo "       Cut the release first with scripts/release.sh, then dispatch this workflow on the tag." >&2
-            exit 2
+          # A GitHub Release is created for a release-tag commit by default and
+          # silently skipped for anything else. Making it an error instead
+          # would mean the common case — dispatching a build of `main` — failed
+          # on a default-on checkbox nobody un-checked.
+          want_release=false
+          if [ "$WANT_RELEASE" = true ] && [ "$is_release" = true ]; then
+            want_release=true
           fi
 
           {
@@ -127,6 +132,7 @@ jobs:
             echo "image=$image"
             echo "tags=$tags"
             echo "is_release=$is_release"
+            echo "want_release=$want_release"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -139,6 +145,7 @@ jobs:
             echo "| version | \`${version}\` |"
             echo "| release tag commit | ${is_release} |"
             echo "| push to GHCR | ${PUSH_IMAGE} |"
+            echo "| GitHub Release | ${want_release} |"
             echo "| tags | ${tags//,/<br>} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -230,7 +237,7 @@ jobs:
 
   github-release:
     needs: [plan, image]
-    if: ${{ inputs.create_github_release && needs.image.result == 'success' && inputs.push_image }}
+    if: ${{ needs.plan.outputs.want_release == 'true' && needs.image.result == 'success' && inputs.push_image }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
