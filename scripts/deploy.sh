@@ -15,11 +15,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${ROOT}/scripts/lib/deploy-env.sh"
 audr_load_deploy_env "${ROOT}"
 
-# scripts/ci.sh has always called `deploy.sh "${TAG}"`, but this script used to
-# ignore positional arguments entirely — so the tag CI had just built was
-# dropped and the deploy silently redeployed whatever BACKEND_TAG the remote
-# .env happened to pin. That is how AUD-360's first deploy pulled a stale image
-# and advanced the database underneath it (2026-10-01).
+# Load-bearing: scripts/ci.sh passes the tag it just built as $1. Ignoring it
+# would redeploy whatever BACKEND_TAG the remote .env happens to pin — a stale
+# image, with this deploy's migrations run underneath it.
 DEPLOY_TAG="${1:-}"
 
 DEPLOY_HOST="${DEPLOY_HOST:-${AUDR_DEPLOY_HOST:-}}"
@@ -28,12 +26,11 @@ REGISTRY="${REGISTRY:-${AUDR_REGISTRY:-}}"
 audr_require REGISTRY "Registry compose.yaml resolves \${AUDR_REGISTRY} against, e.g. registry.example.internal:5000."
 SSH_KEY="${AUDR_SSH_KEY:-${ROOT}/id_ed25519}"
 SSH="ssh -i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
-# The live compose project runs out of /home/codex/audr — that is the directory
-# in `com.docker.compose.project.working_dir` on the running containers, and the
-# only one whose .env DB_PASSWORD matches the database role. /opt/audr and
-# /srv/audr are stale copies left from earlier bring-ups; deploying into one of
-# them pulls images and runs migrations against the live database using a stale
-# password, which is how AUD-360's deploy first failed (2026-10-01).
+# Must be the directory the live compose project actually runs out of — check
+# `com.docker.compose.project.working_dir` on a running container. Only that
+# copy's .env holds the DB_PASSWORD matching the database role, so deploying
+# into a stale copy of the checkout runs migrations against the live database
+# with the wrong credentials.
 REMOTE_DIR="${REMOTE_DIR:-${AUDR_REMOTE_DIR:-/home/codex/audr}}"
 
 if [ -n "${DEPLOY_TAG}" ]; then
@@ -68,19 +65,18 @@ env_set() {
   fi
 }
 
-# compose.yaml defaults to the public ghcr.io/br3d image (AUD-418); this host
-# pulls from its own registry instead, so pin ${AUDR_REGISTRY} on every deploy —
-# a host whose .env predates that variable, or a fresh bring-up, would otherwise
-# pull the public release rather than the image this deploy just built.
+# compose.yaml defaults to the public ghcr.io/br3d image; this host pulls from
+# its own registry instead, so pin ${AUDR_REGISTRY} on every deploy — a fresh
+# bring-up would otherwise pull the public release rather than the image this
+# deploy just built.
 env_set AUDR_REGISTRY "${REGISTRY}"
 
 # Pin the requested tag before pulling so every later step — pull, migrate,
 # up -d, and the image verification below — agrees on what is being deployed.
 if [ -n "${DEPLOY_TAG}" ]; then
   echo "  -> Pinning BACKEND_TAG to ${DEPLOY_TAG}"
-  # Only BACKEND_TAG since AUD-388: there is one image now. A stale FRONTEND_TAG
-  # line may still sit in the remote .env from before that change; it is inert,
-  # because no service in compose.yaml interpolates it any more.
+  # Only BACKEND_TAG: the stack is one image. A stale FRONTEND_TAG line in the
+  # remote .env is inert — no service in compose.yaml interpolates it.
   env_set BACKEND_TAG "${DEPLOY_TAG}"
 fi
 
@@ -92,12 +88,10 @@ docker compose pull api worker </dev/null
 echo "  -> Running migrations"
 # `-T` and `</dev/null` are both load-bearing. This whole script is fed to the
 # remote shell on stdin (`bash -s` + heredoc), and `docker compose run` without
-# `-T` attaches the container to stdin — so it swallowed the rest of this
-# script. The deploy then ended right here, silently skipping the restart AND
-# the readiness gate below, while still exiting 0 and printing "Deploy
-# complete". Observed on 2026-10-01 (AUD-360): migrations advanced the database
-# to a new head but api/worker kept running the previous image, leaving
-# /health/ready at 503 behind a "successful" deploy.
+# `-T` attaches the container to stdin — swallowing the rest of this script. The
+# deploy then ends right here, skipping the restart AND the readiness gate
+# below, while still exiting 0 and printing "Deploy complete": migrations
+# applied, containers left on the previous image.
 docker compose run --rm -T migrate </dev/null
 
 echo "  -> Restarting services"
@@ -142,19 +136,15 @@ check_tag api "${backend_tag}"
 check_tag worker "${backend_tag}"
 
 echo "  -> Waiting for API readiness gate"
-# Gate on /health/ready, NOT /health (AUD-328).
-#
+# Gate on /health/ready, NOT a bare /health — which is not a route at all.
 # `/health/ready` performs a real DB + master-key check inside FastAPI, so it
-# cannot be satisfied by anything but a working API. A bare `/health` is not a
-# route at all, and since AUD-388 the API also serves the SPA from a catch-all
-# mount — so the thing to be careful about is a gate URL that the SPA fallback
-# could answer with index.html and HTTP 200 while the app is actually broken.
-# `audr.api.spa` reserves `/health` and `/api` against that fallback, so both
-# 404 honestly rather than returning the shell.
+# cannot be satisfied by anything but a working API.
 #
-# Belt and braces regardless: we additionally require the body to be the API's
-# JSON (`"status":"ok"`), so even if the SPA mount ever did answer here, an
-# index.html response fails the gate instead of silently passing it.
+# The hazard to keep in mind: the API also serves the SPA from a catch-all
+# mount, so a wrong gate URL could be answered with index.html and HTTP 200
+# while the app is broken. `audr.api.spa` reserves `/health` and `/api` against
+# that fallback, and belt-and-braces we also require the body to be the API's
+# JSON (`"status":"ok"`) so an index.html response fails the gate.
 HEALTH_URL="http://localhost/health/ready"
 for i in $(seq 1 30); do
   body="$(curl -s -m 5 -o - -w '\n%{http_code}' "${HEALTH_URL}" 2>/dev/null || true)"

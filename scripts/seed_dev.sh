@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Seed a running audr instance with canonical dev/test fixtures (AUD-286).
+# Seed a running audr instance with canonical dev/test fixtures.
 #
 # Creates the owner account with the test password, registers the Buterin
 # wallet, and — when an RPC URL is available out of band — configures the RPC
-# integration (AUD-349).  Safe to run multiple times — skips steps that are
-# already done.
+# integration.  Safe to run multiple times — skips steps that are already done.
 #
 # Usage:
 #   ./scripts/seed_dev.sh [BASE_URL]
@@ -16,9 +15,9 @@
 #                      are left untouched (the API answers 409)
 #   skip             – never create it (use when you only want RPC configured)
 #
-# Seeding is deliberately unconditional (AUD-350): the point of the script is
-# to fill a portfolio with enough real data to exercise every feature, so both
-# the demo wallet and the RPC integration are always configured.
+# Seeding is deliberately unconditional: the point of the script is to fill a
+# portfolio with enough real data to exercise every feature, so both the demo
+# wallet and the RPC integration are always configured.
 #
 # The password seeded is the canonical test password defined in
 # backend/tests/fixtures/seed.py (TEST_PASSWORD = "Rand0mP@ssw0rd").
@@ -37,9 +36,8 @@ BASE_URL="${1:-${AUDR_BASE_URL:-http://localhost}}"
 API="${BASE_URL}/api/v1"
 PASSWORD="Rand0mP@ssw0rd"
 BUTERIN_ADDRESS="0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
-# Labelled "(demo seed)" so it is never mistaken for an address the operator
-# added themselves — the two indistinguishable "Buterin" rows are what opened
-# AUD-350.
+# Labelled "(demo seed)" so a seeded row is never mistaken for an address the
+# operator added themselves.
 BUTERIN_LABEL="Buterin (demo seed)"
 COOKIE_JAR="$(mktemp)"
 trap 'rm -f "${COOKIE_JAR}"' EXIT
@@ -101,7 +99,7 @@ fi
 
 # ── 2. Create Buterin wallet (idempotent: ignore 409 Conflict) ────────────────
 #
-# Unconditional by design (AUD-350): seeding exists to give a portfolio enough
+# Unconditional by design: seeding exists to give a portfolio enough
 # data to test with, so the demo wallet is always registered.  Re-runs are
 # harmless — the address has a unique index and the API answers 409.  Set
 # AUDR_SEED_WALLET=skip when you only want the RPC integration configured.

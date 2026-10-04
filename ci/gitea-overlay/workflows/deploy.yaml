@@ -1,34 +1,33 @@
 name: Build & Deploy (guarded)
 
-# Guarded build + auto-deploy pipeline for the audr stack (AUD-294).
+# Guarded build + auto-deploy pipeline for the audr stack.
 #
 # One serialized job on the self-hosted `host` runner, which is also the deploy
 # host. Build and deploy live in ONE job so ordering and image
 # freshness are guaranteed — no cross-workflow race.
 #
-# Serialization used to come for free from the runner's capacity of 1. That
-# capacity is now 2 (AUD-310 item 2, so CI jobs stop queueing behind each
-# other), which would let two pushes to main deploy concurrently against the
-# same live stack, the same :rollback tag and the same Harbor :latest. The
-# `concurrency` group below restores the guarantee explicitly and is shared
-# with build.yaml, the other workflow that moves :latest.
+# The runner has capacity 2, so serialization does not come for free: two pushes
+# to main could otherwise deploy concurrently against the same live stack, the
+# same :rollback tag and the same registry :latest. The `concurrency` group
+# below restores the guarantee explicitly and is shared with build.yaml, the
+# other workflow that moves :latest.
 #
-# Safety guards (added after the 2026-09-28 auto-deploy outage):
+# Safety guards:
 #   1. Secrets preflight — refuses to deploy if ~/audr/.env is missing or has
-#      no DB_PASSWORD/SECRET_KEY. The stack's DB password is fixed at DB init; a
-#      missing/regenerated credential is exactly what caused the "password
-#      authentication failed" outage, so we hard-fail instead of proceeding.
+#      no DB_PASSWORD/SECRET_KEY. The stack's DB password is fixed at DB init,
+#      so a missing or regenerated credential means "password authentication
+#      failed" against the live volume; hard-fail instead of proceeding.
 #   2. Rollback snapshot — the currently-running :latest images are retagged
-#      :rollback (and pushed to Harbor, so the rollback path does not depend on
-#      the host's local image cache surviving a prune), AND the pre-deploy
-#      alembic revision is recorded.
+#      :rollback (and pushed to the registry, so the rollback path does not
+#      depend on the host's local image cache surviving a prune), AND the
+#      pre-deploy alembic revision is recorded.
 #   2b. Migration-aware rollback — restoring images without restoring the schema
 #      is not a rollback: the old image cannot locate the newer revision and
-#      crash-loops (2026-09-29 outage). On failure we downgrade the schema back
-#      to the snapshot revision first, using the NEW image, and only then
-#      restore the images. If the downgrade is impossible the old images are
-#      deliberately left alone and the stack stays on the new tag, because a
-#      running-but-newer stack beats a guaranteed-dead one.
+#      crash-loops. On failure we downgrade the schema back to the snapshot
+#      revision first, using the NEW image, and only then restore the images. If
+#      the downgrade is impossible the old images are deliberately left alone
+#      and the stack stays on the new tag, because a running-but-newer stack
+#      beats a guaranteed-dead one.
 #   3. Migration applied via the compose `migrate` service (alembic upgrade head).
 #      Note two CI-only requirements on every docker invocation here:
 #        * `timeout --foreground` — plain `timeout` puts the child in a NEW
@@ -37,24 +36,23 @@ name: Build & Deploy (guarded)
 #          timeout was added to prevent).
 #        * `compose run -T` — never allocate a TTY in a CI job.
 #   3b. Immutable tag pinning — compose.yaml resolves ${BACKEND_TAG} from
-#      $DEPLOY_DIR/.env and this job pins it to the build sha. Floating :latest
-#      was silently fatal: compose does not recreate a running service when a
-#      floating tag moves, so deploys migrated the DB, passed the health-gate
-#      against the PREVIOUS containers and reported success while the running
-#      code never changed. Step 5b now asserts each container actually runs the
-#      new tag.
+#      $DEPLOY_DIR/.env and this job pins it to the build sha. A floating
+#      :latest is silently fatal: compose does not recreate a running service
+#      when a floating tag moves, so a deploy migrates the DB, passes the
+#      health-gate against the PREVIOUS containers and reports success while the
+#      running code never changed. Step 5b asserts each container actually runs
+#      the new tag.
 #   4. Health-gate — waits for FOUR signals: the api container healthcheck
 #      (/health/live inside the container), a public GET /health/ready on :80
-#      returning `"status":"ok"` (real DB + master-key check — a bare /health or
-#      / could be answered by the SPA fallback even with a dead API, see
-#      AUD-328), :80 serving the SPA, and GET /api/v1/version reporting the
-#      commit this job built (AUD-407 — the one signal a moved registry tag
-#      cannot fake). Since AUD-388 all four come from the same container:
-#      `api` publishes :80 and serves the SPA itself.
+#      returning `"status":"ok"` (a real DB + master-key check — a bare /health
+#      or / could be answered by the SPA fallback even with a dead API), :80
+#      serving the SPA, and GET /api/v1/version reporting the commit this job
+#      built (the one signal a moved registry tag cannot fake). All four come
+#      from the same container: `api` publishes :80 and serves the SPA itself.
 #   5. Auto-rollback — any failure after the snapshot restores the previous
 #      images and brings the stack back up.
-#   6. Harbor :latest is only advanced AFTER the health-gate passes, so a failed
-#      deploy never leaves a poisoned :latest in the registry.
+#   6. The registry's :latest is only advanced AFTER the health-gate passes, so
+#      a failed deploy never leaves a poisoned :latest behind.
 #
 # Triggers: push to main (guarded auto-deploy), release tags v*, and manual
 # workflow_dispatch.
@@ -104,8 +102,8 @@ jobs:
           fi
           echo "registry = $REGISTRY"
 
-      # AUD-407: every image tag now carries the semantic version from the
-      # repo-root VERSION file, so a tag in the registry says what it is without
+      # Every image tag carries the semantic version from the repo-root
+      # VERSION file, so a tag in the registry says what it is without
       # anyone having to resolve a sha against the git history.
       #
       #   push to main        -> <version>-g<sha>   (unique per commit)
@@ -144,7 +142,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "version=$version tag=$tag release=$release"
 
-      # One image since AUD-388 — see the equivalent note in build.yaml.
+      # One image only — see the equivalent note in build.yaml.
       - name: Build image
         run: |
           set -euo pipefail
@@ -199,8 +197,8 @@ jobs:
           # DB_PASSWORD is needed for the direct alembic invocations below.
           set -a; . ./.env; set +a
 
-          # compose.yaml defaults to the public ghcr.io/br3d image (AUD-418);
-          # this host pulls from the private registry instead. Export it before
+          # compose.yaml defaults to the public ghcr.io/br3d image; this host
+          # pulls from the private registry instead. Export it before
           # the first compose call — an exported value also wins over the .env
           # file in compose's precedence order — and persist it into
           # $DEPLOY_DIR/.env further down, so a manual `docker compose` on the
@@ -220,9 +218,9 @@ jobs:
           # The snapshot has two halves. Images alone are NOT a restorable
           # state: a deploy that migrates the DB and then fails leaves the
           # schema ahead of the old image, whose `alembic upgrade head` dies
-          # with "Can't locate revision identified by '<new>'" — that is the
-          # 2026-09-29 outage (stack down 2h18m). So we record the pre-deploy
-          # alembic revision and roll the schema back too.
+          # with "Can't locate revision identified by '<new>'" — a rollback that
+          # cannot start. So record the pre-deploy alembic revision and roll the
+          # schema back too.
           alembic_rev(){
             docker compose exec -T db \
               psql -U audr -d audr -tAc 'select version_num from alembic_version' \
@@ -343,10 +341,10 @@ jobs:
           # ---- 5. deploy ----------------------------------------------------
           # Timeout is mandatory: `migrate` is a one-shot that `api`/`worker`
           # wait on with service_completed_successfully, so a failing one-shot
-          # makes `compose up` block until someone kills it (2026-09-29 outage:
-          # the job hung 2h18m and held the audr-deploy concurrency group, which
-          # also starved every queued build). compose.yaml pins that service to
-          # `restart: "no"` so it fails fast; this is the belt to that braces.
+          # makes `compose up` block until someone kills it — and a hung job
+          # holds the audr-deploy concurrency group, starving every queued
+          # build behind it. compose.yaml pins that service to `restart: "no"`
+          # so it fails fast; this is the belt to that braces.
           log "Recreating services"
           timeout --foreground 300 docker compose up -d --remove-orphans
 
@@ -365,23 +363,21 @@ jobs:
           done
 
           # ---- 6. health-gate ----------------------------------------------
-          # Three independent signals (AUD-328). The original gate paired the
-          # api container healthcheck with `curl http://localhost:80/`, but
-          # nginx proxied only `^/(api|health)/` (trailing slash) and served
-          # index.html for everything else — so the :80 check passed even with
-          # the api container dead, and contributed nothing. The public-path
-          # signal is /health/ready (a real DB + master-key check) with a body
-          # assertion, so an SPA response can never satisfy the gate.
+          # Four independent signals, none of which is decorative.
           #
-          # Since AUD-388 the SPA is served by the api container too, which
-          # makes the `spa_code` signal load-bearing rather than decorative: a
-          # 200 on / now additionally proves the image really contains the Vite
-          # build at /app/static. An image built without it still starts and
-          # still passes /health/ready — it just serves no UI — and / returns
-          # 404, so this is the only signal that catches it. Do not drop it.
+          # The public-path signal must be /health/ready (a real DB + master-key
+          # check) WITH a body assertion: a plain `curl http://localhost:80/`
+          # can be answered by the SPA fallback even with the API dead, so it
+          # would prove nothing.
           #
-          # Fourth signal since AUD-407: GET /api/v1/version must report the
-          # commit this job just built. Step 5b already asserts the container
+          # `spa_code` is load-bearing because the api container serves the SPA
+          # too: a 200 on / proves the image really contains the Vite build at
+          # /app/static. An image built without it still starts and still passes
+          # /health/ready — it just serves no UI — and / returns 404, so this is
+          # the only signal that catches it. Do not drop it.
+          #
+          # GET /api/v1/version must report the commit this job just built.
+          # Step 5b already asserts the container
           # runs the expected *image tag*, but a tag is metadata the registry
           # can be talked into moving; the commit sha is baked into the image at
           # build time, so this is the one check that compares what is running
@@ -426,20 +422,19 @@ jobs:
           fi
           log "Deploy OK — tag=$TAG version=$VERSION"
 
-      # Every deploy mints a new per-sha image on this runner and nothing used
-      # to remove them: by 2026-10-03 the host held 299 images + 3.8GB of build
-      # cache at 89% of a 32GB root (AUD-395). Runs on failure paths too —
-      # that is when the disk is most likely to be the actual cause — and the
-      # retention window in host-gc.sh keeps the rollback image resident. See
-      # that script's header for why pruning this host cannot disarm rollback.
+      # Every deploy mints a new per-sha image on this runner, and left
+      # unattended they fill the root filesystem — hundreds of images plus
+      # several GB of build cache. Runs on failure paths too (that is when the
+      # disk is most likely to be the actual cause), and the retention window in
+      # host-gc.sh keeps the rollback image resident. See that script's header
+      # for why pruning this host cannot disarm rollback.
       - name: Reclaim host disk
         if: always()
         run: bash scripts/host-gc.sh
 
-      # Registry-side counterpart of the step above (AUD-345). Every deploy also
-      # mints a registry tag, and a hand-run pruner is a policy nobody enforces:
-      # the registry had accumulated ~35 audr-backend tags before the first
-      # manual pass. Running it here is what makes the retention rules in
+      # Registry-side counterpart of the step above. Every deploy also mints a
+      # registry tag, and a hand-run pruner is a policy nobody enforces.
+      # Running it here is what makes the retention rules in
       # scripts/registry-prune.py an actual policy rather than a documented one.
       #
       # Deliberately NOT `if: always()`, unlike host-gc. On a failed deploy the
@@ -456,12 +451,12 @@ jobs:
       # guarded deploy has already pinned that .env to this build's tag.
       #
       # Exits 0 unconditionally: a retention problem is disk hygiene on a healthy
-      # deploy and must never turn a green deploy red. A failure is logged for the
-      # next heartbeat to pick up.
+      # deploy and must never turn a green deploy red. A failure is logged for
+      # someone to pick up later.
       #
       # NOTE this reclaims no bytes on its own. A /v2 manifest delete only unlinks
       # the tag; the blobs are freed solely by `registry garbage-collect` on the
-      # registry host, which we have no shell for (AUD-345 item 4, still open).
+      # registry host, which we have no shell for.
       - name: Enforce registry tag retention
         env:
           AUDR_REGISTRY: ${{ vars.AUDR_REGISTRY }}

@@ -6,16 +6,15 @@
 #   set AUDR_BASE_URL in deploy.env to probe it from elsewhere)
 # Exits non-zero if any check fails.
 #
-# Assertions are written against ROUTES THAT ACTUALLY EXIST (AUD-328).  Two
-# traps to be aware of when editing this file:
+# Two traps to be aware of when editing this file:
 #
-#  1. SPA fallback.  Since AUD-388 FastAPI serves the SPA itself from a
-#     catch-all mount, so index.html comes back with HTTP 200 for any path that
-#     matches no API route and is not under the reserved `/api` or `/health`
-#     prefixes.  A 404 assertion on a made-up *frontend* path (e.g.
-#     /nonexistent-route-xyz) therefore can never pass.  Any check meant to
-#     prove the BACKEND is alive must target a path under /api/ or /health/ AND
-#     assert on the response body, not on the status code alone.
+#  1. SPA fallback.  FastAPI serves the SPA itself from a catch-all mount, so
+#     index.html comes back with HTTP 200 for any path that matches no API route
+#     and is not under the reserved `/api` or `/health` prefixes.  A 404
+#     assertion on a made-up *frontend* path (e.g. /nonexistent-route-xyz)
+#     therefore can never pass.  Any check meant to prove the BACKEND is alive
+#     must target a path under /api/ or /health/ AND assert on the response
+#     body, not on the status code alone.
 #  2. `curl -f` suppresses the real status code on HTTP errors, which is why
 #     this script does not use it — we want to read 401/404 back verbatim.
 set -euo pipefail
@@ -68,14 +67,13 @@ check "Auth session rejects anonymous"    "${BASE_URL}/api/v1/auth/session" 401
 # Unknown API path must 404 from FastAPI. NOTE: an unknown *frontend* path
 # returns 200 (index.html) by design — only /api/ paths can assert 404.
 check "Unknown API path 404s"             "${BASE_URL}/api/v1/nonexistent" 404
-# Frontend SPA is served — by the api container itself since AUD-388.
+# Frontend SPA is served — by the api container itself.
 check "Frontend SPA loads"                "${BASE_URL}/" 200 '<div id="root"'
 # Hard refresh on a deep client-side route must serve the shell, not a 404.
-# This is the `try_files ... /index.html` behaviour the removed nginx container
-# used to provide, and the single most likely thing to regress if the static
-# mount in audr.api.spa is ever reordered or replaced.
+# This is the single most likely thing to regress if the static mount in
+# audr.api.spa is ever reordered or replaced.
 check "SPA deep-route refresh /folio"     "${BASE_URL}/folio" 200 '<div id="root"'
-# AUD-407: the deployment reports a semantic version, and it is the one this
+# The deployment must report a semantic version, and it must be the one this
 # checkout carries. Asserting the exact number — not merely that the route
 # answers — is what turns the smoke test into a deploy check: a stale image that
 # is otherwise perfectly healthy fails here and nowhere else.
