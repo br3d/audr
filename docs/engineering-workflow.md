@@ -4,6 +4,11 @@ This project does **not** use pull requests. There is no PR review step, no GitH
 approval, and nobody should ever be asked to "open a PR" or "merge the PR" — least of all
 the founder. Work lands by the engineer who wrote it merging their own branch into `main`.
 
+This document describes **internal** work. The repository is public, and an outside
+contributor has no way to self-merge, so for them fork-and-pull-request is the mechanism and
+infraLead reviews and merges it — see [../CONTRIBUTING.md](../CONTRIBUTING.md). "We do not use
+pull requests" is a rule about how *we* land our own work, not a refusal to accept patches.
+
 ## The loop
 
 1. Branch off `main`: `fix/aud-NNN-short-slug` or `feat/aud-NNN-short-slug`.

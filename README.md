@@ -183,9 +183,12 @@ For a faster UI loop, run the Vite dev server against a running stack:
 cd frontend && npm install && npm run dev     # http://localhost:5173
 ```
 
-Branching and merging follow [docs/engineering-workflow.md](docs/engineering-workflow.md):
-branch off `main`, run the suite, and **merge your own branch**. This project
-does not use pull requests.
+**Want to contribute?** [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from
+a clone to a mergeable change: setup, the four mandatory gates, and how to send a
+patch. Note the asymmetry — the core team self-merges green branches per
+[docs/engineering-workflow.md](docs/engineering-workflow.md) and does not use
+pull requests, while **outside contributions arrive as a fork and a pull request,
+which a maintainer reviews and merges**.
 
 Releases are semantic versions cut with `./scripts/release.sh major|minor|patch`;
 the running build reports itself at `GET /api/v1/version` and in the bottom-left
@@ -212,6 +215,7 @@ debugging against containers, and the shared-checkout worktree rules — is in
 | [architecture.md](docs/architecture.md) | How the system is built: processes, packages, data model, jobs, auth, providers, configuration reference |
 | [api.md](docs/api.md) | The HTTP API as implemented — every route, its auth requirement and its behaviour |
 | [development.md](docs/development.md) | Developer setup, every test suite and how to run it, lint/typecheck, migrations, conventions |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute: scope, the mandatory gates, fork-and-PR for outside contributors vs. self-merge inside the team |
 | [operations.md](docs/operations.md) | Operator guide: install, secrets, seeding, TLS, key loss, purge, reset, troubleshooting |
 
 **Product and scope**
