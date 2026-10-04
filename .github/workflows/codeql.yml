@@ -1,0 +1,100 @@
+name: codeql
+
+# GitHub's own static analysis over both halves of the tree (AUD-411): the
+# Python backend plus scripts/, and the TypeScript SPA. Free for a public
+# repository, and the only gate here that looks for *security* defects rather
+# than style or test failures — findings land in the repository's Security →
+# Code scanning tab and annotate the commit that introduced them.
+#
+# It replaces nothing. `tests.yml` is still the verdict a contributor needs and
+# the Gitea pipeline is still what decides what gets deployed; CodeQL is advisory
+# and does not block either.
+#
+# Triggers, and why each one is what it is:
+#
+#   push (main only)  Same reason as tests.yml: the one-way mirror on the deploy
+#                     host replays this repository into Gitea, which falls back
+#                     to `.github/workflows` on any ref that carries no
+#                     `.gitea/workflows` of its own. A bare `on: push` would make
+#                     the mirror queue this analysis for every stale branch it
+#                     syncs, on one self-hosted runner that cannot run the CodeQL
+#                     action anyway (AUD-333). `branches: [main]` closes it —
+#                     mirrored branches never match, and Gitea's own `main`
+#                     carries the overlay so the fallback does not apply there.
+#   schedule          Weekly, not daily. CodeQL's value between pushes is new
+#                     queries finding old code, which the bundle ships on a
+#                     release cadence, so a nightly run would burn Actions
+#                     minutes to re-derive yesterday's answer. Minutes are
+#                     metered on the free plan (docs/github-actions.md).
+#   workflow_dispatch Re-run the analysis by hand after changing the language
+#                     matrix or the query suite, without waiting for Monday.
+#
+# Do NOT add a `tags:` trigger to any file in this directory — tags are mirrored
+# verbatim and a tagged commit has no `.gitea/workflows`, so Gitea would run this
+# file through the fallback path alongside its own tag-triggered deploy.
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Mondays, 05:17 UTC. An off-the-hour minute keeps it out of the queue spike
+    # that every `0 * * * *` cron on GitHub's shared schedulers lands in.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+# A second push to `main` supersedes the analysis of the commit before it: only
+# the tip's results are ever shown in the Security tab.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Uploading the SARIF results is the only write this workflow performs.
+      security-events: write
+      contents: read
+      # The action reads the workflow run's own metadata to attach results to it.
+      actions: read
+    strategy:
+      # One language's analysis failing should not hide the other's results.
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          language: ${{ matrix.language }}
+          # `security-and-quality` is deliberately *not* used: it folds in
+          # maintainability queries that duplicate ruff and would make this gate
+          # noisy for the one thing it is here for.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              # Build output and vendored dependencies. CodeQL skips
+              # node_modules/ on its own; dist/ is generated from src/ and
+              # scanning it only reports every finding a second time.
+              - frontend/dist
+              - frontend/node_modules
+              # Playwright's own artefacts, written into the tree by a local run.
+              - frontend/test-results
+              # Alembic revisions are generated and intentionally terse; the
+              # schema they produce is reviewed, their SQL is not application
+              # code CodeQL can say anything useful about.
+              - backend/migrations/versions
+
+      # No `autobuild` step. Both languages are interpreted, so CodeQL extracts
+      # them straight from source — adding autobuild would attempt a build of a
+      # project whose real build lives in Dockerfile and gain nothing.
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

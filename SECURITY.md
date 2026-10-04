@@ -56,6 +56,15 @@ Out of scope:
   it. Self-hosting removes the vendor, not the network; each integration
   documents what it receives.
 
+## Automated analysis
+
+GitHub's CodeQL (`security-extended`) runs over `backend/`, `scripts/` and
+`frontend/` on every push to `main` and once a week; the setup is described in
+[`docs/github-actions.md`](docs/github-actions.md). Its alerts are a starting
+point, not a verdict — a CodeQL finding with no exploitation path on the list
+above is still out of scope, and the triage happens in the Security tab rather
+than through this reporting channel.
+
 ## What audr does and does not hold
 
 - **No private keys, seed phrases or signing material. Ever.** Adding an address

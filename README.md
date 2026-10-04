@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/br3d/audr/actions/workflows/tests.yml"><img src="https://github.com/br3d/audr/actions/workflows/tests.yml/badge.svg?branch=main" alt="tests"></a>
+  <a href="https://github.com/br3d/audr/actions/workflows/codeql.yml"><img src="https://github.com/br3d/audr/actions/workflows/codeql.yml/badge.svg?branch=main" alt="codeql"></a>
   <a href="https://github.com/br3d/audr/actions/workflows/release.yml"><img src="https://github.com/br3d/audr/actions/workflows/release.yml/badge.svg" alt="release"></a>
   <a href="https://github.com/br3d/audr/tags"><img src="https://img.shields.io/github/v/tag/br3d/audr?sort=semver&label=version&color=4c1" alt="version"></a>
   <a href="https://github.com/br3d/audr/pkgs/container/audr-backend"><img src="https://img.shields.io/badge/ghcr.io-audr--backend-2496ed?logo=docker&logoColor=white" alt="container image"></a>

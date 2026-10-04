@@ -5,7 +5,7 @@ audr has **two** CI systems, and they are not redundant:
 | | Where it runs | What it is for |
 |---|---|---|
 | **Gitea Actions** (`ci/gitea-overlay/workflows/`) | Self-hosted runner on the deploy host | The real delivery pipeline: build, guarded deploy, rollback, registry retention. Private, reachable only from our network. |
-| **GitHub Actions** (`.github/workflows/`) | GitHub-hosted runners | The public face: a test verdict anyone can see and reproduce, badges on the README, and on-demand release images. Deploys nothing. |
+| **GitHub Actions** (`.github/workflows/`) | GitHub-hosted runners | The public face: a test verdict anyone can see and reproduce, CodeQL security analysis, badges on the README, and on-demand release images. Deploys nothing. |
 
 The Gitea pipeline stays the authority over what is deployed. Nothing in
 `.github/workflows` touches the deployed instance or the private registry.
@@ -101,9 +101,37 @@ run summary.
 - Layer caching uses the **Actions** cache (10 GB account-wide), not GHCR, and
   is scoped per version so one release cannot evict another's entry.
 
+## `codeql.yml` — static security analysis
+
+GitHub's own CodeQL analysis over both halves of the tree (AUD-411): a `python`
+job covering `backend/` and `scripts/`, and a `javascript-typescript` job
+covering the SPA. Free for a public repository, which this one now is — code
+scanning is unavailable on a private repository without GitHub Advanced
+Security, so making the repository private again would turn this workflow red.
+
+It is **advisory**. Findings land in *Security → Code scanning* and annotate the
+commit that introduced them; nothing merges or deploys on CodeQL's verdict, and
+`tests.yml` remains the gate a contributor needs to pass.
+
+| | |
+|---|---|
+| Triggers | push to `main`, `schedule` (Mondays 05:17 UTC), `workflow_dispatch` |
+| Query suite | `security-extended` — not `security-and-quality`, whose maintainability queries duplicate ruff and drown the security findings |
+| Build | none. Both languages are interpreted, so CodeQL extracts from source; there is no `autobuild` step to misfire on a project whose real build is the Dockerfile |
+| Excluded paths | `frontend/dist`, `frontend/node_modules`, `frontend/test-results`, `backend/migrations/versions` |
+
+Weekly rather than nightly because what CodeQL finds between pushes is *new
+queries over old code*, and the query bundle moves on a release cadence — a
+nightly run would spend metered Actions minutes re-deriving yesterday's answer.
+The same `branches: [main]` filter and the same no-`tags:` rule as `tests.yml`
+apply, and for the same mirror reason.
+
+Permissions are `security-events: write` (the SARIF upload — the only write it
+performs), plus `contents: read` and `actions: read`.
+
 ## Secrets
 
-Neither workflow needs a repository secret. `release.yml` authenticates to GHCR
+None of the three workflows needs a repository secret. `release.yml` authenticates to GHCR
 with the run's built-in `GITHUB_TOKEN` and the narrowest permissions that work:
 `contents: read` for the whole file, `packages: write` only on the build job,
 `contents: write` only on the release job. No deploy host address, SSH key or
