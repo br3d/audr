@@ -428,6 +428,32 @@ describe('DashboardPage', () => {
       expect(setPage).toHaveBeenCalledWith('wallets')
       await unmount(container, root)
     })
+
+    // AUD-408: Assets no longer has a sidebar entry, so this header button is
+    // the only always-visible way into the token registry.
+    it('calls setPage("assets") when the Manage assets button is clicked', async () => {
+      const setPage = vi.fn()
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const qc = makeQueryClient()
+      qc.setQueryData(['portfolio'], EMPTY_PORTFOLIO)
+      act(() => {
+        root.render(
+          React.createElement(
+            QueryClientProvider,
+            { client: qc },
+            React.createElement(DashboardPage, { setPage }),
+          ),
+        )
+      })
+      const button = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent === 'Manage assets',
+      )!
+      act(() => { button.click() })
+      expect(setPage).toHaveBeenCalledWith('assets')
+      await unmount(container, root)
+    })
   })
 
   describe('recent events', () => {

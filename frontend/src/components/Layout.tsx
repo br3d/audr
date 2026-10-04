@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import {
   IconGrid,
   IconWallet,
-  IconCoins,
   IconBarChart,
   IconClock,
   IconActivity,
@@ -53,7 +52,9 @@ export type MainPage = (typeof MAIN_PAGES)[number]
 const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<SVGSVGElement>> }[] = [
   { page: 'dashboard', label: 'Dashboard', Icon: IconGrid },
   { page: 'wallets', label: 'Wallets', Icon: IconWallet },
-  { page: 'assets', label: 'Assets', Icon: IconCoins },
+  // AUD-408: Assets is a maintenance registry (exclusions, decimals conflicts,
+  // manual contracts), not a portfolio view. It stays routable at #/assets and
+  // is reached from the Dashboard links, but it no longer takes a nav slot.
   { page: 'events', label: 'Events', Icon: IconZap },
   { page: 'history', label: 'History', Icon: IconBarChart },
   { page: 'schedules', label: 'Schedules', Icon: IconClock },

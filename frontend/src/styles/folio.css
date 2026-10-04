@@ -701,6 +701,22 @@ body {
   aspect-ratio: 1;
 }
 
+/* AUD-408: inline textual link for navigating between pages from prose —
+   used where a sentence points at a page that has no nav entry. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent);
+}
+
 .btn-group {
   display: flex;
   gap: 8px;

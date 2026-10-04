@@ -158,7 +158,8 @@ describe('App routing and auth guard', () => {
     expect(container.textContent).toContain('Dashboard')
     expect(container.textContent).not.toContain('Holdings')
     expect(container.textContent).toContain('Wallets')
-    expect(container.textContent).toContain('Assets')
+    // AUD-408: Assets is reachable from the Dashboard, not from the sidebar.
+    expect(container.textContent).not.toContain('Assets')
     expect(container.textContent).toContain('Connections')
     // "Sign out" lives in the user menu now; it opens from the avatar button in the topbar.
     expect(container.querySelector('[aria-label="Account menu"]')).toBeTruthy()
