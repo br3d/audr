@@ -82,6 +82,14 @@ Two rules make these tags mean something:
 A `v*` ref whose name disagrees with `VERSION` fails the job outright rather
 than deploying — see the `Compute tags` step.
 
+### The public mirror of those tags on GHCR
+
+The private registry above is what the deploy host pulls from. For operators who
+are not us, the same image is published to `ghcr.io/<owner>/audr-backend` by the
+manual GitHub `release` workflow, using the same tag scheme and the same "bare
+`<version>` only from the `v<version>` commit" rule. It is dispatch-only and it
+deploys nothing — see [github-actions.md](github-actions.md).
+
 ## Verifying what is deployed
 
 ```bash

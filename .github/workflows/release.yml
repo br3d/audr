@@ -1,0 +1,268 @@
+name: release
+
+# Manual container build/publish for the public GitHub repository (AUD-409).
+#
+# `workflow_dispatch` ONLY, and deliberately so. GitHub Actions minutes and
+# GHCR storage are both metered on the free plan, and this project's real
+# delivery pipeline is the guarded Gitea one on the deploy host
+# (ci/gitea-overlay/workflows/deploy.yaml). This workflow exists so that an
+# operator — or we, cutting a public release — can pick a version in the UI and
+# get a published image for it, not so that every commit produces one.
+#
+# Nothing here deploys. Publishing an image to GHCR has no effect on the
+# deployed instance, which pulls from the private registry.
+#
+# Do NOT add a `push:` or `tags:` trigger. The GitHub -> Gitea mirror replays
+# branches and tags verbatim, and Gitea falls back to `.github/workflows` on any
+# ref that has no `.gitea/workflows` of its own — so a tag trigger here would
+# make the mirror run this file on the self-hosted runner alongside Gitea's own
+# tag-triggered deploy. See .github/workflows/tests.yml for the full note.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Version to build: a tag (v0.4.1), branch or sha. Empty = the ref selected above.'
+        type: string
+        required: false
+        default: ''
+      run_tests:
+        description: 'Run the full test suite before building (uncheck only to re-publish an already-tested ref).'
+        type: boolean
+        required: false
+        default: true
+      push_image:
+        description: 'Push to GHCR. Uncheck for a build-only dry run that consumes no registry storage.'
+        type: boolean
+        required: false
+        default: true
+      move_latest:
+        description: 'Also move the :latest tag to this build.'
+        type: boolean
+        required: false
+        default: false
+      create_github_release:
+        description: 'Create a GitHub Release for the tag (only valid when building a v* release tag).'
+        type: boolean
+        required: false
+        default: false
+
+# One publish at a time: concurrent runs would race on the :latest tag.
+concurrency:
+  group: release-ghcr
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    # Resolves what is being built and which tags it earns, before anything
+    # expensive runs. Image tags follow the same scheme as scripts/build.sh and
+    # the Gitea pipeline — `<version>-g<sha12>` — so a tag means the same thing
+    # whichever registry it is in. See docs/releases.md and scripts/lib/version.sh.
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.plan.outputs.ref }}
+      sha: ${{ steps.plan.outputs.sha }}
+      short_sha: ${{ steps.plan.outputs.short_sha }}
+      version: ${{ steps.plan.outputs.version }}
+      image: ${{ steps.plan.outputs.image }}
+      tags: ${{ steps.plan.outputs.tags }}
+      is_release: ${{ steps.plan.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          # Tags are needed to decide whether this commit *is* a release.
+          fetch-depth: 0
+      - name: Resolve version and tags
+        id: plan
+        env:
+          # Every dispatch input reaches the shell through the environment, not
+          # through `${{ }}` interpolation into the script body: a `ref` input
+          # containing shell metacharacters would otherwise be executed.
+          OWNER: ${{ github.repository_owner }} # package names must be lowercase; a login need not be
+          INPUT_REF: ${{ inputs.ref }}
+          MOVE_LATEST: ${{ inputs.move_latest }}
+          WANT_RELEASE: ${{ inputs.create_github_release }}
+          PUSH_IMAGE: ${{ inputs.push_image }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF:-}"
+          [ -n "$ref" ] || ref="${GITHUB_REF_NAME}"
+          sha="$(git rev-parse HEAD)"
+          short="${sha:0:12}"
+          version="$(tr -d ' \t\r\n' < VERSION)"
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/audr-backend"
+
+          # The bare `:<version>` tag is published only when the commit being
+          # built is exactly the `v<version>` release tag. Publishing it from an
+          # arbitrary commit would make `:0.4.1` mean "whatever was built last"
+          # instead of "the 0.4.1 release", which is the one guarantee semver
+          # tagging is supposed to buy. Same rule as scripts/build.sh.
+          is_release=false
+          if [ "$(git rev-parse -q --verify "refs/tags/v${version}^{commit}" || true)" = "$sha" ]; then
+            is_release=true
+          fi
+
+          tags="${image}:${version}-g${short}"
+          if [ "$is_release" = true ]; then
+            tags="${tags},${image}:${version}"
+          fi
+          if [ "$MOVE_LATEST" = true ]; then
+            tags="${tags},${image}:latest"
+          fi
+
+          if [ "$WANT_RELEASE" = true ] && [ "$is_release" != true ]; then
+            echo "FATAL: create_github_release was requested, but ${ref} (${short}) is not the v${version} release tag." >&2
+            echo "       Cut the release first with scripts/release.sh, then dispatch this workflow on the tag." >&2
+            exit 2
+          fi
+
+          {
+            echo "ref=$ref"
+            echo "sha=$sha"
+            echo "short_sha=$short"
+            echo "version=$version"
+            echo "image=$image"
+            echo "tags=$tags"
+            echo "is_release=$is_release"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Build plan"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`${ref}\` |"
+            echo "| commit | \`${short}\` |"
+            echo "| version | \`${version}\` |"
+            echo "| release tag commit | ${is_release} |"
+            echo "| push to GHCR | ${PUSH_IMAGE} |"
+            echo "| tags | ${tags//,/<br>} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests:
+    needs: plan
+    if: ${{ inputs.run_tests }}
+    uses: ./.github/workflows/tests.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+
+  image:
+    needs: [plan, tests]
+    # `tests` is skipped when run_tests is unchecked; a skipped dependency must
+    # not read as a failure, but a *failed* one must stop the build.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: ${{ inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build timestamp
+        id: ts
+        run: echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      # One image, not two. The `runtime` stage already contains the Vite build
+      # at /app/static and the API serves the SPA directly (AUD-388); the
+      # frontend is still built, in the `frontend-builder` stage that `runtime`
+      # copies from.
+      #
+      # linux/amd64 only: that is what the deploy host runs, and a second
+      # architecture doubles both build minutes and registry storage for a
+      # platform nobody has asked for yet.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          push: ${{ inputs.push_image }}
+          tags: ${{ needs.plan.outputs.tags }}
+          build-args: |
+            AUDR_VERSION=${{ needs.plan.outputs.version }}
+            AUDR_GIT_SHA=${{ needs.plan.outputs.sha }}
+            AUDR_BUILT_AT=${{ steps.ts.outputs.built_at }}
+          # Attestations publish extra manifests and blobs per build. On a free
+          # plan that is storage spent on metadata we do not consume — the image
+          # digest is already recorded in the run summary.
+          provenance: false
+          sbom: false
+          # The layer cache lives in the Actions cache (10 GB account-wide, not
+          # GHCR), scoped per version so one release cannot evict another's
+          # entry on every build.
+          cache-from: type=gha,scope=release-${{ needs.plan.outputs.version }}
+          cache-to: type=gha,mode=min,scope=release-${{ needs.plan.outputs.version }}
+      - name: Summary
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+          PULL: ${{ needs.plan.outputs.image }}:${{ needs.plan.outputs.version }}-g${{ needs.plan.outputs.short_sha }}
+          PUSHED: ${{ inputs.push_image }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Image"
+            echo
+            if [ "$PUSHED" = true ]; then
+              echo "Published:"
+              echo
+              # shellcheck disable=SC2016  # `$` is sed's end-of-line, not a shell variable
+              printf '%s\n' "$TAGS" | tr ',' '\n' | sed 's/^/- `/; s/$/`/'
+              echo
+              echo '```'
+              echo "docker pull $PULL"
+              echo '```'
+            else
+              echo "Dry run — the image was built and discarded, nothing was pushed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    needs: [plan, image]
+    if: ${{ inputs.create_github_release && needs.image.result == 'success' && inputs.push_image }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      # `gh release create` is idempotent only in the sense that it fails on an
+      # existing release, which is the behaviour we want: a re-dispatch must not
+      # silently overwrite published release notes.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          IMAGE: ${{ needs.plan.outputs.image }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          notes_file="$(mktemp)"
+          {
+            echo "## Container image"
+            echo
+            echo '```'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo '```'
+            echo
+            echo "See [docs/releases.md](docs/releases.md) for what the version number means and"
+            echo "[docs/operations.md](docs/operations.md) for installing or upgrading an instance."
+          } > "$notes_file"
+          gh release create "$tag" \
+            --title "audr $tag" \
+            --notes-file "$notes_file" \
+            --generate-notes \
+            --verify-tag
