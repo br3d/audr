@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GitHub br3d/audr -> Gitea dfbot/audr one-way sync (AUD-294).
+# GitHub br3d/audr -> Gitea dfbot/audr one-way sync.
 # - Pulls all refs from GitHub over SSH (read-only deploy key).
 # - Pushes all branches (except main) + tags to Gitea verbatim.
 # - For main: Gitea main = GitHub main + .gitea/workflows overlay (CI config that
@@ -24,12 +24,11 @@ git fetch --prune "$GH_URL" '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags
 
 # Push every branch except main, plus all tags, verbatim.
 #
-# dependabot/* is skipped (AUD-412). Dependabot's branches live and die on the
-# GitHub side — it deletes them once its pull request is merged or closed — but
-# this mirror never propagates a deletion (it pushes `+ref:ref` and nothing
-# else), so every one it replayed would sit in Gitea forever. They also carry no
-# .gitea/workflows, which is the fallback path AUD-333 is about. Nothing on the
-# Gitea side has any use for them.
+# dependabot/* is skipped. Dependabot's branches live and die on the GitHub
+# side — it deletes them once its pull request is merged or closed — but this
+# mirror never propagates a deletion (it pushes `+ref:ref` and nothing else), so
+# every one it replayed would sit in Gitea forever. They also carry no
+# .gitea/workflows, so nothing on the Gitea side has any use for them.
 refspecs=()
 while read -r ref; do
   [ "$ref" = "refs/heads/main" ] && continue

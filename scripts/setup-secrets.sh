@@ -26,20 +26,18 @@ fi
 
 ENV_FILE="$(dirname "$0")/../.env"
 if [ ! -f "$ENV_FILE" ]; then
-    # The database password lives only in .env (AUD-418). It used to be written
-    # to secrets/db_password.txt as well and mounted into the db container as a
-    # Docker secret, but compose needs the same value in .env anyway — the
-    # DATABASE_URL the api/worker/migrate services use embeds it — so the file
-    # was a second copy of it with nothing to gain.
+    # The database password lives only in .env: the DATABASE_URL that the
+    # api/worker/migrate services use embeds it, so a separate secrets file
+    # would only be a second copy of the same value.
     #
     # Hex, not base64: the password is interpolated unencoded into the
     # postgresql+psycopg://audr:${DB_PASSWORD}@db URL in compose.yaml, and
     # base64's '/', '+' and '=' characters break that URL. 32 random bytes as
     # 64 lowercase hex chars is URL-safe and keeps the same entropy.
     if [ -f "$SECRETS_DIR/db_password.txt" ]; then
-        # A host installed before AUD-418: the database role was created with
-        # this password, so reuse it — a fresh one would not authenticate
-        # against the existing db_data volume.
+        # An older install that kept the password in its own file: the database
+        # role was created with it, so reuse it — a freshly generated one would
+        # not authenticate against the existing db_data volume.
         DB_PASSWORD="$(cat "$SECRETS_DIR/db_password.txt")"
         echo "Reusing the password from the pre-existing secrets/db_password.txt"
     else

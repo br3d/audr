@@ -7,11 +7,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE_TEST="${ROOT}/compose.test.yaml"
 # Unique compose project per invocation. compose.test.yaml declares the fixed
-# project name `audr-test`, so two runs on the same host — a CI job and a local
-# run, or two CI jobs now that the runner has capacity 2 — share containers,
-# volumes and the test network. Either side's teardown `down -v` then destroys
-# the other's database mid-run, producing red suites that look like app
-# regressions (AUD-310). Override with AUDR_TEST_PROJECT to reuse a stack.
+# project name `audr-test`, so two concurrent runs on the same host — a CI job
+# and a local run, say — would share containers, volumes and the test network,
+# and either side's teardown `down -v` would destroy the other's database
+# mid-run. The resulting red suites look like app regressions. Override with
+# AUDR_TEST_PROJECT to deliberately reuse a stack.
 PROJECT="${AUDR_TEST_PROJECT:-audr-test-$$}"
 COMPOSE=(docker compose -p "${PROJECT}" -f "${COMPOSE_TEST}")
 EXIT=0

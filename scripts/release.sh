@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cut a semantic-version release (AUD-407).
+# Cut a semantic-version release.
 #
 # Usage:
 #   ./scripts/release.sh major|minor|patch [--push]
@@ -124,7 +124,7 @@ def sub_once(path: pathlib.Path, pattern: str, repl: str) -> None:
     path.write_text(new)
 
 
-# compose.yaml's default image tag (AUD-418): a checkout of v1.4.2 must pull
+# compose.yaml's default image tag: a checkout of v1.4.2 must pull
 # audr-backend:1.4.2, so the number lives in the `BACKEND_TAG` default and in
 # the header comment that spells the full image out for the reader.
 sub_once(

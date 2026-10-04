@@ -11,7 +11,6 @@ name: CI
 # the filter keeps that from becoming accidental: if .gitea/workflows is ever
 # committed upstream, the mirror would start replaying the full suite on every
 # long-stale branch it syncs. Pre-merge coverage comes from `pull_request`.
-# See AUD-333.
 on:
   push:
     branches:
@@ -22,11 +21,11 @@ jobs:
   lint:
     # Python lint gate: the full rule set from backend/pyproject.toml and
     # ruff.toml, plus format --check, both in backend/ and at the repo root
-    # (scripts/). Every noqa in the tree carries a reason. See AUD-393.
+    # (scripts/). Every noqa in the tree carries a reason.
     #
     # The ruff version is pinned here and in `backend/pyproject.toml` dev
     # extras, and the two must stay in sync — an unpinned ruff makes the gate's
-    # verdict depend on the day it ran. See AUD-392.
+    # verdict depend on the day it ran.
     runs-on: host
     steps:
       - uses: actions/checkout@v4
@@ -41,8 +40,8 @@ jobs:
       - name: scripts/ must parse on the oldest python3 we run them under
         # `scripts/*.py` are invoked as `python3 scripts/foo.py` from a host
         # shell, not inside the 3.14 image, so they must not use 3.14-only
-        # syntax. This is the gate that catches AUD-392 directly: PEP 758
-        # `except A, B:` compiles on 3.14 and fails here.
+        # syntax — PEP 758 `except A, B:`, for instance, compiles on 3.14 and
+        # fails here, which is exactly what this gate is for.
         #
         # compile() in memory rather than `compileall`: this runner is
         # self-hosted and its checkout persists between runs, so a step that
@@ -70,13 +69,11 @@ jobs:
       # compose.test.yaml declares the fixed project name `audr-test`, so every
       # `docker compose -f compose.test.yaml` invocation on this host shares the
       # same containers, volumes and `audr-test_test-net` network. A concurrent
-      # local run — or a second CI job, now that the runner is at capacity 2 —
+      # local run — or a second CI job, since the runner has capacity 2 —
       # therefore collides, and either side's `down -v --remove-orphans`
-      # destroys the other's database mid-run. That is what produced CI run #51
-      # (migrate-test exit 255, teardown logging "Network audr-test_test-net
-      # Resource is still in use") on a sha that was green on the next run with
-      # no code change. Namespace the stack per run so runs cannot see each
-      # other. See AUD-310.
+      # destroys the other's database mid-run, which shows up as a red suite on
+      # a sha that is green on the next run with no code change. Namespace the
+      # stack per run so runs cannot see each other.
       COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
@@ -99,9 +96,9 @@ jobs:
           # images (`$COMPOSE_PROJECT-backend-tests`, `-migrate-test`, ~1GB a run)
           # can never be a cache hit for any later run — they are garbage the
           # moment this job ends. Left to scripts/host-gc.sh they would survive
-          # its 48h retention window, and at ~1GB per CI run that was the
-          # dominant source of the disk growth AUD-395 is about. Delete them
-          # here, at the source. Scoped to this run's own project name, so a
+          # its 48h retention window, and at ~1GB per CI run that is the
+          # dominant source of disk growth on the runner. Delete them here, at
+          # the source. Scoped to this run's own project name, so a
           # concurrent CI job on the other runner slot is untouched.
           imgs="$(docker images --filter "reference=${COMPOSE_PROJECT}-*" -q | sort -u)"
           if [ -n "$imgs" ]; then

@@ -6,7 +6,7 @@ name: audr
 #
 # and nothing else from a registry (`postgres:16-alpine` aside). The default is
 # spelled out rather than hidden behind a variable so that you can see what your
-# machine is about to download before you run `docker compose up` (AUD-418). The
+# machine is about to download before you run `docker compose up`. The
 # version moves with the repo: scripts/release.sh rewrites it here together with
 # the other version carriers, so a checkout of tag v0.4.1 pulls :0.4.1.
 #
@@ -27,11 +27,9 @@ services:
     environment:
       POSTGRES_DB: audr
       POSTGRES_USER: audr
-      # From .env, like every other credential in this stack. This used to be a
-      # Docker secret backed by secrets/db_password.txt, but the same password
-      # also had to live in .env for the DATABASE_URL lines below, so the file
-      # was a second copy of a value .env already carried — two places to keep
-      # in sync, and no extra protection for it (AUD-418).
+      # From .env, like every other credential in this stack: the DATABASE_URL
+      # lines below embed the same password, so a separate Docker secret file
+      # would only be a second copy of it to keep in sync.
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is unset - run `bash scripts/setup-secrets.sh`}
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -44,13 +42,8 @@ services:
     networks:
       - internal
 
-  # Single one-shot bootstrap: schema migration, then master-key init.
-  #
-  # These were two services (`migrate` + `init`) until AUD-386. Both ran the
-  # same image against the same database and `init_key` is idempotent by
-  # design ("safe to call on every startup"), so the split bought nothing but
-  # an extra compose service and an extra container start per deploy. Order
-  # still matters — `init_key` writes to `key_state`, which the 0001 baseline
+  # Single one-shot bootstrap: schema migration, then master-key init. Order
+  # matters — `init_key` writes to `key_state`, which the 0001 baseline
   # migration creates — hence `&&` rather than two parallel commands.
   migrate:
     image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
@@ -73,9 +66,8 @@ services:
       - internal
     # One-shot. Must NOT restart: `api`/`worker` wait on it with
     # service_completed_successfully, so an unbounded `restart: on-failure`
-    # turns a failed migration into a `docker compose up` that blocks forever
-    # instead of an error (2026-09-29 outage: the deploy job hung 2h18m mid
-    # rollback and held the audr-deploy lock). Fail fast, let the deploy roll back.
+    # turns a failed migration into a `docker compose up` that hangs forever
+    # instead of failing. Fail fast.
     restart: "no"
 
   api:
@@ -91,29 +83,26 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # The only published port in the project. There used to be an nginx `web`
-    # service in front of this one, serving the SPA on :80 and reverse-proxying
-    # /api and /health here; AUD-388 folded that into the API process, which now
-    # serves the built bundle out of /app/static. See docs/containers.md.
-    # Published on :80 by default. Set AUDR_HTTP_PORT in .env to move it —
-    # :80 is often already taken by a local nginx or Portainer, and the
-    # resulting "port is already allocated" is the most common first-run
-    # failure (AUD-423). Only the host side is configurable; the container
-    # always listens on 8000, which is what the healthcheck and the deploy
-    # health-gate talk to.
+    # The only published port in the project: this one process serves /api,
+    # /health and the built SPA out of /app/static. See docs/containers.md.
+    #
+    # Published on :80 by default. Set AUDR_HTTP_PORT in .env to move it — :80
+    # is often already taken by a local nginx or Portainer, and the resulting
+    # "port is already allocated" is the most common first-run failure. Only the
+    # host side is configurable; the container always listens on 8000, which is
+    # what the healthcheck and the deploy health-gate talk to.
     ports:
       - "${AUDR_HTTP_PORT:-80}:8000"
-    # Deliberately stdlib-Python and not `curl` (AUD-379): installing curl
-    # meant an apt layer in the runtime image for a one-line HTTP request that
-    # the interpreter already in the image can make. urllib raises on a
-    # connection failure and on any
-    # 4xx/5xx, so a non-zero exit covers every failure mode `curl -f` did.
+    # Deliberately stdlib-Python and not `curl`: curl is not in the runtime
+    # image, and installing it would add an apt layer for a one-line HTTP
+    # request the interpreter already there can make. urllib raises on a
+    # connection failure and on any 4xx/5xx, so a non-zero exit covers every
+    # failure mode `curl -f` would.
+    #
     # The except clause is not optional: letting the exception escape writes a
     # ~2KB traceback into `.State.Health.Log`, and Docker keeps only the last 5
     # entries at 4KB each, so the useful history gets crowded out. Printing the
     # exception gives one readable line ("[Errno 111] Connection refused").
-    # The deploy health-gate reads `.State.Health.Status` of audr-api-1, so
-    # this check is load-bearing — see ci/gitea-overlay/workflows/deploy.yaml.
     healthcheck:
       test:
         - CMD

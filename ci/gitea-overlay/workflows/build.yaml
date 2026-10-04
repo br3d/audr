@@ -1,17 +1,16 @@
 name: Build & Push Images
 
-# DISABLED auto-trigger (AUD-294 incident 2026-09-28): the deployed code on the
-# deploy host (~/audr @ 9ae03b6, migration 008) was NOT committed to this repo's
-# main (stopped at 007), so builds from main produced STALE images that broke the
-# DB schema on deploy. Manual dispatch only until the deployed code is
-# reconciled into git. The registry is anonymous (no login); its endpoint comes
-# from the Gitea repository variable AUDR_REGISTRY, not from this file.
+# Manual dispatch only, with no push trigger: publishing images is the deploy
+# pipeline's job (deploy.yaml, on `v*` tags), and an unattended build from main
+# would move `:latest` in the registry without any health-gate behind it. The
+# registry is anonymous (no login); its endpoint comes from the Gitea repository
+# variable AUDR_REGISTRY, not from this file.
 on:
   workflow_dispatch:
 
-# Shares deploy.yaml's group: this workflow moves Harbor :latest, so a manual
-# dispatch must not overlap a guarded deploy that is snapshotting/advancing the
-# same tag. See AUD-310.
+# Shares deploy.yaml's group: this workflow moves the registry's `:latest`, so a
+# manual dispatch must not overlap a guarded deploy that is snapshotting or
+# advancing the same tag.
 concurrency:
   group: audr-deploy
   cancel-in-progress: false
@@ -33,9 +32,9 @@ jobs:
             exit 2
           fi
           echo "registry = $REGISTRY"
-      # AUD-407: same `<version>-g<sha>` scheme as deploy.yaml, so a manual
-      # dispatch and an automatic deploy leave tags of the same shape in the
-      # registry. This workflow never publishes a bare `:<version>` tag — that
+      # Same `<version>-g<sha>` scheme as deploy.yaml, so a manual dispatch and
+      # an automatic deploy leave tags of the same shape in the registry.
+      # This workflow never publishes a bare `:<version>` tag — that
       # one is reserved for a release that has passed deploy.yaml's health-gate.
       - name: Compute tags
         id: meta
@@ -48,10 +47,9 @@ jobs:
             echo "version=$version"
             echo "tag=${version}-g${sha}"
           } >> "$GITHUB_OUTPUT"
-      # One image since AUD-388: the `runtime` stage contains the Vite build at
-      # /app/static and the API serves the SPA itself, so the separate
-      # nginx-based `audr-frontend` image is gone. The frontend is still built —
-      # in the `frontend-builder` stage that `runtime` copies from.
+      # One image only: the `runtime` stage contains the Vite build at
+      # /app/static and the API serves the SPA itself. The frontend is still
+      # built — in the `frontend-builder` stage that `runtime` copies from.
       - name: Build backend image
         run: |
           docker build --target runtime \
@@ -64,7 +62,7 @@ jobs:
         run: |
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}"
           docker push "$REGISTRY/audr-backend:latest"
-      # Same host runner, same image accumulation as deploy.yaml (AUD-395).
+      # Same host runner, same image accumulation as deploy.yaml.
       - name: Reclaim host disk
         if: always()
         run: bash scripts/host-gc.sh

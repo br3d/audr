@@ -16,7 +16,7 @@ the mirror from replaying them on this runner.
 The mirror pushes every branch **except** `main` verbatim. If `.gitea/workflows/`
 were tracked upstream, Gitea would find workflows on every long-stale branch the
 mirror syncs and start replaying the full suite for each of them. `ci.yaml`
-documents this hazard inline (AUD-333). Keeping the files under
+documents this hazard inline. Keeping the files under
 `ci/gitea-overlay/workflows/` gets them versioned, reviewable and diffable
 without ever becoming a live trigger path.
 
@@ -24,11 +24,9 @@ without ever becoming a live trigger path.
 
 The **running** copies live at `~/.config/audr-mirror/overlay/.gitea/workflows/`
 on the deploy host; the mirror script reads that directory, not this one. The
-files here are the source of record and the recovery copy — before this directory
-existed, `deploy.yaml` (including the whole migration-aware rollback and image
-pinning added after the 2026-09-29 outage) existed nowhere but that one host
-directory, and the stale copies on the `ci/gitea-actions` branch had drifted by
-~190 lines.
+files here are the source of record and the recovery copy: without them the
+pipeline — migration-aware rollback, image pinning and all — would exist
+nowhere but a single untracked directory on one host.
 
 Edit here, commit, then push to the host:
 
