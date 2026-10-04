@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           language: ${{ matrix.language }}
           # `security-and-quality` is deliberately *not* used: it folds in
@@ -95,6 +95,6 @@ jobs:
       # them straight from source — adding autobuild would attempt a build of a
       # project whose real build lives in Dockerfile and gain nothing.
       - name: Analyse
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
