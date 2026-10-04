@@ -12,7 +12,7 @@
   <a href="https://github.com/br3d/audr/actions/workflows/release.yml"><img src="https://github.com/br3d/audr/actions/workflows/release.yml/badge.svg" alt="release"></a>
   <a href="https://github.com/br3d/audr/tags"><img src="https://img.shields.io/github/v/tag/br3d/audr?sort=semver&label=version&color=4c1" alt="version"></a>
   <a href="https://github.com/br3d/audr/pkgs/container/audr-backend"><img src="https://img.shields.io/badge/ghcr.io-audr--backend-2496ed?logo=docker&logoColor=white" alt="container image"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/br3d/audr?color=blue" alt="licence"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="licence"></a>
 </p>
 
 # audr
