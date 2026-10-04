@@ -14,10 +14,10 @@ name: Build & Deploy (guarded)
 # with build.yaml, the other workflow that moves :latest.
 #
 # Safety guards (added after the 2026-09-28 auto-deploy outage):
-#   1. Secrets preflight — refuses to deploy if ~/audr/.env or the db_password
-#      secret is missing. The stack's DB password is fixed at DB init; a missing
-#      /regenerated secret is exactly what caused the "password authentication
-#      failed" outage, so we hard-fail instead of proceeding.
+#   1. Secrets preflight — refuses to deploy if ~/audr/.env is missing or has
+#      no DB_PASSWORD/SECRET_KEY. The stack's DB password is fixed at DB init; a
+#      missing/regenerated credential is exactly what caused the "password
+#      authentication failed" outage, so we hard-fail instead of proceeding.
 #   2. Rollback snapshot — the currently-running :latest images are retagged
 #      :rollback (and pushed to Harbor, so the rollback path does not depend on
 #      the host's local image cache surviving a prune), AND the pre-deploy
@@ -193,19 +193,18 @@ jobs:
           log "Preflight in $DEPLOY_DIR (tag=$TAG version=${VERSION:-?})"
           [ -n "${EXPECT_COMMIT:-}" ] || { log "FATAL: EXPECT_COMMIT empty — the health-gate could never pass"; exit 2; }
           [ -f .env ] || { log "FATAL: .env missing — refusing (would break DB auth)"; exit 2; }
-          [ -f secrets/db_password.txt ] || { log "FATAL: secrets/db_password.txt missing"; exit 2; }
           grep -q '^DB_PASSWORD=' .env  || { log "FATAL: DB_PASSWORD missing in .env"; exit 2; }
           grep -q '^SECRET_KEY=' .env   || { log "FATAL: SECRET_KEY missing in .env"; exit 2; }
 
           # DB_PASSWORD is needed for the direct alembic invocations below.
           set -a; . ./.env; set +a
 
-          # compose.yaml interpolates ${AUDR_REGISTRY} instead of hardcoding the
-          # endpoint (the GitHub repo is public). Export it before the first
-          # compose call — an exported value also wins over the .env file in
-          # compose's precedence order — and persist it into $DEPLOY_DIR/.env
-          # further down, so a manual `docker compose` on the host resolves the
-          # same image instead of the localhost:5000 placeholder default.
+          # compose.yaml defaults to the public ghcr.io/br3d image (AUD-418);
+          # this host pulls from the private registry instead. Export it before
+          # the first compose call — an exported value also wins over the .env
+          # file in compose's precedence order — and persist it into
+          # $DEPLOY_DIR/.env further down, so a manual `docker compose` on the
+          # host resolves this registry and not the public default.
           export AUDR_REGISTRY="$REGISTRY"
 
           # DB must be reachable before we touch the stack.

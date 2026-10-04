@@ -68,10 +68,10 @@ env_set() {
   fi
 }
 
-# compose.yaml interpolates ${AUDR_REGISTRY} rather than hardcoding the registry
-# (the repo is public). Pin it on every deploy so a host whose .env predates
-# that change — or a fresh bring-up — resolves the image instead of falling back
-# to the localhost:5000 placeholder.
+# compose.yaml defaults to the public ghcr.io/br3d image (AUD-418); this host
+# pulls from its own registry instead, so pin ${AUDR_REGISTRY} on every deploy —
+# a host whose .env predates that variable, or a fresh bring-up, would otherwise
+# pull the public release rather than the image this deploy just built.
 env_set AUDR_REGISTRY "${REGISTRY}"
 
 # Pin the requested tag before pulling so every later step — pull, migrate,

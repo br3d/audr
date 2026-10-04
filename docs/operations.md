@@ -26,10 +26,17 @@ curl -s http://localhost/health/live
 
 | File | Purpose |
 |---|---|
-| `secrets/db_password.txt` | PostgreSQL password (mounted as Docker secret) |
-| `secrets/master_key.hex` | 64-char hex master key-encryption-key |
+| `secrets/master_key.hex` | 64-char hex master key-encryption-key — the backup copy of `SECRET_KEY`, which is not recoverable from anywhere else |
 | `secrets/rpc_url.txt` | Ethereum RPC URL used by `scripts/seed_dev.sh` (only written when `AUDR_SEED_RPC_URL` is set) |
-| `.env` | `DB_PASSWORD` and `SECRET_KEY` for Compose |
+| `.env` | `DB_PASSWORD` (generated here) and `SECRET_KEY` (copied from `master_key.hex`) — the only credentials Compose reads |
+
+Since AUD-418 the PostgreSQL password exists only as `DB_PASSWORD` in `.env`.
+There is no `secrets/db_password.txt` and no Docker secret: Compose needs the
+password in `.env` regardless, because the `DATABASE_URL` of the `api`,
+`worker` and `migrate` services embeds it, so the separate file was a second
+copy of the same value. Hosts installed before AUD-418 keep working — the file
+is simply no longer read, and `setup-secrets.sh` reuses the password from it if
+it is still there and `.env` is missing.
 
 **Never commit `.env` or `secrets/`.** Both are in `.gitignore`.
 
@@ -207,7 +214,7 @@ bash scripts/setup-secrets.sh   # generates new master_key.hex only if missing;
 rm secrets/master_key.hex && bash scripts/setup-secrets.sh
 
 # 3. Clear the corrupted key_state row so init re-initialises
-docker compose run --rm -e DATABASE_URL=postgresql+psycopg://audr:$(cat secrets/db_password.txt)@db:5432/audr api \
+docker compose run --rm -e DATABASE_URL="postgresql+psycopg://audr:$(sed -n 's/^DB_PASSWORD=//p' .env)@db:5432/audr" api \
     python -c "
 import asyncio, os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -369,8 +376,8 @@ To completely wipe all application data and start fresh:
 # Stop and remove containers, networks, and volumes
 docker compose down -v
 
-# Remove secrets (optional — re-run setup-secrets.sh to generate new ones)
-rm -f .env secrets/db_password.txt secrets/master_key.hex
+# Remove credentials (optional — re-run setup-secrets.sh to generate new ones)
+rm -f .env secrets/master_key.hex
 
 # Re-initialise
 bash scripts/setup-secrets.sh

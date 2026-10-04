@@ -1,11 +1,11 @@
 # Third-party attribution and release image pins
 
 This document records the licences of everything audr redistributes, plus the
-exact versions and image digests that go into the release images.
+exact versions and image pins that go into the release images.
 
 - **audr's own licence:** GNU General Public License v3.0 (see `LICENSE`).
 - **Reflects commit:** `f480223e4a1f585afa3cb4bc05f13091f435825a` (2026-10-02).
-- **Sources of truth:** `Dockerfile` (base image digests), `backend/uv.lock`
+- **Sources of truth:** `Dockerfile` (base image tags), `backend/uv.lock`
   (backend pins), `frontend/package-lock.json` (frontend pins),
   `backend/src/audr/assets/data/` (bundled catalog data).
 
@@ -24,12 +24,21 @@ maintained by hand.
 
 ## 1. Release image pins
 
-### 1.1 Base images (digest-pinned in `Dockerfile`)
+### 1.1 Base images
 
-Every `FROM` in `Dockerfile` is pinned by digest, so a rebuild of a given
-commit resolves to byte-identical bases.
+`Dockerfile` references its bases by tag (`node:22-alpine`, `python:3.14-slim`)
+so that a reader can see which runtimes the image is built on — AUD-418 replaced
+the `@sha256:` pins that used to be there. Tags float: the digests below are the
+ones those tags resolved to on 2026-10-04, recorded here so a past build can be
+reproduced with `docker build --build-context` or by temporarily re-pinning the
+`FROM` lines to a digest. Re-check them after any base-image bump with:
 
-| Stage | Image | Digest | Upstream licensing |
+```bash
+docker buildx imagetools inspect node:22-alpine --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect python:3.14-slim --format '{{.Manifest.Digest}}'
+```
+
+| Stage | Image | Digest (as of 2026-10-04) | Upstream licensing |
 | --- | --- | --- | --- |
 | `frontend-builder` | `node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage only — not shipped. |
 | `backend-builder`, `runtime` | `python:3.14-slim` | `sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
@@ -65,7 +74,10 @@ curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
 
 ### 1.3 Not pinned
 
-Nothing. Every third-party element of the release image is now digest-pinned.
+Nothing, in the sense of unattributed licences. The base images are referenced
+by tag rather than digest (see 1.1), so two builds of the same commit can sit on
+different base revisions; the pinned Python and npm lockfiles, and everything
+audr itself ships, do not move.
 
 Until AUD-379 there was one exception: the `runtime` stage ran
 `apt-get install --no-install-recommends curl` for the container health check,

@@ -56,6 +56,28 @@ def test_package_json_matches() -> None:
     )
 
 
+def test_compose_default_image_tag_matches() -> None:
+    """`docker compose up -d` on a checkout must pull that checkout's version.
+
+    compose.yaml names the published image literally (AUD-418) so an operator
+    can see what will be downloaded, which makes it a fifth version carrier:
+    scripts/release.sh rewrites the `BACKEND_TAG` defaults and the header
+    comment, and a stale number here would hand new users an older release
+    than the repository they cloned.
+    """
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    tags = re.findall(r"\$\{BACKEND_TAG:-([^}]+)\}", compose)
+    assert tags, "compose.yaml has no ${BACKEND_TAG:-<version>} default"
+    assert set(tags) == {__version__}, (
+        f"compose.yaml defaults to audr-backend:{sorted(set(tags))}, "
+        f"audr.version says {__version__} — bump with scripts/release.sh."
+    )
+    assert f"ghcr.io/br3d/audr-backend:{__version__}" in compose, (
+        "the header comment in compose.yaml names a different version than the "
+        "image lines below it."
+    )
+
+
 def test_build_info_defaults_to_empty_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
     """A dev checkout has no CI-injected build args; the version alone stands."""
     monkeypatch.delenv("AUDR_GIT_SHA", raising=False)
