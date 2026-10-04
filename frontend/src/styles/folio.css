@@ -779,6 +779,31 @@ body {
 .status-dot-muted { background: var(--text-muted); }
 
 /* ----------------------------------------------------------------
+   Scan controls (AUD-415) — Refresh balances / Discover tokens
+   ---------------------------------------------------------------- */
+.scan-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.scan-status-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  max-width: 240px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.scan-status-msg-ok { color: var(--success); }
+.scan-status-msg-warn { color: var(--warning); }
+.scan-status-msg-error { color: var(--danger); }
+
+/* ----------------------------------------------------------------
    Tables
    ---------------------------------------------------------------- */
 .table-container {

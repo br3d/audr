@@ -599,6 +599,26 @@ describe('DashboardPage', () => {
       await unmount(container, root)
     })
 
+    it('styles the scan controls with the shared Folio button classes (AUD-415)', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+        allocations: [ETH_ALLOCATION],
+      })
+      const scanButtons = Array.from(
+        container.querySelectorAll('.scan-status button'),
+      )
+      expect(scanButtons.length).toBe(2)
+      for (const btn of scanButtons) {
+        expect(btn.className).toContain('btn')
+        expect(btn.className).toContain('btn-sm')
+        expect(btn.className).toContain('btn-secondary')
+        expect(btn.querySelector('svg')).not.toBeNull()
+      }
+      await unmount(container, root)
+    })
+
     it('still shows the allocation card (not the unavailable alert) when only unpriced assets exist', async () => {
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
