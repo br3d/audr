@@ -5,7 +5,7 @@ description = "Ethereum portfolio tracker — backend API and worker"
 requires-python = ">=3.14"
 dependencies = [
     # Web framework and ASGI server
-    "fastapi==0.141.1",
+    "fastapi==0.142.2",
     "uvicorn[standard]==0.54.0",
     # Configuration
     "pydantic==2.13.5",
@@ -24,7 +24,7 @@ dependencies = [
     # has no working backend without this installed.
     "pycryptodome==3.23.0",
     # Authenticated encryption (AES-256-GCM)
-    "cryptography==50.0.1",
+    "cryptography==50.0.2",
     # Password hashing (Argon2id)
     "argon2-cffi==25.1.0",
 ]
