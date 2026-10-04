@@ -9,6 +9,13 @@ contributor has no way to self-merge, so for them fork-and-pull-request is the m
 infraLead reviews and merges it — see [../CONTRIBUTING.md](../CONTRIBUTING.md). "We do not use
 pull requests" is a rule about how *we* land our own work, not a refusal to accept patches.
 
+**Dependabot** is the one exception on our own side, and the only source of pull requests we
+open on this repository (AUD-412). It has no other delivery mechanism, its pull requests are
+machine-authored version bumps rather than anybody's work waiting on a reviewer, and infraLead
+merges them with the button once `tests.yml` is green. The rule is unchanged for people and
+for agents: do not open a pull request, and never ask the founder to review or merge one. See
+[github-actions.md](github-actions.md#dependabotyml--dependency-updates-and-the-one-pull-request-we-allow).
+
 ## The loop
 
 1. Branch off `main`: `fix/aud-NNN-short-slug` or `feat/aud-NNN-short-slug`.
