@@ -72,10 +72,14 @@ Requires Docker Engine 26+ with Compose v2, and `openssl`.
 ```bash
 git clone https://github.com/br3d/audr.git && cd audr
 
-bash scripts/setup-secrets.sh     # generates secrets/ and .env — idempotent
-docker compose up -d
+bash scripts/setup-secrets.sh     # generates .env and secrets/ — idempotent
+docker compose up -d              # pulls ghcr.io/br3d/audr-backend + postgres:16-alpine
 curl -s http://localhost/health/live    # {"status":"ok"}
 ```
+
+Those two images, around 500 MB and 80 MB, are everything `up -d` downloads;
+`compose.yaml` names them literally so you can see that before you run it. To
+build from source instead, `docker compose up -d --build`.
 
 Then open <http://localhost/> and create the owner password (12–128 characters).
 Everything else — RPC endpoint, quote provider, wallets, schedules — is
@@ -125,7 +129,7 @@ bootstrap (`migrate`). Three of the four share a single backend image. Only
 | Database | PostgreSQL 16 |
 | Frontend | React 19, Vite, TanStack Query, Recharts, hash routing (no router library) |
 | Static serving | The `api` process itself — `StaticFiles` with an SPA index fallback |
-| Packaging | Docker Compose; multi-stage build with digest-pinned bases |
+| Packaging | Docker Compose; multi-stage build on tagged `node:22-alpine` / `python:3.14-slim` bases |
 
 The API process has no background work in it at all: everything periodic lives
 in the separate `worker` process, so a slow RPC scan can never starve HTTP

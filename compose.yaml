@@ -1,12 +1,24 @@
 name: audr
 
-# ${AUDR_REGISTRY} is the registry holding the audr-backend image. It is not
-# baked in because this repository is public: set it in the deploy directory's
-# .env (scripts/deploy.sh and the CI deploy job both pin it there alongside
-# BACKEND_TAG) or export it before running compose. The localhost:5000 default
-# is a placeholder for a local `docker run -p 5000:5000 registry:2` — for plain
-# local development use `docker compose up --build`, which builds the image from
-# the `build:` stanzas below and never consults a registry at all.
+# Out of the box this stack pulls the public release image
+#
+#     ghcr.io/br3d/audr-backend:0.1.1
+#
+# and nothing else from a registry (`postgres:16-alpine` aside). The default is
+# spelled out rather than hidden behind a variable so that you can see what your
+# machine is about to download before you run `docker compose up` (AUD-418). The
+# version moves with the repo: scripts/release.sh rewrites it here together with
+# the other version carriers, so a checkout of tag v0.4.1 pulls :0.4.1.
+#
+# Two overrides exist for operators who run their own registry — the deploy host
+# does, which is why they stay variables:
+#
+#   AUDR_REGISTRY  registry and namespace, e.g. registry.internal:5000
+#   BACKEND_TAG    image tag, e.g. 0.4.1-g1a2b3c4d5e6f
+#
+# scripts/deploy.sh and the CI deploy job pin both in the deploy directory's
+# .env. For local development use `docker compose up --build`, which builds the
+# image from the `build:` stanzas below and never consults a registry at all.
 
 services:
   db:
@@ -15,9 +27,12 @@ services:
     environment:
       POSTGRES_DB: audr
       POSTGRES_USER: audr
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-    secrets:
-      - db_password
+      # From .env, like every other credential in this stack. This used to be a
+      # Docker secret backed by secrets/db_password.txt, but the same password
+      # also had to live in .env for the DATABASE_URL lines below, so the file
+      # was a second copy of a value .env already carried — two places to keep
+      # in sync, and no extra protection for it (AUD-418).
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is unset - run `bash scripts/setup-secrets.sh`}
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +53,7 @@ services:
   # still matters — `init_key` writes to `key_state`, which the 0001 baseline
   # migration creates — hence `&&` rather than two parallel commands.
   migrate:
-    image: ${AUDR_REGISTRY:-localhost:5000}/audr-backend:${BACKEND_TAG:-latest}
+    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
     build:
       context: .
       dockerfile: Dockerfile
@@ -64,7 +79,7 @@ services:
     restart: "no"
 
   api:
-    image: ${AUDR_REGISTRY:-localhost:5000}/audr-backend:${BACKEND_TAG:-latest}
+    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
     build:
       context: .
       dockerfile: Dockerfile
@@ -82,9 +97,10 @@ services:
     # serves the built bundle out of /app/static. See docs/containers.md.
     ports:
       - "80:8000"
-    # Deliberately stdlib-Python and not `curl` (AUD-379): the image is
-    # digest-pinned everywhere else, and installing curl via apt was the one
-    # unpinned element in it. urllib raises on a connection failure and on any
+    # Deliberately stdlib-Python and not `curl` (AUD-379): installing curl
+    # meant an apt layer in the runtime image for a one-line HTTP request that
+    # the interpreter already in the image can make. urllib raises on a
+    # connection failure and on any
     # 4xx/5xx, so a non-zero exit covers every failure mode `curl -f` did.
     # The except clause is not optional: letting the exception escape writes a
     # ~2KB traceback into `.State.Health.Log`, and Docker keeps only the last 5
@@ -112,7 +128,7 @@ services:
       - internal
 
   worker:
-    image: ${AUDR_REGISTRY:-localhost:5000}/audr-backend:${BACKEND_TAG:-latest}
+    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
     restart: unless-stopped
     command: ["python", "-m", "audr.jobs"]
     environment:
@@ -126,10 +142,6 @@ services:
 
 volumes:
   db_data:
-
-secrets:
-  db_password:
-    file: ./secrets/db_password.txt
 
 networks:
   internal:

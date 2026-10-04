@@ -81,12 +81,14 @@ services:
     volumes:
       - ./backend:/workspace/backend:ro
       # AUD-407: tests/unit/test_version.py asserts that the single version
-      # number is identical in all four files that carry it. Two of those live
+      # number is identical in every file that carries it. Most of those live
       # outside ./backend, so without these mounts the guard could only skip —
       # and version drift reaching main unnoticed is the exact failure it is
-      # there to prevent.
+      # there to prevent. compose.yaml joined the list in AUD-418, where its
+      # image default stopped being `:latest` and became the release version.
       - ./VERSION:/workspace/VERSION:ro
       - ./frontend/package.json:/workspace/frontend/package.json:ro
+      - ./compose.yaml:/workspace/compose.yaml:ro
     profiles:
       - backend
 

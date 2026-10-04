@@ -1,5 +1,9 @@
 # Stage 1: build the frontend
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS frontend-builder
+# Base images are referenced by tag, not by digest (AUD-418): a reader can see
+# at a glance which Node and Python this builds on. The digests the tags
+# resolved to at each release are recorded in docs/third-party.md section 1.1,
+# which is where to look when a build needs to be reproduced exactly.
+FROM node:22-alpine AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -14,20 +18,19 @@ ENV AUDR_VERSION=${AUDR_VERSION} AUDR_GIT_SHA=${AUDR_GIT_SHA}
 RUN npm run build
 
 # Stage 2: install Python dependencies with uv
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS backend-builder
+FROM python:3.14-slim AS backend-builder
 RUN pip install --no-cache-dir uv
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Stage 3: final runtime image
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS runtime
+FROM python:3.14-slim AS runtime
 WORKDIR /app
 
 # No apt layer here on purpose. This stage used to install `curl` for the
-# container health check, which was the one element of the release image that
-# was not reproducible: every `FROM` above is digest-pinned, but apt resolves
-# to whatever the Debian archive serves at build time. The health check in
+# container health check, which pulled a whole apt layer that resolves to
+# whatever the Debian archive serves at build time. The health check in
 # compose.yaml now uses the interpreter that is already in the image
 # (`python -c` + stdlib urllib), so nothing in the runtime needs apt. See
 # docs/third-party.md section 1.3 and AUD-379. Keep health checks stdlib-only;

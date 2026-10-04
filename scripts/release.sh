@@ -8,7 +8,7 @@
 #
 # What it does, in order:
 #   1. refuses to run unless the tree is clean and HEAD is on main
-#   2. rewrites the version in all four files that carry it
+#   2. rewrites the version in all five files that carry it
 #   3. commits that as "Release vX.Y.Z"
 #   4. creates the annotated tag vX.Y.Z
 #   5. with --push: pushes main and the tag, which is what triggers the guarded
@@ -100,7 +100,7 @@ if git -C "${ROOT}" rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   exit 1
 fi
 
-# ---- Rewrite the four version carriers ----------------------------------
+# ---- Rewrite the version carriers ---------------------------------------
 #
 # Each edit is anchored so it cannot touch a dependency pin that happens to
 # share the number: pyproject's `version = ` only in the [project] table,
@@ -123,6 +123,25 @@ def sub_once(path: pathlib.Path, pattern: str, repl: str) -> None:
         sys.exit(f"FATAL: no version line matched in {path} (pattern {pattern!r})")
     path.write_text(new)
 
+
+# compose.yaml's default image tag (AUD-418): a checkout of v1.4.2 must pull
+# audr-backend:1.4.2, so the number lives in the `BACKEND_TAG` default and in
+# the header comment that spells the full image out for the reader.
+sub_once(
+    root / "compose.yaml",
+    r"^#     ghcr\.io/br3d/audr-backend:[^\s]+$",
+    f"#     ghcr.io/br3d/audr-backend:{nxt}",
+)
+compose = root / "compose.yaml"
+text = compose.read_text()
+new, n = re.subn(
+    r"\$\{BACKEND_TAG:-[^}]+\}",
+    f"${{BACKEND_TAG:-{nxt}}}",
+    text,
+)
+if n != 3:
+    sys.exit(f"FATAL: expected 3 BACKEND_TAG defaults in {compose}, rewrote {n}.")
+compose.write_text(new)
 
 # [project] version — the first `version = "..."` in pyproject is the project's;
 # dependency pins use `==` inside the dependencies list, never this spelling.
@@ -196,7 +215,7 @@ git -C "${ROOT}" --no-pager diff --stat
 # ---- Commit and tag -----------------------------------------------------
 
 git -C "${ROOT}" add VERSION backend/pyproject.toml backend/src/audr/version.py \
-  frontend/package.json frontend/package-lock.json
+  frontend/package.json frontend/package-lock.json compose.yaml
 git -C "${ROOT}" commit -m "Release ${TAG}"
 git -C "${ROOT}" tag -a "${TAG}" -m "audr ${TAG}"
 echo "==> committed and tagged ${TAG}"
