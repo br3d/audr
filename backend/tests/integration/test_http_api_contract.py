@@ -1,4 +1,4 @@
-"""HTTP API contract tests against specs/001-ethereum-portfolio/contracts/http-api.md (AUD-330).
+"""HTTP API contract tests against the internal release-1 HTTP API contract (AUD-330).
 
 Every route documented in the spec has at least one test verifying:
   - the route exists (non-404 response)

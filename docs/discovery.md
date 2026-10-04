@@ -65,8 +65,8 @@ not the selected codebase. Its repository states AGPLv3 licensing.
 
 ## Open decisions by phase
 
-- Release-1 planning decisions are recorded in
-  [research](../specs/001-ethereum-portfolio/research.md): CoinGecko Demo quotes,
+- Release-1 planning decisions are recorded in the internal research note:
+  CoinGecko Demo quotes,
   bundled Ethereum Lists catalog, configurable RPC limits, reference benchmark and
   persistent key storage and password recovery. Full backup/restore was subsequently
   deferred to backlog by the owner; restart persistence and web export remain in release 1. Exact dependency/catalog pins and measured performance
@@ -91,8 +91,9 @@ Generated Python references remain stale; a full integration reinstall was not n
 
 ## Documentation route
 
-See [product vision](product-vision.md), [roadmap](roadmap.md) and
-[release-1 specification](../specs/001-ethereum-portfolio/spec.md).
+See [product vision](product-vision.md) and [roadmap](roadmap.md); the
+release-1 specification itself is internal planning material and is not part
+of this repository.
 The discovery clarification and technical plan are complete. Continue the
 [Spec Kit workflow](https://github.com/github/spec-kit) with task generation,
 then analyze consistency before implementation.

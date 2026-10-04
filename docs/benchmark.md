@@ -239,6 +239,7 @@ provider.
 - `docs/verification.md` — how to run every suite, and the recorded results.
 - `docs/verification-history.md` — the scale fixture's own generation timings
   and post-generation SQL spot-checks.
-- `specs/001-ethereum-portfolio/plan.md` — where SC-004 is stated.
-- `specs/001-ethereum-portfolio/research.md` — where the batch size and the
-  20 logical calls/second ceiling are specified.
+- The internal release-1 technical plan — where SC-004 is stated — and the
+  accompanying research note, where the batch size and the 20 logical
+  calls/second ceiling are specified. Both are planning material held outside
+  this repository; the numbers they fix are restated above.

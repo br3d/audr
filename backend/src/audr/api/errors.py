@@ -2,7 +2,7 @@
 
 Every error response — 4xx raised by route code, 422 from request validation,
 and unhandled 5xx — is rendered as the envelope mandated by
-`specs/001-ethereum-portfolio/contracts/http-api.md`:
+the internal release-1 HTTP API contract:
 
     {"error": {"code", "message", "field_errors", "retryable"}, "request_id"}
 

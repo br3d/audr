@@ -3,8 +3,9 @@
 Recorded: 2026-10-02 against `main` (commit `f480223`).
 
 This document maps every functional requirement (FR-001–FR-024) and success
-criterion (SC-001–SC-008) in [`specs/001-ethereum-portfolio/spec.md`](../specs/001-ethereum-portfolio/spec.md)
-to the automated test(s) that verify it, or records explicitly that nothing
+criterion (SC-001–SC-008) of the internal release-1 specification — each is
+summarized in the tables below — to the automated test(s) that verify it,
+or records explicitly that nothing
 does. It complements, rather than duplicates, [`docs/verification.md`](verification.md)
 (one-command test invocations, actual pass/fail run log, the SC-001 timed
 walkthrough) and [`docs/verification-history.md`](verification-history.md)

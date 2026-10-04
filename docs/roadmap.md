@@ -8,11 +8,11 @@ allocation; history from connection onward; adjustable scanning and manual refre
 Persistence across restarts, export and honest failure/coverage states support operation.
 Ethereum is the only selectable network initially; its network allocation is 100%.
 
-Current artifact: [specification](../specs/001-ethereum-portfolio/spec.md).
 Discovery uses a maintained token catalog and manual contract additions through RPC.
 Historical transfer-log discovery is outside this release.
-The [technical plan](../specs/001-ethereum-portfolio/plan.md) is complete; next are
-implementation tasks and consistency analysis.
+Release 1 is shipped; what the delivered system actually does is described in
+[architecture.md](architecture.md) and [api.md](api.md), and its requirement
+coverage in [release-1-coverage.md](release-1-coverage.md).
 No AI, news, notifications or address-security detector is required in this release.
 Application authentication and secret protection are still release-1 requirements.
 
