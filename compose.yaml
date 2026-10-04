@@ -95,8 +95,14 @@ services:
     # service in front of this one, serving the SPA on :80 and reverse-proxying
     # /api and /health here; AUD-388 folded that into the API process, which now
     # serves the built bundle out of /app/static. See docs/containers.md.
+    # Published on :80 by default. Set AUDR_HTTP_PORT in .env to move it —
+    # :80 is often already taken by a local nginx or Portainer, and the
+    # resulting "port is already allocated" is the most common first-run
+    # failure (AUD-423). Only the host side is configurable; the container
+    # always listens on 8000, which is what the healthcheck and the deploy
+    # health-gate talk to.
     ports:
-      - "80:8000"
+      - "${AUDR_HTTP_PORT:-80}:8000"
     # Deliberately stdlib-Python and not `curl` (AUD-379): installing curl
     # meant an apt layer in the runtime image for a one-line HTTP request that
     # the interpreter already in the image can make. urllib raises on a

@@ -98,7 +98,9 @@ Optional demo data:
 ./scripts/seed_dev.sh            # owner + a demo wallet + the RPC integration
 ```
 
-Only port **80** is published, and only HTTP is served. For anything reachable
+Only port **80** is published, and only HTTP is served. If :80 is already taken
+on your machine, set `AUDR_HTTP_PORT=8080` in `.env` (the line is there,
+commented out) and the interface moves with it. For anything reachable
 beyond localhost, terminate TLS in a reverse proxy in front of it — see
 [operations.md](docs/operations.md#tls--https-proxy). Do not expose an unclaimed
 setup screen to the internet.
