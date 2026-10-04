@@ -56,6 +56,10 @@ if [ ! -f "$ENV_FILE" ]; then
     {
         printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD"
         printf 'SECRET_KEY=%s\n' "$SECRET_KEY"
+        printf '\n'
+        printf '# Host port the web interface is published on (default 80).\n'
+        printf '# Uncomment and change if something else already owns :80.\n'
+        printf '# AUDR_HTTP_PORT=8080\n'
     } > "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     echo "Generated .env with DB_PASSWORD and SECRET_KEY"
