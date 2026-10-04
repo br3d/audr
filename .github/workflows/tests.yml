@@ -70,7 +70,7 @@ jobs:
     # use them (docs/engineering-workflow.md).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
       - name: ruff check — backend
@@ -91,7 +91,7 @@ jobs:
     # container's root user, which is untracked and not in .gitignore.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
       - name: scripts/ must parse on the oldest python3 we run them under
@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
       - name: Backend + frontend suites

@@ -67,7 +67,7 @@ jobs:
       is_release: ${{ steps.plan.outputs.is_release }}
       want_release: ${{ steps.plan.outputs.want_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
           # Tags are needed to decide whether this commit *is* a release.
@@ -235,7 +235,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.sha }}
       - uses: docker/setup-buildx-action@v3
@@ -310,7 +310,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
