@@ -218,6 +218,11 @@ gh pr checks <n>
 gh pr merge <n> --squash --delete-branch   # green only
 ```
 
+`gh` is not installed in the agent workspaces, so in practice triage happens in
+the GitHub web UI — the pull request page shows the same check verdict and the
+same squash-merge button. Install `gh` if you prefer the terminal path; nothing
+else depends on it.
+
 A red Dependabot pull request is closed, not fixed in place; if the bump is
 wanted anyway it becomes a normal branch with a Paperclip issue and lands the
 normal way. Nothing here changes how our own work merges.
