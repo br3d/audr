@@ -6,6 +6,11 @@ replays it into Gitea `dfbot/audr` and, for `main` only, bakes
 the three workflow files in this directory into the mirrored commit as
 `.gitea/workflows/`. See `docs/deploy-runbook.md`.
 
+The public GitHub-side workflows are a separate, non-deploying thing — the test
+gate behind the README badges and a manual container release. They are described
+in `docs/github-actions.md`, and the trigger rules there exist precisely to keep
+the mirror from replaying them on this runner.
+
 ## Why the files are not at `.gitea/workflows/` in this repo
 
 The mirror pushes every branch **except** `main` verbatim. If `.gitea/workflows/`

@@ -1,0 +1,135 @@
+name: tests
+
+# The GitHub-side test gate (AUD-409).
+#
+# The project's own pipeline runs on self-hosted Gitea Actions — see
+# ci/gitea-overlay/README.md — which an outside contributor cannot reach. This
+# workflow runs the same gates on GitHub-hosted runners, so that a contribution
+# gets a verdict without access to that host and so that the README build badge
+# reflects the state of `main`.
+#
+# Triggers, and why each one is safe with the Gitea mirror:
+#
+#   push (main only)  A one-way mirror replays this repository into Gitea. Every
+#                     branch except `main` is pushed verbatim, and Gitea falls
+#                     back to `.github/workflows` on a branch that carries no
+#                     `.gitea/workflows` of its own — so a bare `on: push` here
+#                     would make the mirror replay the full suite for every
+#                     stale branch it syncs, on a single self-hosted runner
+#                     (AUD-333). Filtering to `main` closes that: the mirror
+#                     pushes branch `X` as `refs/heads/X`, which never matches
+#                     this filter, and Gitea's own `main` carries the overlay so
+#                     the fallback does not apply there either.
+#   pull_request      Pre-merge coverage for outside contributions. The mirror
+#                     opens no pull requests, so this is inert on the Gitea side.
+#   workflow_call     Lets release.yml gate an image build on the same suite
+#                     instead of keeping a second copy of it.
+#
+# Do NOT add a `tags:` trigger to any file in this directory. The mirror pushes
+# tags verbatim, and a tagged commit has no `.gitea/workflows`, so Gitea would
+# run this file through the fallback path alongside its own tag-triggered
+# deploy.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to test. Empty means the ref the caller ran on.
+        type: string
+        required: false
+        default: ''
+
+# A force-push to a branch supersedes the push/PR run it interrupted. A run
+# called from release.yml passes an explicit `ref` and gets `github.run_id` in
+# its group instead, so it is never cancelled by a second dispatch — the first
+# dispatch may be queued behind release.yml's own `release-ghcr` lock, and having
+# its test job cancelled underneath it would fail a build that was fine.
+concurrency:
+  group: tests-${{ inputs.ref || github.ref }}-${{ inputs.ref && github.run_id || 'ref' }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    # Mirrors the `lint` job in ci/gitea-overlay/workflows/ci.yaml: the full ruff
+    # rule set from backend/pyproject.toml and ruff.toml plus `format --check`,
+    # in backend/ and at the repo root (scripts/). The narrow "errors only"
+    # selection this job used before AUD-393 is gone — the full set is green and
+    # every noqa in the tree carries a reason.
+    #
+    # Keep the ruff version in step with the Gitea job and with
+    # backend/pyproject.toml's dev extra (AUD-392): an unpinned ruff makes the
+    # gate's verdict depend on the day it ran.
+    #
+    # `docker run` rather than a job-level `container:`: the ruff image is
+    # distroless and contains no shell, so GitHub cannot execute a `run:` step
+    # inside it. The version of this job that used `container:` was never
+    # exercised — it only triggered on pull requests, and this project does not
+    # use them (docs/engineering-workflow.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: ruff check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 check --no-cache .
+      - name: ruff format --check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache .
+      - name: ruff check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 check --no-cache scripts/
+      - name: ruff format --check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache scripts/
+
+  scripts-parse:
+    # `scripts/*.py` are invoked as `python3 scripts/foo.py` from a host shell,
+    # not inside the 3.14 runtime image, so they must not use 3.14-only syntax.
+    # This is the gate that catches AUD-392 directly: PEP 758 `except A, B:`
+    # compiles on 3.14 and fails here. Same check as the Gitea job, including
+    # its in-memory compile() — `compileall` would write `__pycache__/` as the
+    # container's root user, which is untracked and not in .gitignore.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: scripts/ must parse on the oldest python3 we run them under
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w python:3.13-slim python -c '
+          import pathlib, sys
+          paths = sorted(pathlib.Path("scripts").rglob("*.py"))
+          bad = 0
+          for p in paths:
+              try:
+                  compile(p.read_text(), str(p), "exec")
+              except SyntaxError as exc:
+                  print(f"{p}:{exc.lineno}: {exc.msg}", file=sys.stderr)
+                  bad += 1
+          print(f"checked {len(paths)} files under python {sys.version.split()[0]}")
+          sys.exit(1 if bad else 0)
+          '
+
+  tests:
+    # scripts/test.sh drives docker compose (compose.test.yaml): postgres, a
+    # WireMock provider stub, pytest and Vitest. Both docker and compose are
+    # preinstalled on ubuntu-latest, and the suite needs no secrets — every
+    # credential in that compose file is a throwaway test fixture.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Backend + frontend suites
+        run: ./scripts/test.sh
+      - name: Upload suite logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .test-backend.log
+            .test-frontend.log
+          if-no-files-found: ignore
+          retention-days: 7

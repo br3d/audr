@@ -6,6 +6,14 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://github.com/br3d/audr/actions/workflows/tests.yml"><img src="https://github.com/br3d/audr/actions/workflows/tests.yml/badge.svg?branch=main" alt="tests"></a>
+  <a href="https://github.com/br3d/audr/actions/workflows/release.yml"><img src="https://github.com/br3d/audr/actions/workflows/release.yml/badge.svg" alt="release"></a>
+  <a href="https://github.com/br3d/audr/tags"><img src="https://img.shields.io/github/v/tag/br3d/audr?sort=semver&label=version&color=4c1" alt="version"></a>
+  <a href="https://github.com/br3d/audr/pkgs/container/audr-backend"><img src="https://img.shields.io/badge/ghcr.io-audr--backend-2496ed?logo=docker&logoColor=white" alt="container image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/br3d/audr?color=blue" alt="licence"></a>
+</p>
+
 # audr
 
 A standalone, self-hosted Ethereum portfolio tracker. You run it on your own
@@ -144,7 +152,8 @@ scripts/            setup-secrets, seed_dev, test, build, deploy, smoke-test,
                     benchmark, registry-prune, gen_third_party, sync-ci-overlay,
                     gen_brand_assets
 ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
-.github/workflows/  GitHub Actions CI for pull requests (lint + the full suite)
+.github/workflows/  Public GitHub Actions: the test gate and the manual
+                    container release (docs/github-actions.md)
 deploy.env.example  Template for the untracked deploy.env: registry and deploy
                     host for the scripts/ helpers (no addresses are tracked)
 compose.yaml        The production/local stack
@@ -182,6 +191,12 @@ Releases are semantic versions cut with `./scripts/release.sh major|minor|patch`
 the running build reports itself at `GET /api/v1/version` and in the bottom-left
 of the sidebar. See [docs/releases.md](docs/releases.md).
 
+The GitHub [`tests`](.github/workflows/tests.yml) workflow runs lint and both
+suites on every push to `main` and every pull request — that is the first badge
+above. Container images are published from GitHub only by the manual
+[`release`](.github/workflows/release.yml) workflow, where you pick the version
+to build; see [docs/github-actions.md](docs/github-actions.md).
+
 Full developer setup — the e2e suite, lint and type checks, migrations,
 debugging against containers, and the shared-checkout worktree rules — is in
 [docs/development.md](docs/development.md).
@@ -215,6 +230,7 @@ debugging against containers, and the shared-checkout worktree rules — is in
 |---|---|
 | [containers.md](docs/containers.md) | Why each compose service exists, what was removed, what could still go |
 | [deploy-runbook.md](docs/deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
+| [github-actions.md](docs/github-actions.md) | The public GitHub workflows: the test gate, the manual image release, GHCR and the README badges |
 | [releases.md](docs/releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [security-at-rest.md](docs/security-at-rest.md) | Encryption-at-rest threat model and recommendation |
 | [third-party.md](docs/third-party.md) | Licence attribution and exact release image/dependency pins |
