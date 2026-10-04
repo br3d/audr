@@ -129,9 +129,114 @@ apply, and for the same mirror reason.
 Permissions are `security-events: write` (the SARIF upload — the only write it
 performs), plus `contents: read` and `actions: read`.
 
+## `dependabot.yml` — dependency updates, and the one pull request we allow
+
+`.github/dependabot.yml` is not a workflow; GitHub runs it as a service. It is
+listed here because enabling it required deciding something, not just writing a
+config (AUD-412).
+
+### The rule it had to be reconciled with
+
+Dependabot can deliver a change exactly one way: as a pull request. This project
+does not use pull requests ([engineering-workflow.md](engineering-workflow.md)).
+Those two facts are reconciled with a carve-out, not by softening the rule:
+
+> **Dependabot is the only source of pull requests we open on this repository.**
+> Its pull requests are machine-authored patches. infraLead triages them and
+> merges with the button once `tests.yml` is green. No human and no agent on this
+> team opens one, and the founder is never asked to review or merge one.
+
+That holds the thing the rule protects. "We do not use pull requests" exists so
+that nobody — least of all the founder — is handed a review queue as a
+precondition for their own work landing. A bot's version bump is not somebody's
+work waiting on a reviewer, and the repository already accepts pull requests from
+a source that cannot self-merge: outside contributors
+([../CONTRIBUTING.md](../CONTRIBUTING.md)).
+
+### Why Dependabot rather than a `pip-audit` / `npm audit` job
+
+The alternative considered was a weekly audit on the Gitea side that opens a
+Paperclip issue instead of a pull request — no pull requests at all. It was
+rejected on two counts:
+
+- **It reports; it does not fix.** An audit finding still needs someone to pick
+  the target version, re-resolve `backend/uv.lock` or
+  `frontend/package-lock.json`, and run the suite. Dependabot arrives with that
+  work already done and a test verdict attached. The audit route adds work per
+  advisory; Dependabot removes it.
+- **It covers less.** `pip-audit` and `npm audit` see *published advisories*
+  only. They say nothing about ordinary version drift, and nothing at all about
+  action versions — the `github-actions` ecosystem, which is the one most likely
+  to break CI quietly when a major is deprecated.
+
+The Paperclip-visible half of that alternative is kept anyway: triage is a
+recurring infraLead task, so the dependency queue is still board work. The
+difference is only that the patch exists before the task does.
+
+### Cost
+
+Nil, in the two places it could have cost something. The repository is public,
+so GitHub-hosted Actions minutes are free — the metering that makes image builds
+dispatch-only (AUD-409) does not apply to a public repo's test runs. And a
+Dependabot pull request cannot reach `release.yml`, which is `workflow_dispatch`
+only, so no dependency bump can spend GHCR storage or publish an image.
+
+### What the config does
+
+Three ecosystems, weekly on Monday, `open-pull-requests-limit: 3` each:
+
+| Ecosystem | Directory | Note |
+|---|---|---|
+| `uv` | `/backend` | **Not `pip`.** Versions live in `backend/pyproject.toml` but the Dockerfile installs with `uv sync --frozen`, so a bump that does not also refresh `backend/uv.lock` yields an image that will not build. `uv` updates both; `pip` would update only the manifest. |
+| `npm` | `/frontend` | `package.json` + `package-lock.json`. |
+| `github-actions` | `/` | Reads `.github/workflows` **only**. The Gitea overlay's actions (`ci/gitea-overlay/workflows/*.yaml`) are outside the mirrored tree and stay a manual bump — see [../ci/gitea-overlay/README.md](../ci/gitea-overlay/README.md). |
+
+Minor and patch updates are **grouped** into one pull request per ecosystem: one
+review, one test run. Majors fall out of the group and arrive individually,
+because those are the ones that need a changelog read. Security updates are
+deliberately left ungrouped, so an advisory shows up as its own small, urgent
+patch rather than buried in a routine batch.
+
+Two pins are held back on purpose, and the config says why in place:
+
+- **`ruff`** is ignored outright. The pin is what makes "formatted" mean one
+  thing (AUD-392), and moving it is a three-file edit — `backend/pyproject.toml`
+  plus the image pin in both `tests.yml` and `ci/gitea-overlay/workflows/ci.yaml`.
+  A bump touching only the first turns lint red for a reason no changelog
+  explains.
+- **`sqlalchemy`** takes patches only. The 2.0.x series is a decision in
+  [architecture.md](architecture.md), so 2.1 is a conversation, not an update.
+
+### Triage
+
+Read the pull request, read the `tests.yml` verdict, and that is the gate — the
+suite is the same one a human merge waits on:
+
+```bash
+gh pr list --author "app/dependabot"
+gh pr checks <n>
+gh pr merge <n> --squash --delete-branch   # green only
+```
+
+A red Dependabot pull request is closed, not fixed in place; if the bump is
+wanted anyway it becomes a normal branch with a Paperclip issue and lands the
+normal way. Nothing here changes how our own work merges.
+
+### Mirror interaction
+
+The mirror on the deploy host replays every branch except `main` into Gitea and
+never propagates a deletion, so Dependabot's branches — which it deletes on its
+own side once a pull request closes — would otherwise accumulate in Gitea
+forever. `audr-github-mirror.sh` therefore skips `refs/heads/dependabot/*`
+(AUD-412). No Gitea runner time was ever at risk (`tests.yml` filters `push` to
+`main`), so this is clutter rather than the AUD-333 hazard — but it is clutter
+that only grows.
+
 ## Secrets
 
-None of the three workflows needs a repository secret. `release.yml` authenticates to GHCR
+`dependabot.yml` needs no secret either: the dependencies are all public
+registries, so Dependabot authenticates to none of them. None of the three
+workflows needs a repository secret. `release.yml` authenticates to GHCR
 with the run's built-in `GITHUB_TOKEN` and the narrowest permissions that work:
 `contents: read` for the whole file, `packages: write` only on the build job,
 `contents: write` only on the release job. No deploy host address, SSH key or

@@ -1,0 +1,100 @@
+version: 2
+
+# Dependency updates for the public repository (AUD-412).
+#
+# Dependabot can only deliver a change as a pull request, and this project does
+# not use pull requests internally (docs/engineering-workflow.md). The two are
+# reconciled by a narrow carve-out rather than by weakening the rule:
+#
+#   Dependabot is the ONLY source of pull requests we open on this repository.
+#   Its pull requests are machine-authored patches that infraLead triages and
+#   merges with the button once `tests.yml` is green. No human and no agent on
+#   this team opens one, and the founder is never asked to review or merge one —
+#   which is the thing the no-pull-requests rule exists to prevent.
+#
+# The repository is public, so GitHub-hosted Actions minutes are free: a
+# Dependabot pull request costs us a `tests.yml` run and nothing else. It cannot
+# reach `release.yml` (`workflow_dispatch` only, AUD-409), so no dependency bump
+# can spend GHCR storage or publish an image.
+#
+# Cadence is weekly and grouped on purpose. One pull request per ecosystem for
+# the minor and patch drift is a single review and a single test run; majors fall
+# out of the group and arrive on their own, because those are the ones that need
+# a human to read a changelog. Security updates are deliberately left ungrouped
+# so an advisory arrives as its own small, fast, obviously-urgent patch.
+
+updates:
+  # Backend Python dependencies. The ecosystem is `uv`, not `pip`: the versions
+  # live in backend/pyproject.toml but the Dockerfile installs with
+  # `uv sync --frozen`, so a bump that does not also refresh backend/uv.lock
+  # produces an image that will not build. `uv` updates both; `pip` would touch
+  # only the manifest and leave the lock behind.
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      backend:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # ruff's formatter output and lint rule set both move between patch
+      # releases, so the pin is what makes "formatted" mean one thing (AUD-392).
+      # Moving it is a three-place edit — backend/pyproject.toml, the image pin
+      # in .github/workflows/tests.yml, and the one in
+      # ci/gitea-overlay/workflows/ci.yaml — and a bump that touched only the
+      # first would turn the lint job red for a reason no changelog explains.
+      # Raise it by hand, in all three places, in one commit.
+      - dependency-name: "ruff"
+      # SQLAlchemy is held to the 2.0.x series by the project spec
+      # (docs/architecture.md), so 2.1 is a decision, not an update.
+      - dependency-name: "sqlalchemy"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # Frontend SPA dependencies (npm + package-lock.json).
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      frontend:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Action versions used by .github/workflows/*.yml.
+  #
+  # This ecosystem reads `.github/workflows` only. The Gitea overlay's actions
+  # (ci/gitea-overlay/workflows/*.yaml) are invisible to it and stay a manual
+  # bump — see ci/gitea-overlay/README.md for why those files live outside the
+  # mirrored tree.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
