@@ -88,7 +88,42 @@ jobs:
           [ -n "$ref" ] || ref="${GITHUB_REF_NAME}"
           sha="$(git rev-parse HEAD)"
           short="${sha:0:12}"
+
+          # Everything below reads VERSION, which only exists from AUD-407
+          # onwards. A ref older than that has no version to build under — and
+          # the repository contains exactly such a ref: the `v0.1.0` tag points
+          # at a 2026-10-01 merge commit that predates the versioning scheme, so
+          # it is also the tag an operator is most likely to pick from the
+          # dispatch dialog. Without this guard the step died on `tr: VERSION: No
+          # such file or directory` and the run reported only "Process completed
+          # with exit code 1" (AUD-414).
+          if [ ! -f VERSION ]; then
+            echo "::error title=No VERSION at this ref::'${ref}' (commit ${short}) has no VERSION file."
+            {
+              echo "### Cannot build \`${ref}\`"
+              echo
+              echo "Commit \`${short}\` has no \`VERSION\` file, so there is no version number to"
+              echo "build or tag the image with. That file arrived with AUD-407; the \`v0.1.0\` tag"
+              echo "predates it and is not a release of the current scheme."
+              echo
+              echo "Dispatch \`main\` (publishes \`<version>-g<sha12>\`), or cut a real release tag"
+              echo "with \`./scripts/release.sh patch --push\` and dispatch that tag."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           version="$(tr -d ' \t\r\n' < VERSION)"
+
+          # A VERSION that is not a semver core would produce an image tag no
+          # operator can pin and a release name that means nothing; better to
+          # say so here than to publish it.
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error title=Unusable VERSION::VERSION reads '${version}', which is not MAJOR.MINOR.PATCH."
+              exit 1
+              ;;
+          esac
+
           image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/audr-backend"
 
           # The bare `:<version>` tag is published only when the commit being
@@ -99,6 +134,25 @@ jobs:
           is_release=false
           if [ "$(git rev-parse -q --verify "refs/tags/v${version}^{commit}" || true)" = "$sha" ]; then
             is_release=true
+          fi
+
+          # Dispatching the tag `v1.4.2` out of a tree whose VERSION says 1.4.3
+          # would publish `1.4.3-g<sha>` under a ref that promises 1.4.2. The
+          # Gitea deploy job refuses the same mismatch in its `Compute tags`
+          # step (docs/releases.md); refuse it here too rather than let the two
+          # pipelines disagree about what a `v*` ref means.
+          if [ "${ref#v}" != "$ref" ] \
+            && git rev-parse -q --verify "refs/tags/${ref}^{commit}" >/dev/null \
+            && [ "$ref" != "v${version}" ]; then
+            echo "::error title=Tag disagrees with VERSION::Tag '${ref}' names a different version than VERSION (${version})."
+            {
+              echo "### Cannot build \`${ref}\`"
+              echo
+              echo "The tag says \`${ref}\`, the tree at that commit says \`${version}\`. Cut releases"
+              echo "with \`./scripts/release.sh\`, which moves the tag and the four version files in"
+              echo "one commit so they cannot drift."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
           # No `:latest` on GHCR, by decision on AUD-409. A floating tag in a
@@ -116,12 +170,18 @@ jobs:
           fi
 
           # A GitHub Release is created for a release-tag commit by default and
-          # silently skipped for anything else. Making it an error instead
+          # skipped for anything else. Making it an error instead
           # would mean the common case — dispatching a build of `main` — failed
           # on a default-on checkbox nobody un-checked.
           want_release=false
           if [ "$WANT_RELEASE" = true ] && [ "$is_release" = true ]; then
             want_release=true
+          fi
+          # Skipped silently is how "the release workflow ran green and there is
+          # still no release" happens (AUD-414). Say it in the log and in the
+          # summary, with the command that would make it possible.
+          if [ "$WANT_RELEASE" = true ] && [ "$is_release" != true ]; then
+            echo "::warning title=No GitHub Release::Commit ${short} is not the v${version} tag, so no GitHub Release will be created. The image build continues."
           fi
 
           {
@@ -147,6 +207,14 @@ jobs:
             echo "| push to GHCR | ${PUSH_IMAGE} |"
             echo "| GitHub Release | ${want_release} |"
             echo "| tags | ${tags//,/<br>} |"
+            if [ "$WANT_RELEASE" = true ] && [ "$is_release" != true ]; then
+              echo
+              echo "> **No GitHub Release from this build.** Commit \`${short}\` is not the"
+              echo "> \`v${version}\` tag, and a release is only cut from its own tag — see"
+              echo "> [docs/releases.md](docs/releases.md). To make one:"
+              echo "> \`./scripts/release.sh patch --push\`, then dispatch this workflow"
+              echo "> against the new tag."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   tests:

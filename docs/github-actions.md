@@ -58,7 +58,29 @@ use the `ref` input for a sha.
 | `ref` | *(the selected ref)* | Tag, branch or sha to build. Overrides the selector; use it for a bare commit sha. |
 | `run_tests` | ✅ | Runs `tests.yml` against the resolved commit and blocks the build if it fails. Uncheck only to re-publish a ref that already went green. |
 | `push_image` | ✅ | Uncheck for a build-only dry run — validates the Dockerfile and consumes no registry storage. |
-| `create_github_release` | ✅ | Creates the GitHub Release for `v<version>` when the built commit *is* that tag. On any other commit the job is skipped, not failed. |
+| `create_github_release` | ✅ | Creates the GitHub Release for `v<version>` when the built commit *is* that tag. On any other commit the job is skipped, not failed — the `plan` job annotates the run and the summary saying so, rather than finishing green with no release and no explanation. |
+
+Two refs the `plan` job refuses outright, each with the reason in the run
+summary rather than a bare `exit code 1` (AUD-414):
+
+- **a commit with no `VERSION` file.** There is no version to tag the image
+  with. The repository's `v0.1.0` tag is exactly this case — it points at a
+  pre-AUD-407 merge commit, so it is not a release of the current scheme even
+  though `VERSION` currently reads `0.1.0`. Build `main`, or cut a real tag.
+- **a `v*` tag whose name disagrees with the `VERSION` at that commit.** The
+  same mismatch fails the Gitea deploy job's `Compute tags` step; neither
+  pipeline will publish a number the tree does not claim. `scripts/release.sh`
+  moves the tag and the four version files in one commit so this cannot happen
+  to a release it cut.
+
+### Making an actual GitHub Release
+
+This workflow does not create tags — it publishes what a tag already names. The
+sequence is `./scripts/release.sh patch --push` (see
+[releases.md](releases.md)), then **Actions → release → Run workflow** against
+the new tag. Note that pushing a `v*` tag is also what triggers the guarded
+Gitea deploy, so cutting a release deploys the instance; that step needs the
+founder's approval, the GHCR publish on its own does not.
 
 ### Tags it publishes
 
