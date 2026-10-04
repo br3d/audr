@@ -80,6 +80,15 @@ history and can be recovered with `git show <sha>:specs/...`. Nothing was lost; 
 simply stop being versioned. If that ever becomes a problem, the answer is a separate
 private repository, not un-ignoring these paths here.
 
+**If a checkout of yours predates AUD-424, moving it onto that commit deletes these
+directories from its working tree.** `git rm --cached` leaves the files on disk in the
+commit that performs it, but any later checkout, merge or rebase that crosses it applies
+the removal like any other deletion. Restore them without re-tracking anything:
+
+```bash
+git archive fab6862 .specify .agents specs | tar -x    # last commit that tracked them
+```
+
 Consequence for documentation: user-facing files under `docs/` must not link into these
 directories, because the reader of the repository has no such files. Restate the relevant
 content instead. Internal references in this document are fine.
