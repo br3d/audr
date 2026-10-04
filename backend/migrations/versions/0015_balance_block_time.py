@@ -4,7 +4,7 @@
 `observed_at` (the wall-clock moment the RPC call was made) — never the
 timestamp of the block itself. `GET /portfolio` needs that block timestamp
 to report `balance_block_time` / per-holding `block_time` per the contract
-(specs/001-ethereum-portfolio/contracts/http-api.md): "Balance freshness is
+(the internal release-1 HTTP API contract): "Balance freshness is
 measured from the last successful verified block time ... `balance_observed_at`
 is the separate read time." Those are two different clocks — the chain's and
 the scanner's — and conflating them (as the previous null-stub implementation

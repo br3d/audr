@@ -4,10 +4,10 @@ The API **as implemented**, at migration head `0016`. Swagger and Redoc are
 deliberately disabled (`docs_url=None` in `api/app.py`), so this document is the
 discoverable surface.
 
-For the *normative* contract this was written against — including routes that
-were specified but never built — see
-[`specs/001-ethereum-portfolio/contracts/http-api.md`](../specs/001-ethereum-portfolio/contracts/http-api.md).
-Where the two disagree, §6 below names the divergence; each one is encoded as a
+The *normative* contract this was written against — including routes that were
+specified but never built — lives in the internal release-1 Spec Kit artefacts,
+which are not part of this repository. Everything that matters about it is
+reproduced here: where the two disagree, §6 below names the divergence; each one is encoded as a
 strict-xfail test in `backend/tests/integration/test_http_api_contract.py` so it
 cannot drift silently.
 

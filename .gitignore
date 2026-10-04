@@ -56,3 +56,10 @@ test-results/
 # launched detached and its stdout is kept on disk; the published numbers
 # belong in docs/benchmark.md, not in a committed log.
 .bench-runs/
+
+# Spec Kit planning artifacts (.specify/, .agents/) and release specifications
+# (specs/). Working files of the internal speckit cycle: kept locally in the
+# shared agent workspace, deliberately not versioned in the public repository.
+.specify/
+.agents/
+specs/

@@ -168,7 +168,6 @@ compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
 Dockerfile          3-stage build: frontend-builder, backend-builder, runtime
                     (runtime carries the SPA bundle at /app/static)
 docs/               Everything below
-specs/              Spec Kit artefacts for release 1 (spec, plan, contracts)
 ```
 
 ---
@@ -232,8 +231,12 @@ debugging against containers, and the shared-checkout worktree rules — is in
 | [product-vision.md](docs/product-vision.md) | Purpose, owner experience, boundaries, measures of value |
 | [roadmap.md](docs/roadmap.md) | Release 1/2/3 scope and the backlog |
 | [discovery.md](docs/discovery.md) | Dated decision record — why the scope is what it is |
-| [.specify/memory/constitution.md](.specify/memory/constitution.md) | The five non-negotiable principles the implementation is held to |
-| [specs/001-ethereum-portfolio/](specs/001-ethereum-portfolio/) | Release-1 specification, technical plan, research, data model, contracts |
+
+The release-1 Spec Kit artefacts (specification, technical plan, research, data
+model, HTTP contract, and the project constitution) are internal planning
+material. They are kept in the team's working copy and are deliberately not
+part of this repository; everything needed to run, operate and extend audr is
+in `docs/`.
 
 **Infrastructure and operations**
 

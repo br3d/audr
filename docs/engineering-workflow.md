@@ -67,6 +67,23 @@ An issue is not `done` until its branch is merged to `main`. "Branch pushed" is 
 - Clean up your worktree when done (`git worktree remove`); if removal fails because docker
   left root-owned files behind, run `git worktree prune` so the stale entry does not linger.
 
+## Planning artifacts are local, not versioned
+
+`.specify/`, `.agents/` and `specs/` hold the Spec Kit planning cycle — the release
+specification, technical plan, research notes, the project constitution and the speckit
+skill files. They live in the shared workspace at `/home/codex/git/audr` and are
+**gitignored**: edit them freely, but they will never be committed or pushed. The public
+repository ships only what an operator or contributor needs, which is `docs/`.
+
+They were tracked until AUD-424, so every revision up to that commit remains in git
+history and can be recovered with `git show <sha>:specs/...`. Nothing was lost; new edits
+simply stop being versioned. If that ever becomes a problem, the answer is a separate
+private repository, not un-ignoring these paths here.
+
+Consequence for documentation: user-facing files under `docs/` must not link into these
+directories, because the reader of the repository has no such files. Restate the relevant
+content instead. Internal references in this document are fine.
+
 ## When to escalate the merge instead of self-merging
 
 Push the branch, mark the issue `in_review`, and ask **infraLead** to review and merge when:

@@ -114,8 +114,8 @@ and AUD-357).
 Notes:
 
 - The Uniswap list is GPL-3.0, which is compatible with audr's own GPL-3.0
-  licensing. Older design notes (`specs/001-ethereum-portfolio/research.md`)
-  refer to `ethereum-lists/tokens` (MIT); that source is **not** what ships —
+  licensing. Older internal design notes refer to `ethereum-lists/tokens`
+  (MIT); that source is **not** what ships —
   the vendored snapshot was switched to the Uniswap default token list under
   AUD-357, and this document describes what is actually in the image.
 - Token names, symbols and contract addresses are third-party trademarks and

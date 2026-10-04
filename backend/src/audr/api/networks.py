@@ -1,7 +1,7 @@
 """FastAPI route for the supported-networks list (AUD-335 / SD-1).
 
 Release-1 scope is Ethereum mainnet only (chain_id=1); this is a static,
-non-database-backed list per `specs/001-ethereum-portfolio/contracts/http-api.md`.
+non-database-backed list per the internal release-1 HTTP API contract.
 """
 
 from __future__ import annotations

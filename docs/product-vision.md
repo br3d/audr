@@ -42,5 +42,6 @@ through the browser, with accurate supported balances, explainable valuation and
 history. Later releases add relevant sourced information and actionable awareness with
 explicit uncertainty, controllable polling and observable notification delivery.
 
-The [release-1 specification](../specs/001-ethereum-portfolio/spec.md) defines measurable
-acceptance criteria. The [roadmap](roadmap.md) defines subsequent release boundaries.
+The internal release-1 specification defines measurable acceptance criteria;
+[release-1-coverage.md](release-1-coverage.md) maps each of them to the test
+that verifies it. The [roadmap](roadmap.md) defines subsequent release boundaries.
