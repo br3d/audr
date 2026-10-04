@@ -175,6 +175,23 @@ only the `/v2` API (`/api/v2.0/systeminfo` 404s), so there is no retention
 feature to switch on: retention is enforced from outside by
 `scripts/registry-prune.py`, which needs nothing but HTTP.
 
+Since AUD-345 that script is **not something you have to remember to run**:
+`deploy.yaml`'s `Enforce registry tag retention` step runs it with `--apply` at
+the end of every *successful* deploy, on the deploy host, so the default
+`--env-file` is the live `~/audr/.env` and the deployed tag is protected from
+the inside. Two deliberate asymmetries with the `host-gc.sh` step next to it:
+
+- it is **not** `if: always()`. After a failed deploy the stack has just been
+  rolled back and `:rollback` is the only thing between us and an outage — the
+  worst possible moment to delete from the registry, and no bytes would be
+  freed anyway.
+- it exits 0 even when the pruner fails. Retention is hygiene on a healthy
+  deploy and must never turn a green deploy red; look for
+  `[registry-prune] FAILED` in the job log.
+
+Run it by hand for a dry run, a one-off `--keep`, or the orphaned
+`audr-frontend` repository:
+
 ```bash
 python3 scripts/registry-prune.py                 # dry run; prints keep/prune per tag
 python3 scripts/registry-prune.py --apply         # delete

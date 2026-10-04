@@ -436,3 +436,38 @@ jobs:
       - name: Reclaim host disk
         if: always()
         run: bash scripts/host-gc.sh
+
+      # Registry-side counterpart of the step above (AUD-345). Every deploy also
+      # mints a registry tag, and a hand-run pruner is a policy nobody enforces:
+      # the registry had accumulated ~35 audr-backend tags before the first
+      # manual pass. Running it here is what makes the retention rules in
+      # scripts/registry-prune.py an actual policy rather than a documented one.
+      #
+      # Deliberately NOT `if: always()`, unlike host-gc. On a failed deploy the
+      # stack has just been rolled back and :rollback is the only thing standing
+      # between us and an outage; that is the worst possible moment to delete
+      # anything from the registry, and no disk pressure is relieved by doing so
+      # anyway (see below). `success()` is the implicit default and skips this
+      # step whenever any earlier step failed.
+      #
+      # Runs on the deploy host, so the default --env-file (/home/codex/audr/.env)
+      # is the real one the live stack resolves ${BACKEND_TAG} from, and the
+      # currently-deployed tag is therefore protected from the inside rather than
+      # by a --protect we would have to remember to pass. The step runs after the
+      # guarded deploy has already pinned that .env to this build's tag.
+      #
+      # Exits 0 unconditionally: a retention problem is disk hygiene on a healthy
+      # deploy and must never turn a green deploy red. A failure is logged for the
+      # next heartbeat to pick up.
+      #
+      # NOTE this reclaims no bytes on its own. A /v2 manifest delete only unlinks
+      # the tag; the blobs are freed solely by `registry garbage-collect` on the
+      # registry host, which we have no shell for (AUD-345 item 4, still open).
+      - name: Enforce registry tag retention
+        env:
+          AUDR_REGISTRY: ${{ vars.AUDR_REGISTRY }}
+        run: |
+          python3 scripts/registry-prune.py --apply || {
+            echo "[registry-prune] FAILED (exit $?) — retention not enforced this deploy; deploy itself is unaffected"
+          }
+          exit 0
