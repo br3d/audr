@@ -66,6 +66,13 @@ describe('Layout', () => {
     expect(container.querySelector('.sidebar-footer')?.textContent).not.toContain('Sign out')
   })
 
+  it('renders a user icon on the account menu button instead of a text initial (AUD-416)', () => {
+    mount(vi.fn(), vi.fn())
+    const btn = avatarButton()
+    expect(btn.querySelector('.avatar-button-icon')).toBeTruthy()
+    expect(btn.textContent).toBe('')
+  })
+
   it('keeps the menu closed until the avatar button is clicked', () => {
     mount(vi.fn(), vi.fn())
     expect(avatarButton().getAttribute('aria-expanded')).toBe('false')

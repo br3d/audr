@@ -192,6 +192,15 @@ export function IconSignOut(props: IconProps) {
   )
 }
 
+export function IconUser(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <circle cx="10" cy="7" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4 17a6 6 0 0 1 12 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function IconZap(props: IconProps) {
   return (
     <svg {...defaults} {...props}>

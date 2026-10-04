@@ -13,6 +13,7 @@ import {
   IconMoon,
   IconSignOut,
   IconChat,
+  IconUser,
 } from './Icons'
 import { BrandMark } from './Logo'
 import { VERSION_LABEL, VERSION_TITLE } from '../version'
@@ -119,7 +120,7 @@ function UserMenu({ onOpenAccount, onSignOut }: UserMenuProps) {
         aria-expanded={open}
         aria-label="Account menu"
       >
-        O
+        <IconUser className="avatar-button-icon" />
       </button>
       {open && (
         <div className="user-menu-dropdown" role="menu">
