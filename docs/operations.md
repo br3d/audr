@@ -27,7 +27,6 @@ curl -s http://localhost/health/live
 | File | Purpose |
 |---|---|
 | `secrets/master_key.hex` | 64-char hex master key-encryption-key — the backup copy of `SECRET_KEY`, which is not recoverable from anywhere else |
-| `secrets/rpc_url.txt` | Ethereum RPC URL used by `scripts/seed_dev.sh` (only written when `AUDR_SEED_RPC_URL` is set) |
 | `.env` | `DB_PASSWORD` (generated here) and `SECRET_KEY` (copied from `master_key.hex`) — the only credentials Compose reads |
 
 Since AUD-418 the PostgreSQL password exists only as `DB_PASSWORD` in `.env`.
@@ -40,32 +39,16 @@ it is still there and `.env` is missing.
 
 **Never commit `.env` or `secrets/`.** Both are in `.gitignore`.
 
-### Seeding the RPC integration (AUD-349)
+### Configuring an RPC endpoint
 
-The dev RPC URL embeds a provider API key, so it must never reach git.
-`scripts/seed_dev.sh` resolves it at run time from the first source that is set:
+There is nothing to configure on the host: open Settings → Integrations in the
+web interface and paste your RPC URL there. It is encrypted at rest with the
+master key and validated on save. Leaving it empty is a supported setup — see
+the keyless fallback below.
 
-1. the `AUDR_SEED_RPC_URL` environment variable,
-2. `secrets/rpc_url.txt` (git-ignored, mode `600`),
-3. an `AUDR_SEED_RPC_URL=...` line in `.env` (git-ignored).
-
-```bash
-# one-off: store the URL locally, then seed
-AUDR_SEED_RPC_URL='https://mainnet.example/v3/<key>' bash scripts/setup-secrets.sh
-./scripts/seed_dev.sh                     # or: ./scripts/seed_dev.sh "$AUDR_BASE_URL"
-```
-
-The script saves the URL through `PUT /api/v1/integrations/rpc` (encrypted at
-rest with the master key) and enqueues a validation run. It prints only the
-hostname, never the full URL. When no URL is available the step is skipped with
-a note and the rest of the seed still succeeds — the URL can then be entered
-manually in Settings → Integrations. Ask infraLead for the shared value.
-
-Seeding is unconditional: every run registers the demo Buterin wallet and
-configures the RPC integration, because the script exists to give an instance
-enough data to exercise the whole product. Re-runs are harmless (the wallet
-address is unique-indexed, so a second run gets a `409` and changes nothing).
-Pass `AUDR_SEED_WALLET=skip` when you only want the RPC step.
+Filling a fresh instance with demo data (`scripts/seed_dev.sh`, including the
+`AUDR_SEED_RPC_URL` it reads) is a development-only workflow and is documented
+in [development.md](development.md#demo-data).
 
 ### Keyless RPC fallback (AUD-364)
 
