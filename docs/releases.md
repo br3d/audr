@@ -90,6 +90,12 @@ manual GitHub `release` workflow, using the same tag scheme and the same "bare
 `<version>` only from the `v<version>` commit" rule. It is dispatch-only and it
 deploys nothing — see [github-actions.md](github-actions.md).
 
+GHCR carries **no `:latest`**. A dispatch-only workflow can only move that tag
+when somebody remembers to run it, so publicly it would mean "the last build
+anyone asked for", not "the newest release"; public operators pin `<version>`
+instead. `:latest` in the table above is the private registry's, moved by the
+health-gated deploy job for the deploy host's benefit.
+
 ## Verifying what is deployed
 
 ```bash

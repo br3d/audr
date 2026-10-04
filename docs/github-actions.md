@@ -58,8 +58,7 @@ use the `ref` input for a sha.
 | `ref` | *(the selected ref)* | Tag, branch or sha to build. Overrides the selector; use it for a bare commit sha. |
 | `run_tests` | ✅ | Runs `tests.yml` against the resolved commit and blocks the build if it fails. Uncheck only to re-publish a ref that already went green. |
 | `push_image` | ✅ | Uncheck for a build-only dry run — validates the Dockerfile and consumes no registry storage. |
-| `move_latest` | ❌ | Also move `:latest` to this build. Off by default so a one-off build of an old tag cannot silently become "latest". |
-| `create_github_release` | ❌ | Creates the GitHub Release for `v<version>`. Refuses unless the commit being built *is* that release tag. |
+| `create_github_release` | ✅ | Creates the GitHub Release for `v<version>` when the built commit *is* that tag. On any other commit the job is skipped, not failed. |
 
 ### Tags it publishes
 
@@ -72,7 +71,14 @@ same thing in either registry (see [releases.md](releases.md)):
 - `<version>` — **only** when the commit being built is exactly the `v<version>`
   tag. Publishing it from an arbitrary commit would make `:0.4.1` mean
   "whatever was built last", which is the one guarantee semver tagging buys.
-- `latest` — only with `move_latest`.
+- **no `latest`.** GHCR gets no floating tag at all (decided on AUD-409). It
+  could only float when someone happened to dispatch a build, so a public
+  `:latest` would name "the last version anyone bothered to publish" rather
+  than the newest release — and an operator cannot tell from the tag which
+  image they are about to run. Pin `<version>`, or `<version>-g<sha12>` for a
+  build between releases. The private registry's own `:latest` is unaffected:
+  it exists for the deploy host and is moved by the health-gated Gitea job
+  ([releases.md](releases.md)), never by a manual dispatch.
 
 Images land at `ghcr.io/<owner>/audr-backend`, built for `linux/amd64` only —
 what the deploy host runs. Provenance and SBOM attestations are disabled: they
