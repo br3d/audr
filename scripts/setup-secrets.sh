@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# One-time secrets initialisation for a fresh deployment host.
+# One-time credential initialisation for a fresh audr install.
 # Run from the repo root: bash scripts/setup-secrets.sh
+#
+# Generates .env (DB_PASSWORD, SECRET_KEY) and keeps a recovery copy of the
+# key in secrets/master_key.hex. Idempotent — existing files are never
+# overwritten, so it is safe to re-run.
+#
+# Nothing else needs configuring here: blockchain RPC endpoints and price
+# providers are set up in the web interface under Settings → Integrations, and
+# work without any key by default.
 set -euo pipefail
 
 SECRETS_DIR="$(dirname "$0")/../secrets"
@@ -11,24 +19,9 @@ if [ ! -f "$SECRETS_DIR/master_key.hex" ]; then
     # 32 random bytes encoded as 64 lowercase hex chars — used as SECRET_KEY env var.
     openssl rand -hex 32 | tr -d '\n' > "$SECRETS_DIR/master_key.hex"
     chmod 600 "$SECRETS_DIR/master_key.hex"
-    echo "Generated master_key.hex"
+    echo "Generated secrets/master_key.hex"
 else
-    echo "master_key.hex already exists — skipping"
-fi
-
-# Ethereum RPC URL used by scripts/seed_dev.sh (AUD-349).  The URL embeds a
-# provider API key, so it lives only here — never in git.  Supply it once via
-# AUDR_SEED_RPC_URL; ask infraLead for the shared value if you do not have it.
-if [ ! -f "$SECRETS_DIR/rpc_url.txt" ]; then
-    if [ -n "${AUDR_SEED_RPC_URL:-}" ]; then
-        printf '%s' "$AUDR_SEED_RPC_URL" > "$SECRETS_DIR/rpc_url.txt"
-        chmod 600 "$SECRETS_DIR/rpc_url.txt"
-        echo "Wrote rpc_url.txt from AUDR_SEED_RPC_URL"
-    else
-        echo "rpc_url.txt not set — re-run with AUDR_SEED_RPC_URL=... to seed the RPC integration"
-    fi
-else
-    echo "rpc_url.txt already exists — skipping"
+    echo "secrets/master_key.hex already exists — keeping it"
 fi
 
 ENV_FILE="$(dirname "$0")/../.env"
@@ -64,7 +57,7 @@ if [ ! -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
     echo "Generated .env with DB_PASSWORD and SECRET_KEY"
 else
-    echo ".env already exists — skipping"
+    echo ".env already exists — keeping it"
 fi
 
-echo "Credentials are in $ENV_FILE and $SECRETS_DIR — keep both outside version control."
+echo "Done. Credentials live in .env and secrets/ — both are git-ignored; back them up."

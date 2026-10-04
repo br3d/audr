@@ -31,11 +31,32 @@ registers the Vitalik Buterin demo wallet, and configures plus validates the RPC
 integration. It is unconditional and safe to re-run: the wallet address is
 unique-indexed, so a second run gets a 409 and changes nothing.
 
-The RPC URL is resolved from `AUDR_SEED_RPC_URL`, then `secrets/rpc_url.txt`,
-then an `AUDR_SEED_RPC_URL=` line in `.env`. Only the hostname is ever printed.
-When none is available the step is skipped with a note and the rest still
-succeeds — the keyless public endpoints cover the gap. `AUDR_SEED_WALLET=skip`
-runs the RPC step only.
+#### The seed RPC URL
+
+A dev RPC URL usually embeds a provider API key, so it must never reach git.
+`seed_dev.sh` resolves it at run time from the first source that is set:
+
+1. the `AUDR_SEED_RPC_URL` environment variable,
+2. `secrets/rpc_url.txt` (git-ignored, mode `600`),
+3. an `AUDR_SEED_RPC_URL=...` line in `.env` (git-ignored).
+
+```bash
+# one-off, nothing stored on disk
+AUDR_SEED_RPC_URL='https://mainnet.example/v3/<key>' ./scripts/seed_dev.sh
+
+# or store it once for repeated seeding
+install -m 600 /dev/null secrets/rpc_url.txt
+printf '%s' 'https://mainnet.example/v3/<key>' > secrets/rpc_url.txt
+```
+
+Only the hostname is ever printed. When no URL is available the step is skipped
+with a note and the rest still succeeds — the keyless public endpoints cover the
+gap. `AUDR_SEED_WALLET=skip` runs the RPC step only.
+
+This is a developer concern only. `scripts/setup-secrets.sh` — the install step
+an end user runs — deliberately knows nothing about it: a self-hosting user
+configures their RPC endpoint in Settings → Integrations, where the keyless
+default already works.
 
 ---
 
