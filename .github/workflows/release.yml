@@ -258,7 +258,7 @@ jobs:
       # architecture doubles both build minutes and registry storage for a
       # platform nobody has asked for yet.
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: runtime
