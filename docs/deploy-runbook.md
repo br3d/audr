@@ -125,9 +125,11 @@ database down with it rather than failing politely.
 
 `scripts/host-gc.sh` now runs as a `if: always()` step at the end of both
 `deploy.yaml` and `build.yaml`. It prunes build cache and unreferenced images
-older than 48h, warns when the root filesystem is still ≥80% full afterwards,
-and always exits 0 — a GC problem must never fail an otherwise healthy deploy.
-Confirm it ran by looking for `[host-gc] after: ...` in the job log.
+older than 48h, caps how many unused release images may stay resident
+regardless of age, escalates to much shorter windows when the root filesystem
+is still ≥80% full afterwards, and always exits 0 — a GC problem must never
+fail an otherwise healthy deploy. Confirm it ran by looking for
+`[host-gc] after: ...` in the job log.
 
 ```bash
 # ad-hoc run: copy it over, since the runner's checkout dir is not stable
@@ -135,6 +137,29 @@ scp -i id_ed25519 scripts/host-gc.sh "$AUDR_DEPLOY_HOST:/tmp/"
 ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'bash /tmp/host-gc.sh --dry-run'   # report only
 ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'IMAGE_MAX_AGE=24h CACHE_MAX_AGE=24h bash /tmp/host-gc.sh'
 ```
+
+### Age alone is rate-blind — the count cap and the escalation
+
+An age window retains "two days of deploys", which is a handful of images on a
+quiet day and well over a dozen on a busy one. On 2026-10-04 (AUD-425) the host
+was back at 80% with ~20 release images (~10GB) *all younger than the 48h
+window*: GC ran on every merge, found nothing eligible, and logged its own warn
+threshold rather than acting on it — the AUD-379 failure mode from the other
+side. Two additions make retention pressure-aware without tightening the
+relaxed default:
+
+* **`IMAGE_KEEP_COUNT`** (default 5) — at most this many *unused* `audr-*`
+  images stay resident, newest first, however young. Images a container
+  references and whatever `:latest` and `:rollback` point at are excluded from
+  the cap entirely, so the live stack and the no-pull rollback are never the
+  thing trimmed. Removal uses `docker image rm` without `-f`, so a referenced
+  image is refused rather than yanked even if that protected set were wrong.
+* **Automatic escalation** — if `/` is still ≥ `WARN_PCT` after the normal
+  pass, the script immediately repeats it with `ESCALATE_CACHE_MAX_AGE` /
+  `ESCALATE_IMAGE_MAX_AGE` (6h) and `ESCALATE_IMAGE_KEEP_COUNT` (2), logging
+  `escalating: ...` so the job log says it happened. If the filesystem is
+  *still* over the line after that, Docker is no longer what is filling the
+  disk, and the second warning says so.
 
 Pruning this host cannot disarm rollback. `deploy.yaml`'s snapshot step pushes
 `:rollback` to the registry precisely so the rollback path does not depend on
