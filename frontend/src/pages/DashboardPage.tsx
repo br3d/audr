@@ -186,16 +186,27 @@ export default function DashboardPage({ setPage }: Props) {
           <h2 className="page-heading">Overview</h2>
           <p className="page-subheading">{headerSubtitle}</p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setPage('wallets')}>
-          + Add Wallet
-        </button>
+        <div className="btn-group">
+          {/* AUD-408: Assets left the sidebar, so the Dashboard owns the only
+              always-visible entry point into the token registry. */}
+          <button type="button" className="btn btn-secondary" onClick={() => setPage('assets')}>
+            Manage assets
+          </button>
+          <button type="button" className="btn btn-primary" onClick={() => setPage('wallets')}>
+            + Add Wallet
+          </button>
+        </div>
       </div>
 
       <QualityNotices quality={data.quality} />
 
       {allExcluded && (
         <p role="note" className="alert alert-warning mb-16">
-          All holdings are excluded from the total. Manage exclusions in Assets.
+          All holdings are excluded from the total.{' '}
+          <button type="button" className="link-button" onClick={() => setPage('assets')}>
+            Manage exclusions in Assets
+          </button>
+          .
         </p>
       )}
 
