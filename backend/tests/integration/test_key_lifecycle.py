@@ -24,7 +24,8 @@ from audr.operations.crypto import (
     decrypt,
     encrypt,
 )
-from audr.operations.init_key import get_master_key, init_key
+from audr.operations.init_key import get_master_key, init_key, rotate_kek
+from audr.settings.integrations import get_integration, upsert_integration
 
 
 @pytest.fixture(autouse=True)
@@ -160,3 +161,105 @@ async def test_two_encryptions_of_same_plaintext_are_distinct(
     ct1 = encrypt(b"https://mainnet.infura.io/v3/secret", b"rpc_url:1", key)
     ct2 = encrypt(b"https://mainnet.infura.io/v3/secret", b"rpc_url:1", key)
     assert ct1 != ct2
+
+
+# ---------------------------------------------------------------------------
+# KEK rotation (AUD-428)
+# ---------------------------------------------------------------------------
+
+# Synthetic 32-byte KEKs for rotation tests — never real values.
+_NEW_KEK_HEX = "c" * 64
+_WRONG_OLD_KEK_HEX = "d" * 64
+
+
+@pytest.mark.integration
+async def test_rotate_kek_preserves_master_key_value(
+    db_session: AsyncSession, test_secret_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rotate_kek rewraps the blob under a new KEK without changing the raw master key."""
+    await init_key(db_session)
+    key_before = await get_master_key(db_session)
+
+    old_kek = bytes.fromhex(test_secret_key)
+    new_kek = bytes.fromhex(_NEW_KEK_HEX)
+    await rotate_kek(db_session, old_kek, new_kek)
+
+    monkeypatch.setenv("SECRET_KEY", _NEW_KEK_HEX)
+    key_after = await get_master_key(db_session)
+
+    assert key_after == key_before
+
+
+@pytest.mark.integration
+async def test_rotate_kek_is_idempotent(
+    db_session: AsyncSession, test_secret_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running rotate_kek with the same old/new pair after a successful rotation is a no-op."""
+    await init_key(db_session)
+    old_kek = bytes.fromhex(test_secret_key)
+    new_kek = bytes.fromhex(_NEW_KEK_HEX)
+
+    await rotate_kek(db_session, old_kek, new_kek)
+    monkeypatch.setenv("SECRET_KEY", _NEW_KEK_HEX)
+    key_after_first = await get_master_key(db_session)
+
+    # Second call: the blob is already wrapped under new_kek, so old_kek no
+    # longer unwraps it. A naive implementation would try old_kek and raise;
+    # the no-op path must detect new_kek already works and skip straight past.
+    await rotate_kek(db_session, old_kek, new_kek)
+    key_after_second = await get_master_key(db_session)
+
+    assert key_after_first == key_after_second
+
+
+@pytest.mark.integration
+async def test_rotate_kek_wrong_old_kek_raises_and_leaves_blob_intact(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """A wrong old KEK must raise instead of writing a corrupt blob."""
+    await init_key(db_session)
+    key_before = await get_master_key(db_session)
+
+    wrong_old_kek = bytes.fromhex(_WRONG_OLD_KEK_HEX)
+    new_kek = bytes.fromhex(_NEW_KEK_HEX)
+    with pytest.raises((InvalidEnvelopeError, MissingKeyError)):
+        await rotate_kek(db_session, wrong_old_kek, new_kek)
+
+    # The blob must still be readable under the original (still-correct) KEK.
+    key_after = await get_master_key(db_session)
+    assert key_after == key_before
+
+
+@pytest.mark.integration
+async def test_rotate_kek_raises_when_master_key_not_initialised(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """rotate_kek on an uninitialised key_state row must raise, not create one."""
+    old_kek = bytes.fromhex(test_secret_key)
+    new_kek = bytes.fromhex(_NEW_KEK_HEX)
+    with pytest.raises(MissingKeyError):
+        await rotate_kek(db_session, old_kek, new_kek)
+
+
+@pytest.mark.integration
+async def test_rotate_kek_preserves_integration_credential_decryption(
+    db_session: AsyncSession, test_secret_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration credentials encrypted under the old master-key wrapping stay readable."""
+    await init_key(db_session)
+    await upsert_integration(
+        db_session,
+        kind="rpc",
+        url="https://rpc.invalid.example/v3/test",
+        api_key="test-api-key",
+    )
+
+    old_kek = bytes.fromhex(test_secret_key)
+    new_kek = bytes.fromhex(_NEW_KEK_HEX)
+    await rotate_kek(db_session, old_kek, new_kek)
+    monkeypatch.setenv("SECRET_KEY", _NEW_KEK_HEX)
+
+    read_back = await get_integration(db_session, kind="rpc", decrypt_fields=True)
+    assert read_back is not None
+    assert read_back.url == "https://rpc.invalid.example/v3/test"
+    assert read_back.api_key == "test-api-key"
