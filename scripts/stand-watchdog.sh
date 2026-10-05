@@ -60,6 +60,13 @@ case "$ready" in
         "Outage spanned at least ${fails} consecutive probes (~${fails} min)." \
         "No action needed.")"
       echo "[watchdog] recovered after $fails consecutive failures — recovery alert sent"
+    else
+      # One line per healthy tick, so `journalctl -u audr-watchdog` answers
+      # "is the watchdog actually running?" without anything to correlate.
+      # A silent success path makes a dead timer and a healthy stand look
+      # identical in the journal, which is the wrong failure mode for the
+      # thing whose whole job is noticing.
+      echo "[watchdog] ok"
     fi
     echo 0 > "$STATE_FILE"
     exit 0

@@ -215,9 +215,14 @@ workflows, which ship with the commit since AUD-443 — remember the difference.
 
 ```bash
 systemctl list-timers audr-watchdog.timer      # next/last probe
-journalctl -u audr-watchdog.service -n 50      # probe history and alert decisions
 sudo systemctl start audr-watchdog.service     # probe right now
 cat ~/.local/state/audr-watchdog/consecutive-failures   # 0 when healthy
+
+# Probe history and alert decisions. `sudo` is required: the unit runs as
+# codex but logs to the system journal, and plain `journalctl -u` as codex
+# prints "No entries" rather than an error, which reads exactly like a dead
+# timer. One healthy tick logs "[watchdog] ok".
+sudo journalctl -u audr-watchdog.service -n 50
 ```
 
 To silence it during planned maintenance, `sudo systemctl stop
