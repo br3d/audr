@@ -10,18 +10,26 @@ Usage::
         await init_key(session)          # idempotent — safe to call on every startup
         key = await get_master_key(session)  # 32-byte AES key
 
+Rotating the key-encryption-key (e.g. because SECRET_KEY leaked) does not
+require re-encrypting every credential: ``rotate_kek`` re-wraps the stored
+master key under a new KEK while leaving the raw master key — and therefore
+every ciphertext it protects — unchanged. See ``python -m
+audr.operations.init_key rotate`` (``_main_rotate``) for the one-shot CLI form.
+
 The ``key_state`` table is created by the 0001 baseline migration (originally T017).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import sys
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.operations.crypto import MissingKeyError, decrypt, encrypt
+from audr.operations.crypto import InvalidEnvelopeError, MissingKeyError, decrypt, encrypt
 
 # Row key used in the key_state table.
 _KEY_STATE_ROW = "master_key"
@@ -64,6 +72,42 @@ async def get_master_key(session: AsyncSession) -> bytes:
     return decrypt(blob, b"key_state:master_key", kek)
 
 
+async def rotate_kek(session: AsyncSession, old_kek: bytes, new_kek: bytes) -> None:
+    """Rewrap the stored master-key blob under *new_kek*, in place.
+
+    The raw master key value is never changed — only the key-encryption-key
+    that wraps it — so every ciphertext encrypted under the master key
+    (integration credentials, etc.) stays decryptable without re-encryption.
+
+    Idempotent: if the blob already decrypts under *new_kek* (e.g. a prior
+    call succeeded and this is a re-run), returns without touching the row.
+
+    Raises:
+        MissingKeyError: no master key has been initialised yet.
+        InvalidEnvelopeError / MissingKeyError: *old_kek* does not unwrap the
+            stored blob (and it is not already wrapped under *new_kek*). The
+            row is left untouched.
+    """
+    existing = await _load_raw(session)
+    if existing is None:
+        raise MissingKeyError("master key has not been initialised; call init_key() first")
+
+    try:
+        decrypt(existing, b"key_state:master_key", new_kek)
+    except InvalidEnvelopeError:
+        pass
+    else:
+        return
+
+    raw_key = decrypt(existing, b"key_state:master_key", old_kek)
+    wrapped = encrypt(raw_key, b"key_state:master_key", new_kek)
+    await session.execute(
+        text("UPDATE key_state SET wrapped_key = :blob WHERE name = :name"),
+        {"blob": wrapped, "name": _KEY_STATE_ROW},
+    )
+    await session.flush()
+
+
 async def _load_raw(session: AsyncSession) -> bytes | None:
     result = await session.execute(
         text("SELECT wrapped_key FROM key_state WHERE name = :name"),
@@ -73,22 +117,27 @@ async def _load_raw(session: AsyncSession) -> bytes | None:
     return row[0] if row is not None else None
 
 
-def _load_kek() -> bytes:
-    """Load the key-encryption-key from the SECRET_KEY env var.
+def _load_kek(env_var: str = "SECRET_KEY") -> bytes:
+    """Load a key-encryption-key from the given env var.
 
-    SECRET_KEY must be a 64-character hex string (32 bytes).  Raises
+    The value must be a 64-character hex string (32 bytes).  Raises
     MissingKeyError if absent or the wrong length.
     """
-    raw = os.environ.get("SECRET_KEY", "")
+    raw = os.environ.get(env_var, "")
     if not raw:
-        raise MissingKeyError("SECRET_KEY environment variable is not set")
+        raise MissingKeyError(f"{env_var} environment variable is not set")
     try:
         kek = bytes.fromhex(raw)
     except ValueError as exc:
-        raise MissingKeyError("SECRET_KEY is not valid hexadecimal") from exc
+        raise MissingKeyError(f"{env_var} is not valid hexadecimal") from exc
     if len(kek) != 32:
-        raise MissingKeyError(f"SECRET_KEY must be 32 bytes (64 hex chars), got {len(kek)}")
+        raise MissingKeyError(f"{env_var} must be 32 bytes (64 hex chars), got {len(kek)}")
     return kek
+
+
+def _kek_fingerprint(kek: bytes) -> str:
+    """Non-reversible identifier for a KEK, safe to print: sha256 prefix, not the key."""
+    return hashlib.sha256(kek).hexdigest()[:12]
 
 
 async def _main() -> None:
@@ -104,5 +153,37 @@ async def _main() -> None:
     print("Master key initialised.")
 
 
+async def _main_rotate() -> None:
+    """One-shot KEK rotation entrypoint.
+
+    Usage inside the audr-api image::
+
+        docker compose run --rm \\
+            -e OLD_SECRET_KEY=<current SECRET_KEY> \\
+            -e NEW_SECRET_KEY=<new SECRET_KEY> \\
+            migrate python -m audr.operations.init_key rotate
+
+    Reads OLD_SECRET_KEY / NEW_SECRET_KEY (not SECRET_KEY) so the rotation
+    cannot be run by accident with only one key configured, and prints only a
+    sha256 fingerprint of the new KEK — never a key value — on success.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    old_kek = _load_kek("OLD_SECRET_KEY")
+    new_kek = _load_kek("NEW_SECRET_KEY")
+
+    database_url = os.environ["DATABASE_URL"]
+    engine = create_async_engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        await rotate_kek(session, old_kek, new_kek)
+        await session.commit()
+    await engine.dispose()
+    print(f"Master key rewrapped under new KEK (fingerprint {_kek_fingerprint(new_kek)}).")
+
+
 if __name__ == "__main__":
-    asyncio.run(_main())
+    if len(sys.argv) > 1 and sys.argv[1] == "rotate":
+        asyncio.run(_main_rotate())
+    else:
+        asyncio.run(_main())
