@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 /**
  * E2E browser journeys for RPC connection and wallet/address management.
@@ -26,6 +27,14 @@ async function signIn(page: import('@playwright/test').Page) {
   })
 }
 
+// Both connection cards collapse to "In use: <source>" plus a change button
+// (AUD-440), so a test that needs the RPC form must open it first.
+async function openRpcForm(page: Page) {
+  await page.getByRole('link', { name: /connections/i }).click()
+  await page.getByRole('button', { name: /(use my own|change) rpc endpoint/i }).click()
+  await expect(page.getByLabel('RPC URL')).toBeVisible({ timeout: 3000 })
+}
+
 test.describe('RPC connection setup', () => {
   test('connections page shows RPC configuration section', async ({ page }) => {
     await signIn(page)
@@ -33,6 +42,15 @@ test.describe('RPC connection setup', () => {
     await expect(page.getByRole('heading', { name: /rpc/i })).toBeVisible({
       timeout: 3000,
     })
+  })
+
+  test('connections page names the source actually in use', async ({ page }) => {
+    await signIn(page)
+    await page.getByRole('link', { name: /connections/i }).click()
+    // Nothing is configured on a seeded-but-unconfigured instance, and both
+    // integrations still work off keyless defaults — the page must say so
+    // rather than imply the data is unavailable (AUD-440).
+    await expect(page.getByText(/in use:/i).first()).toBeVisible({ timeout: 3000 })
   })
 
   test('RPC form discloses data sharing to endpoint', async ({ page }) => {
@@ -44,14 +62,14 @@ test.describe('RPC connection setup', () => {
 
   test('saving empty RPC URL shows validation error', async ({ page }) => {
     await signIn(page)
-    await page.getByRole('link', { name: /connections/i }).click()
+    await openRpcForm(page)
     await page.getByRole('button', { name: /save rpc/i }).click()
     await expect(page.getByRole('alert')).toContainText(/required/i)
   })
 
   test('private host option is available and labeled', async ({ page }) => {
     await signIn(page)
-    await page.getByRole('link', { name: /connections/i }).click()
+    await openRpcForm(page)
     // The private host checkbox must be clearly labeled
     const checkbox = page.getByRole('checkbox', { name: /private.*host/i })
     await expect(checkbox).toBeVisible()
@@ -68,7 +86,7 @@ test.describe('RPC connection setup', () => {
   test('test connection button is shown when RPC is configured', async ({ page }) => {
     await signIn(page)
     // Configure a (potentially invalid) RPC first
-    await page.getByRole('link', { name: /connections/i }).click()
+    await openRpcForm(page)
     await page.getByLabel('RPC URL').fill('https://mainnet.example-rpc.invalid')
     await page.getByRole('button', { name: /save rpc/i }).click()
 
