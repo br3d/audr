@@ -12,7 +12,6 @@ import {
   IconSun,
   IconMoon,
   IconSignOut,
-  IconChat,
   IconUser,
 } from './Icons'
 import { BrandMark } from './Logo'
@@ -43,7 +42,11 @@ export const MAIN_PAGES = [
   'schedules',
   'status',
   'account',
-  'assistant',
+  // AUD-436: the assistant is a canned-response prototype, not a working
+  // feature. It keeps a route so the intended interface can still be shown
+  // on purpose (`#/assistant-prototype`), but it is deliberately absent from
+  // the nav and from every in-app link — nobody reaches it by browsing.
+  'assistant-prototype',
 ] as const
 
 export type MainPage = (typeof MAIN_PAGES)[number]
@@ -62,7 +65,7 @@ const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<
   { page: 'status', label: 'Status', Icon: IconActivity },
   { page: 'connections', label: 'Connections', Icon: IconPlug },
   { page: 'account', label: 'Account & Data', Icon: IconSettings },
-  { page: 'assistant', label: 'Assistant', Icon: IconChat },
+  // AUD-436: no Assistant entry — see MAIN_PAGES.
 ]
 
 const PAGE_TITLES: Record<MainPage, string> = {
@@ -75,7 +78,7 @@ const PAGE_TITLES: Record<MainPage, string> = {
   schedules: 'Schedules',
   status: 'Status',
   account: 'Account & Data',
-  assistant: 'Assistant',
+  'assistant-prototype': 'Assistant (prototype)',
 }
 
 // ---- User menu ----
