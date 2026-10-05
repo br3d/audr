@@ -39,7 +39,7 @@ dev = [
     # Async test utilities
     "anyio[trio]==4.15.1",
     # Type checking
-    "mypy==2.3.1",
+    "mypy==2.4.0",
     "types-psycopg2",
     # Lint + format. Pinned exactly: ruff's formatter output and lint rule set
     # both move between patch releases, so an unpinned ruff means "formatted"
