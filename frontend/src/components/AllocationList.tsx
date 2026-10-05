@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Decimal } from 'decimal.js'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchAssets, patchAsset, ApiError } from '../api/client'
 import type { AllocationItem, ReadStatus } from '../api/client'
 import AssetEmblem from './AssetEmblem'
 import MoneyValue from './MoneyValue'
@@ -66,18 +68,31 @@ function readBadge(status: ReadStatus) {
   }
 }
 
-function AllocationRow({ item }: { item: AllocationItem }) {
+function AllocationRow({
+  item,
+  pendingExclude,
+  excluding,
+  error,
+  onExclude,
+}: {
+  item: AllocationItem
+  pendingExclude: boolean
+  excluding: boolean
+  error: string | null
+  onExclude: () => void
+}) {
   const isUnpriced = item.value_usd === null
   // parseFloat is acceptable here: it only sizes the decorative share bar.
   const barWidth = Math.max(parseFloat(item.percentage), 1.5)
+  const showExcludedBadge = !item.included || pendingExclude
 
   return (
-    <tr>
+    <tr className={pendingExclude ? 'allocation-row-pending' : undefined}>
       <td>
         <div className="allocation-asset">
           <AssetEmblem symbol={item.symbol} logoUrl={item.logo_url} />
           <span className="allocation-symbol">{item.symbol}</span>
-          {!item.included && (
+          {showExcludedBadge && (
             <span className="badge badge-neutral" aria-label="Excluded from total">
               excluded
             </span>
@@ -109,16 +124,157 @@ function AllocationRow({ item }: { item: AllocationItem }) {
           </div>
         )}
       </td>
+      <td className="allocation-actions">
+        {pendingExclude ? (
+          <span className="text-muted allocation-pending-note">Applies next snapshot</span>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={onExclude}
+            disabled={excluding}
+            aria-label={`Exclude ${item.symbol}`}
+          >
+            {excluding ? 'Excluding…' : 'Exclude'}
+          </button>
+        )}
+        {error !== null && (
+          <p role="alert" className="text-danger allocation-row-error">
+            {error}
+          </p>
+        )}
+      </td>
     </tr>
+  )
+}
+
+/**
+ * Collapsed strip of currently-excluded assets, with an Include button to undo —
+ * the only way back once a row has been excluded from the allocation table above,
+ * since an excluded asset drops out of the allocations response entirely.
+ */
+function ExcludedAssetsStrip() {
+  const [expanded, setExpanded] = useState(false)
+  const [includingIds, setIncludingIds] = useState<Set<string>>(new Set())
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  const queryClient = useQueryClient()
+
+  const { data } = useQuery({
+    queryKey: ['assets', 'excluded-strip'],
+    queryFn: () => fetchAssets(true),
+  })
+
+  const excludedAssets = data?.items ?? []
+
+  async function handleInclude(assetId: string) {
+    setIncludingIds((prev) => new Set(prev).add(assetId))
+    setRowErrors((prev) => {
+      const next = { ...prev }
+      delete next[assetId]
+      return next
+    })
+    try {
+      await patchAsset(assetId, { excluded: false })
+      void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+      void queryClient.invalidateQueries({ queryKey: ['assets'] })
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [assetId]: err instanceof ApiError ? err.message : 'Failed to include.',
+      }))
+    } finally {
+      setIncludingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(assetId)
+        return next
+      })
+    }
+  }
+
+  if (excludedAssets.length === 0) return null
+
+  return (
+    <div className="allocation-excluded-strip">
+      <button
+        type="button"
+        className="allocation-spoiler"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span className="allocation-spoiler-chevron" aria-hidden="true">
+          {expanded ? '▾' : '▸'}
+        </span>
+        <span className="allocation-spoiler-label">Excluded ({excludedAssets.length})</span>
+      </button>
+
+      {expanded && (
+        <ul className="allocation-excluded-list" role="list" aria-label="Excluded assets">
+          {excludedAssets.map((asset) => (
+            <li key={asset.id} className="allocation-excluded-row">
+              <span className="allocation-excluded-symbol">{asset.symbol}</span>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => void handleInclude(asset.id)}
+                disabled={includingIds.has(asset.id)}
+                aria-label={`Include ${asset.symbol}`}
+              >
+                {includingIds.has(asset.id) ? 'Including…' : 'Include'}
+              </button>
+              {rowErrors[asset.id] !== undefined && (
+                <p role="alert" className="text-danger allocation-row-error">
+                  {rowErrors[asset.id]}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
 export default function AllocationList({ items }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [search, setSearch] = useState('')
+  const [pendingExcludedIds, setPendingExcludedIds] = useState<Set<string>>(new Set())
+  const [excludingIds, setExcludingIds] = useState<Set<string>>(new Set())
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  const queryClient = useQueryClient()
+
+  async function handleExclude(assetId: string) {
+    setExcludingIds((prev) => new Set(prev).add(assetId))
+    setRowErrors((prev) => {
+      const next = { ...prev }
+      delete next[assetId]
+      return next
+    })
+    try {
+      await patchAsset(assetId, { excluded: true })
+      setPendingExcludedIds((prev) => new Set(prev).add(assetId))
+      void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+      void queryClient.invalidateQueries({ queryKey: ['assets'] })
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [assetId]: err instanceof ApiError ? err.message : 'Failed to exclude.',
+      }))
+    } finally {
+      setExcludingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(assetId)
+        return next
+      })
+    }
+  }
 
   if (items.length === 0) {
-    return <p role="note">No allocation data available.</p>
+    return (
+      <div className="allocation-list">
+        <p role="note">No allocation data available.</p>
+        <ExcludedAssetsStrip />
+      </div>
+    )
   }
 
   const filtered = search.trim()
@@ -155,11 +311,19 @@ export default function AllocationList({ items }: Props) {
               <th scope="col">Amount</th>
               <th scope="col">Value (USD)</th>
               <th scope="col">Allocation</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((item) => (
-              <AllocationRow key={item.asset_id} item={item} />
+              <AllocationRow
+                key={item.asset_id}
+                item={item}
+                pendingExclude={pendingExcludedIds.has(item.asset_id)}
+                excluding={excludingIds.has(item.asset_id)}
+                error={rowErrors[item.asset_id] ?? null}
+                onExclude={() => void handleExclude(item.asset_id)}
+              />
             ))}
           </tbody>
         </table>
@@ -185,6 +349,8 @@ export default function AllocationList({ items }: Props) {
           </span>
         </button>
       )}
+
+      <ExcludedAssetsStrip />
     </div>
   )
 }

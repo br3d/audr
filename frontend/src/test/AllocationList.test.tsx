@@ -1,18 +1,48 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+vi.mock('../api/client', () => {
+  class ApiError extends Error {
+    status: number
+    body: undefined
+    constructor(status: number, message: string) {
+      super(message)
+      this.name = 'ApiError'
+      this.status = status
+    }
+  }
+  return {
+    fetchAssets: vi.fn(),
+    patchAsset: vi.fn(),
+    ApiError,
+  }
+})
+
 import AllocationList, { splitAllocations } from '../components/AllocationList'
 import { monogram } from '../components/AssetEmblem'
-import type { AllocationItem } from '../api/client'
+import { fetchAssets, patchAsset } from '../api/client'
+import type { AllocationItem, AssetItem, AssetsResponse } from '../api/client'
 
-function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root } {
+const mockFetchAssets = vi.mocked(fetchAssets)
+const mockPatchAsset = vi.mocked(patchAsset)
+
+function makeAssetsResponse(items: AssetItem[] = []): AssetsResponse {
+  return { items, next_cursor: null, request_id: 'r1', generated_at: '2026-01-01T00:00:00Z' }
+}
+
+function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root; qc: QueryClient } {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  act(() => { root.render(ui) })
-  return { container, root }
+  act(() => {
+    root.render(React.createElement(QueryClientProvider, { client: qc }, ui))
+  })
+  return { container, root, qc }
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
@@ -67,6 +97,14 @@ function dustyPortfolio(dustCount: number): AllocationItem[] {
 }
 
 describe('AllocationList', () => {
+  beforeEach(() => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse())
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
   describe('empty state', () => {
     it('renders an explanatory note when items array is empty', async () => {
       const { container, root } = render(<AllocationList items={[]} />)
@@ -376,6 +414,111 @@ describe('AllocationList', () => {
     it('percentage cells have aria-label with "percent" text', async () => {
       const { container, root } = render(<AllocationList items={ITEMS} />)
       expect(container.querySelectorAll('span[aria-label*="percent"]').length).toBe(2)
+      await unmount(container, root)
+    })
+  })
+
+  describe('inline exclude (AUD-434)', () => {
+    it('renders an Exclude button in each row', async () => {
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      expect(container.querySelector('[aria-label="Exclude ETH"]')).toBeTruthy()
+      expect(container.querySelector('[aria-label="Exclude USDC"]')).toBeTruthy()
+      await unmount(container, root)
+    })
+
+    it('clicking Exclude calls patchAsset with excluded: true for that asset', async () => {
+      mockPatchAsset.mockResolvedValue({} as AssetItem)
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
+      await act(async () => { button.click() })
+      expect(mockPatchAsset).toHaveBeenCalledWith('eth', { excluded: true })
+      await unmount(container, root)
+    })
+
+    it('optimistically badges and dims the row instead of removing it', async () => {
+      mockPatchAsset.mockResolvedValue({} as AssetItem)
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
+      await act(async () => { button.click() })
+      const rows = container.querySelectorAll('tbody tr')
+      expect(rows.length).toBe(2)
+      expect(rows[0].className).toContain('allocation-row-pending')
+      expect(rows[0].querySelector('[aria-label="Excluded from total"]')).toBeTruthy()
+      // Honest about the total: no claim that it has already been recalculated.
+      expect(rows[0].textContent).toContain('Applies next snapshot')
+      await unmount(container, root)
+    })
+
+    it('shows an inline error and keeps the button when the request fails', async () => {
+      mockPatchAsset.mockRejectedValue(new Error('network down'))
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
+      await act(async () => { button.click() })
+      expect(container.querySelector('[aria-label="Exclude ETH"]')).toBeTruthy()
+      expect(container.querySelector('[role="alert"].allocation-row-error')).toBeTruthy()
+      await unmount(container, root)
+    })
+  })
+
+  describe('excluded assets strip (AUD-434)', () => {
+    const EXCLUDED_ASSET: AssetItem = {
+      id: 'a-dai',
+      chain_id: 1,
+      kind: 'catalog',
+      contract_address: '0x3333333333333333333333333333333333333',
+      symbol: 'DAI',
+      name: 'Dai',
+      decimals: 18,
+      excluded: true,
+      metadata_source: 'catalog',
+      has_metadata_conflict: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+
+    async function flush() {
+      for (let i = 0; i < 5; i += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      }
+    }
+
+    it('does not render a strip when there are no excluded assets', async () => {
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      await flush()
+      expect(container.querySelector('.allocation-excluded-strip')).toBeNull()
+      await unmount(container, root)
+    })
+
+    it('renders a collapsed "Excluded (N)" toggle when excluded assets exist', async () => {
+      mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      await flush()
+      const strip = container.querySelector('.allocation-excluded-strip')!
+      expect(strip.textContent).toContain('Excluded (1)')
+      expect(container.querySelector('.allocation-excluded-list')).toBeNull()
+      expect(mockFetchAssets).toHaveBeenCalledWith(true)
+      await unmount(container, root)
+    })
+
+    it('expands to show an Include button per excluded asset', async () => {
+      mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      await flush()
+      const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
+      await act(async () => { toggle.click() })
+      expect(container.querySelector('[aria-label="Include DAI"]')).toBeTruthy()
+      await unmount(container, root)
+    })
+
+    it('clicking Include calls patchAsset with excluded: false for that asset', async () => {
+      mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
+      mockPatchAsset.mockResolvedValue({} as AssetItem)
+      const { container, root } = render(<AllocationList items={ITEMS} />)
+      await flush()
+      const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
+      await act(async () => { toggle.click() })
+      const includeButton = container.querySelector('[aria-label="Include DAI"]') as HTMLButtonElement
+      await act(async () => { includeButton.click() })
+      expect(mockPatchAsset).toHaveBeenCalledWith('a-dai', { excluded: false })
       await unmount(container, root)
     })
   })

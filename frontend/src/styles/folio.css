@@ -1013,6 +1013,50 @@ body {
   text-align: right;
 }
 
+.allocation-actions {
+  white-space: nowrap;
+}
+
+.allocation-pending-note {
+  font-size: var(--text-xs);
+}
+
+.allocation-row-error {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+}
+
+.allocation-row-pending {
+  opacity: 0.55;
+}
+
+.allocation-excluded-strip {
+  margin-top: 10px;
+}
+
+.allocation-excluded-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+
+.allocation-excluded-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.allocation-excluded-symbol {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* ----------------------------------------------------------------
    Forms
    ---------------------------------------------------------------- */

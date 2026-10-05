@@ -10,6 +10,8 @@ vi.mock('../api/client', () => ({
   fetchPortfolio: vi.fn(),
   fetchHistory: vi.fn(),
   fetchEvents: vi.fn(),
+  fetchAssets: vi.fn(),
+  patchAsset: vi.fn(),
   ApiError: class ApiError extends Error {
     status = 500
     body = undefined
@@ -30,11 +32,14 @@ vi.mock('../components/NewsFeed', () => ({
 }))
 
 import DashboardPage from '../pages/DashboardPage'
-import { fetchPortfolio, fetchHistory, fetchEvents } from '../api/client'
+import { fetchPortfolio, fetchHistory, fetchEvents, fetchAssets } from '../api/client'
 
 const mockFetchPortfolio = vi.mocked(fetchPortfolio)
 const mockFetchHistory = vi.mocked(fetchHistory)
 const mockFetchEvents = vi.mocked(fetchEvents)
+const mockFetchAssets = vi.mocked(fetchAssets)
+
+const EMPTY_ASSETS = { items: [], next_cursor: null, request_id: 'req-1', generated_at: '2026-01-01T00:00:00Z' }
 
 function makeQuality(overrides: Partial<PortfolioResponse['quality']> = {}): PortfolioResponse['quality'] {
   return {
@@ -191,6 +196,7 @@ describe('DashboardPage', () => {
     mockFetchPortfolio.mockResolvedValue(EMPTY_PORTFOLIO)
     mockFetchHistory.mockResolvedValue(EMPTY_HISTORY)
     mockFetchEvents.mockResolvedValue(EMPTY_EVENTS)
+    mockFetchAssets.mockResolvedValue(EMPTY_ASSETS)
   })
 
   afterEach(() => {
