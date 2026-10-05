@@ -103,6 +103,41 @@ This is our deployment of our instance, not a self-hosting procedure — an
 operator running their own instance has no access to this registry and installs
 from `compose.yaml` alone, as [operations.md](operations.md) describes.
 
+## Stand down after a failed deploy
+
+A red deploy usually means nothing is wrong with the stand: most of the guarded
+job's failures happen before anything destructive, and the ones that do not
+normally end in a rollback that leaves the previous release serving. So the run
+status alone does not tell you whether to drop everything.
+
+The **Report stand state (failure path)** step at the end of every failed deploy
+answers exactly that question. Read it first:
+
+- `[stand] deploy FAILED but the stand is serving` — no outage. Fix the build or
+  the gate at human speed.
+- `[stand] DEPLOY FAILED AND THE STAND IS DOWN` — audr is not answering. Act now.
+
+That second line is the one AUD-443 did not have. Run 447 failed correctly, the
+rollback could not recover because it resolved images through the same broken
+compose, and the stand served nothing but Postgres for two hours because the job
+log ended at `migrate` exiting 255 and nobody read further.
+
+When the stand is down, the cause is almost always one of two things:
+
+1. **Compose resolved the wrong image.** Since AUD-443 the deploy asserts this
+   up front, so a current pipeline fails in a second with `the
+   compose.deploy.yaml overlay did not take effect`. On the host, confirm with
+   `cd ~/audr && docker compose config --images` — every `audr-backend` line
+   must be `$AUDR_REGISTRY/audr-backend:<tag>`, never `ghcr.io/...`. If it is
+   not, check `COMPOSE_FILE=compose.yaml:compose.deploy.yaml` in `~/audr/.env`
+   and that both compose files are present.
+2. **The schema and the image disagree** — the next section.
+
+Note that 1 *causes* 2: the public image's alembic tree lags the live DB, so a
+silent downgrade presents as a migration failure. Fix the image resolution
+before touching the schema; downgrading a schema to match an image that was
+never meant to run is how a bad deploy becomes a bad database.
+
 ## Recovering a schema/image mismatch by hand
 
 Symptom: `migrate` crash-loops with `Can't locate revision identified by 'NNNN'`,

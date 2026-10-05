@@ -460,6 +460,54 @@ jobs:
           fi
           log "Deploy OK — tag=$TAG version=$VERSION"
 
+      # A deploy reporting `failure` is not the same as anyone knowing the stand
+      # is down, and the two are not even correlated: most failures above happen
+      # before anything destructive, or end with a rollback that leaves a
+      # serving stack. AUD-443 was the other kind. Run 447 reported failure
+      # correctly, the rollback could not recover (it resolved images through
+      # the same broken compose), and the stand sat with nothing but Postgres
+      # for two hours because no step after the failing one ever said so. The
+      # job log ended at "migrate exited 255" — true, and no help.
+      #
+      # This step closes that gap as far as a workflow can: on every failure it
+      # states, in one unmissable line, whether the stand is actually serving.
+      # "deploy failed, stand still serving the previous release" and "deploy
+      # failed, THE STAND IS DOWN" are the same red X today, and they call for
+      # very different responses at very different speeds.
+      #
+      # It deliberately does not try to repair anything — a second automatic
+      # recovery attempt layered on a rollback that already failed is how a bad
+      # deploy becomes a bad database. It reports; a human decides.
+      #
+      # Exits 0: the job is already failed by the step that brought us here, and
+      # exiting non-zero would only replace that step's diagnosis with this
+      # one's in the run summary.
+      - name: Report stand state (failure path)
+        if: failure()
+        run: |
+          set -uo pipefail
+          ready="$(curl -s -m 5 http://localhost:80/health/ready 2>/dev/null || true)"
+          api="$(docker inspect --format '{{.State.Status}}' audr-api-1 2>/dev/null || echo absent)"
+          case "$ready" in
+            *'"status":"ok"'*)
+              echo "::warning title=Deploy failed, stand still serving::$ready"
+              echo "[stand] deploy FAILED but the stand is serving (api=$api) — no outage, investigate at human speed"
+              ;;
+            *)
+              echo "::error title=Deploy failed AND THE STAND IS DOWN::api container is '$api' and /health/ready did not report ok"
+              echo "[stand] ############################################################"
+              echo "[stand] DEPLOY FAILED AND THE STAND IS DOWN — audr is not serving."
+              echo "[stand] api container state : $api"
+              echo "[stand] /health/ready       : ${ready:-<no response>}"
+              echo "[stand] Recovery: docs/deploy-runbook.md, 'Stand down after a failed deploy'."
+              echo "[stand] ############################################################"
+              ;;
+          esac
+          # Unconditional, both paths: this is the state a responder needs first
+          # and it is cheap. Never let it fail the step.
+          cd "$DEPLOY_DIR" 2>/dev/null && docker compose ps || true
+          exit 0
+
       # Every deploy mints a new per-sha image on this runner, and left
       # unattended they fill the root filesystem — hundreds of images plus
       # several GB of build cache. Runs on failure paths too (that is when the
