@@ -298,6 +298,12 @@ function QuotesForm({
       </p>
 
       <p className="muted-text mb-16">
+        audr supports exactly {options.length === 1 ? 'one price provider' : 'these price providers'}:{' '}
+        {options.map((o) => o.label).join(', ')}. The list is fixed — supporting another
+        provider takes a code change, not a setting here.
+      </p>
+
+      <p className="muted-text mb-16">
         <strong className="text-secondary">Disclosure:</strong> The quote provider receives
         token contract addresses and symbols. It does not receive your wallet addresses,
         password, or session credentials.

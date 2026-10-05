@@ -128,6 +128,16 @@ describe('ConnectionsPage — the page must describe the source actually in use 
     expect(container.textContent).not.toContain('values are unavailable')
   })
 
+  it('states that the supported price providers are a fixed list', async () => {
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('audr supports exactly these price providers')
+    expect(text).toContain('CoinMarketCap (public endpoints), CoinGecko (Demo API)')
+    expect(text).toContain('The list is fixed')
+  })
+
   it('offers a change button per integration rather than an always-open form', async () => {
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
