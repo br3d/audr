@@ -432,7 +432,10 @@ docker compose up -d
 ```
 
 The script:
-1. Copies `compose.yaml` to the remote host over SCP
+1. Copies `compose.yaml` and the private-registry overlay
+   `compose.deploy.yaml` to the remote host over SCP, and pins
+   `COMPOSE_FILE=compose.yaml:compose.deploy.yaml` in the remote `.env` so
+   manual compose commands there resolve the same images
 2. Pulls the latest images from the Harbor registry
 3. Runs `alembic upgrade head` via the `migrate` service
 4. Restarts all services with `docker compose up -d --remove-orphans`

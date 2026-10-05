@@ -24,11 +24,25 @@ misbehaves after a workflow was edited on the host.
 
 ## Invariants the pipeline depends on
 
-**Images are pinned, never floated.** `compose.yaml` resolves `${BACKEND_TAG}`
+**The deploy runs two compose files.** `compose.yaml` is the public install: it
+pulls `ghcr.io/br3d/audr-backend:<version>` literally and knows nothing about
+our registry. `compose.deploy.yaml` is the overlay that redirects the three
+backend services at `${AUDR_REGISTRY}/audr-backend:${BACKEND_TAG}`, and both
+variables are required — a missing one fails the deploy instead of silently
+pulling the public release. The deploy job and `scripts/deploy.sh` copy both
+files into `~/audr/` and pin
+
+    COMPOSE_FILE=compose.yaml:compose.deploy.yaml
+
+in `~/audr/.env`, so a **manual** `docker compose` run in that directory
+resolves the same images the pipeline deployed. If a hand-run compose command
+there ever tries to pull from `ghcr.io`, that line is missing (AUD-439).
+
+**Images are pinned, never floated.** The overlay resolves `${BACKEND_TAG}`
 from `~/audr/.env`, and the deploy job pins it to the build sha. This is not
 cosmetic: `docker compose up -d` decides whether to recreate a service by
 comparing the service *definition*, not the image ID a floating tag currently
-resolves to. While the compose file said `image: ...:latest`, every deploy
+resolves to. While the deployed image was `...:latest`, every deploy
 retagged `:latest`, ran the migrations, passed the health-gate **against the
 previous containers** and reported `Deploy OK` while the running code never
 changed. Step 5b of the job now asserts that `audr-api-1` and `audr-worker-1`

@@ -56,25 +56,33 @@ def test_package_json_matches() -> None:
     )
 
 
-def test_compose_default_image_tag_matches() -> None:
+def test_compose_image_tag_matches() -> None:
     """`docker compose up -d` on a checkout must pull that checkout's version.
 
-    compose.yaml names the published image literally (AUD-418) so an operator
-    can see what will be downloaded, which makes it a fifth version carrier:
-    scripts/release.sh rewrites the `BACKEND_TAG` defaults and the header
-    comment, and a stale number here would hand new users an older release
-    than the repository they cloned.
+    compose.yaml names the published image literally (AUD-418, AUD-439) so an
+    operator can see what will be downloaded, which makes it a fifth version
+    carrier: scripts/release.sh rewrites the `x-backend-image` anchor the three
+    backend services share, and a stale number here would hand new users an
+    older release than the repository they cloned.
     """
     compose = (REPO_ROOT / "compose.yaml").read_text()
-    tags = re.findall(r"\$\{BACKEND_TAG:-([^}]+)\}", compose)
-    assert tags, "compose.yaml has no ${BACKEND_TAG:-<version>} default"
+    tags = re.findall(
+        r"^x-backend-image: &backend_image ghcr\.io/br3d/audr-backend:(\S+)$",
+        compose,
+        flags=re.M,
+    )
+    assert tags, (
+        "compose.yaml has no `x-backend-image: &backend_image "
+        "ghcr.io/br3d/audr-backend:<version>` line — scripts/release.sh "
+        "rewrites exactly that spelling."
+    )
     assert set(tags) == {__version__}, (
-        f"compose.yaml defaults to audr-backend:{sorted(set(tags))}, "
+        f"compose.yaml pulls audr-backend:{sorted(set(tags))}, "
         f"audr.version says {__version__} — bump with scripts/release.sh."
     )
-    assert f"ghcr.io/br3d/audr-backend:{__version__}" in compose, (
-        "the header comment in compose.yaml names a different version than the "
-        "image lines below it."
+    assert "${BACKEND_TAG" not in compose and "${AUDR_REGISTRY" not in compose, (
+        "BACKEND_TAG/AUDR_REGISTRY belong to compose.deploy.yaml — a plain "
+        "install must not need either (AUD-439)."
     )
 
 

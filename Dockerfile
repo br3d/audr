@@ -30,9 +30,9 @@ WORKDIR /app
 
 # No apt layer here on purpose: an apt install resolves to whatever the Debian
 # archive serves at build time, which is an unpinned dependency in the runtime
-# image. The compose.yaml health check uses the interpreter already present
-# (`python -c` + stdlib urllib) rather than `curl` for exactly this reason —
-# keep health checks stdlib-only. See docs/third-party.md section 1.3.
+# image. The compose health check is `python -m audr.operations.healthcheck`,
+# which uses the interpreter already present rather than `curl`, for exactly
+# this reason — keep health checks stdlib-only. See docs/third-party.md 1.3.
 
 # Non-root user for runtime security
 RUN useradd -m -u 1000 -s /bin/bash audr

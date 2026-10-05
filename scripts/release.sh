@@ -124,24 +124,15 @@ def sub_once(path: pathlib.Path, pattern: str, repl: str) -> None:
     path.write_text(new)
 
 
-# compose.yaml's default image tag: a checkout of v1.4.2 must pull
-# audr-backend:1.4.2, so the number lives in the `BACKEND_TAG` default and in
-# the header comment that spells the full image out for the reader.
+# compose.yaml names the published image literally — one `x-backend-image`
+# anchor the three backend services share — so a checkout of v1.4.2 pulls
+# audr-backend:1.4.2 and an operator can read the tag without resolving a
+# variable (AUD-439).
 sub_once(
     root / "compose.yaml",
-    r"^#     ghcr\.io/br3d/audr-backend:[^\s]+$",
-    f"#     ghcr.io/br3d/audr-backend:{nxt}",
+    r"^x-backend-image: &backend_image ghcr\.io/br3d/audr-backend:\S+$",
+    f"x-backend-image: &backend_image ghcr.io/br3d/audr-backend:{nxt}",
 )
-compose = root / "compose.yaml"
-text = compose.read_text()
-new, n = re.subn(
-    r"\$\{BACKEND_TAG:-[^}]+\}",
-    f"${{BACKEND_TAG:-{nxt}}}",
-    text,
-)
-if n != 3:
-    sys.exit(f"FATAL: expected 3 BACKEND_TAG defaults in {compose}, rewrote {n}.")
-compose.write_text(new)
 
 # [project] version — the first `version = "..."` in pyproject is the project's;
 # dependency pins use `==` inside the dependencies list, never this spelling.

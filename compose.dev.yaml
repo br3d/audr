@@ -1,0 +1,30 @@
+# Development overlay: build the backend image from this checkout instead of
+# pulling the published release.
+#
+#     docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+#
+# Or export it once per shell and keep typing plain `docker compose`:
+#
+#     export COMPOSE_FILE=compose.yaml:compose.dev.yaml
+#
+# `image:` is repeated here so the three services share one locally built image
+# rather than building it three times. The tag is deliberately not a release
+# number: a local build is not a release.
+#
+# Tests live in compose.test.yaml, not here.
+
+services:
+  migrate:
+    image: audr-backend:dev
+    build: &backend_build
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+
+  api:
+    image: audr-backend:dev
+    build: *backend_build
+
+  worker:
+    image: audr-backend:dev
+    build: *backend_build
