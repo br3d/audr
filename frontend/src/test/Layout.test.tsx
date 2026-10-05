@@ -55,6 +55,26 @@ describe('Layout', () => {
     expect(navLabels).not.toContain('Holdings')
   })
 
+  it('does not render an Assistant nav entry (AUD-436 pulled the prototype out of the menu)', () => {
+    mount(vi.fn(), vi.fn())
+    const navText = container.querySelector('.sidebar-nav')?.textContent ?? ''
+    expect(navText).not.toContain('Assistant')
+  })
+
+  it('titles the prototype route so it cannot be mistaken for a feature (AUD-436)', () => {
+    act(() => {
+      root.render(
+        React.createElement(Layout, {
+          page: 'assistant-prototype',
+          setPage: vi.fn(),
+          onSignOut: vi.fn(),
+          children: React.createElement('div', null, 'content'),
+        }),
+      )
+    })
+    expect(container.querySelector('.topbar-title')?.textContent).toBe('Assistant (prototype)')
+  })
+
   it('renders the space card, nav section label, and self-hosted status without a Sign out button in the sidebar', () => {
     mount(vi.fn(), vi.fn())
     expect(container.querySelector('.space-card')?.textContent).toContain('Personal portfolio')

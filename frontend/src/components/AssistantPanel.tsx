@@ -9,13 +9,19 @@ export interface ChatMessage {
 // When the backend LLM endpoint is ready, call it here instead of pickStubResponse()
 // and remove the STUB_RESPONSES array. The ChatMessage shape and component interface
 // are designed to require no UI changes when the real endpoint is wired in.
+//
+// AUD-436: these lines must never state anything about the operator's actual
+// holdings. The earlier set included "Your ETH holdings look healthy" and a
+// claim about stale price data — assertions made without reading a single
+// balance, which is exactly what made this prototype feel dishonest. Keep
+// every line self-describing: it may explain what the finished assistant
+// would do, never what the portfolio currently is.
 
 const STUB_RESPONSES = [
-  'Your ETH holdings look healthy. Total balance across all wallets was last scanned recently.',
-  'I can help you review your portfolio. Try asking about a specific token or wallet.',
-  'AI assistant is in demo mode. Real LLM responses will be available in a future release.',
-  'Portfolio analytics, wallet summaries, and token insights are coming with the full AI integration.',
-  'I notice you have some holdings that may not have fresh price data. Check the Connections page to configure a quote provider.',
+  'This is sample text, not an answer — the prototype has no access to your wallets or balances.',
+  'When the assistant is implemented, a question like that will be answered from your own indexed data.',
+  'Still a prototype: there is no model behind this box, only a fixed list of phrases played in order.',
+  'Planned scope: portfolio summaries, per-token questions, and history explanations — none of it live yet.',
 ]
 
 let _stubIndex = 0
@@ -33,7 +39,9 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
-      text: 'Hello! I am your portfolio assistant (demo mode). Ask me anything about your holdings.',
+      text:
+        'This is a non-functional prototype of the portfolio assistant. Anything you send gets ' +
+        'a fixed sample reply — your holdings are never read or analysed.',
     },
   ])
   const [input, setInput] = useState('')
@@ -66,7 +74,10 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
     <section aria-label="AI Assistant" data-testid="assistant-panel" className="card assistant-panel">
       <header className="card-header">
         <h2 className="card-title assistant-panel-title">
-          AI Assistant <span aria-label="demo badge" className="badge badge-info">demo</span>
+          AI Assistant{' '}
+          <span aria-label="prototype badge" className="badge badge-warning">
+            prototype
+          </span>
         </h2>
         {onClose && (
           <button
@@ -98,8 +109,11 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
           </div>
         ))}
         {isTyping && (
-          <div aria-label="Assistant is typing" data-testid="typing-indicator" className="assistant-message assistant-message-assistant assistant-typing">
-            Assistant is typing…
+          // AUD-436: the delay demonstrates the pending state of the finished
+          // interface, so it stays — but it is labelled as simulated rather
+          // than dressed up as an assistant that is thinking.
+          <div aria-label="Simulated reply pending" data-testid="typing-indicator" className="assistant-message assistant-message-assistant assistant-typing">
+            Simulated reply…
           </div>
         )}
         <div ref={bottomRef} />
@@ -114,7 +128,7 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about your portfolio…"
+          placeholder="Type anything — the reply is sample text"
           disabled={isTyping}
           autoComplete="off"
           data-testid="assistant-input"

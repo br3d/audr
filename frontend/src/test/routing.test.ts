@@ -31,6 +31,13 @@ describe('pageFromHash / hashForPage with a query part', () => {
     expect(pageFromHash('#/holdings')).toBeNull()
   })
 
+  // AUD-436: the assistant demo no longer answers at its old, guessable slug;
+  // the prototype lives behind an explicitly named route instead.
+  it('resolves the assistant only at #/assistant-prototype, not #/assistant', () => {
+    expect(pageFromHash('#/assistant')).toBeNull()
+    expect(pageFromHash('#/assistant-prototype')).toBe('assistant-prototype')
+  })
+
   it('builds a hash with or without a query string', () => {
     expect(hashForPage('history')).toBe('#/history')
     expect(hashForPage('history', 'period=30d')).toBe('#/history?period=30d')

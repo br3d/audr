@@ -325,10 +325,17 @@ and no router library.
   state. Hash routing was chosen so the server needs no per-route rewrite rules
   beyond the single SPA fallback on `/`.
 - `src/pages/` — Dashboard, Holdings, Wallets, Assets, Events, Connections,
-  History, Schedules, Status, AccountData, Assistant, Setup, SignIn.
+  History, Schedules, Status, AccountData, AssistantPrototype, Setup, SignIn.
 - `src/components/` — Layout (which owns the nav list), AllocationList,
   AssetEmblem, AssistantPanel, ErrorBoundary, HistoryChart, HistoryTable, Icons,
   MoneyValue, NewsFeed, ScanStatus.
+- The **assistant is an interface prototype, not a feature** (AUD-436). It has
+  no model and no backend; `AssistantPanel` replays a fixed list of phrases,
+  none of which may assert anything about the operator's actual holdings. It is
+  therefore kept out of the nav and out of every in-app link, and is reachable
+  only by typing `#/assistant-prototype`, where the page says so in a banner
+  before the panel. When `POST /api/v1/assistant/chat` exists (AUD-302) the
+  route earns a nav slot again and the banner goes away.
 - `src/api/client.ts` — `BASE = '/api/v1'`, a module-level CSRF token
   (`setCSRFToken`/`getCSRFToken`), and `ApiError`/`AuthError` classes over the
   typed error envelope.

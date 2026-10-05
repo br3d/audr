@@ -37,7 +37,38 @@ describe('AssistantPanel', () => {
     expect(container.querySelector('[data-testid="assistant-messages"]')).toBeTruthy()
     const msgs = container.querySelectorAll('[data-testid="assistant-message"]')
     expect(msgs.length).toBe(1)
-    expect(msgs[0].textContent).toContain('demo mode')
+    expect(msgs[0].textContent).toContain('non-functional prototype')
+  })
+
+  // AUD-436: the prototype may describe itself, never the operator's holdings.
+  it('never claims anything about the real portfolio', async () => {
+    mount()
+
+    const input = container.querySelector('[data-testid="assistant-input"]') as HTMLInputElement
+    const form = container.querySelector('form[aria-label="Send message"]') as HTMLFormElement
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+
+    // Drain more replies than the stub list holds so the cycle is covered.
+    for (let i = 0; i < 8; i++) {
+      await act(async () => {
+        nativeSetter?.call(input, `question ${i}`)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(700)
+      })
+    }
+
+    const replies = Array.from(container.querySelectorAll('[data-testid="assistant-message"]'))
+      .map((el) => el.textContent ?? '')
+      .join(' ')
+      .toLowerCase()
+    for (const claim of ['look healthy', 'looks healthy', 'your eth', 'i notice you have']) {
+      expect(replies).not.toContain(claim)
+    }
   })
 
   it('renders send input and button', () => {
@@ -108,9 +139,9 @@ describe('AssistantPanel', () => {
     expect(closeBtn).toBeUndefined()
   })
 
-  it('shows demo badge in heading', () => {
+  it('shows prototype badge in heading', () => {
     mount()
     const heading = container.querySelector('h2')
-    expect(heading?.textContent).toContain('demo')
+    expect(heading?.textContent).toContain('prototype')
   })
 })
