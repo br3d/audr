@@ -237,7 +237,7 @@ again, so a keyed provider recovers by itself once its quota resets.
 Two deliberate exceptions:
 
 - **`validate_rpc` never falls back.** It probes exactly the endpoint you
-  configured, so Settings → Integrations keeps telling the truth about *your*
+  configured, so the Connections page keeps telling the truth about *your*
   key rather than about a public fallback.
 - **A URL that stops passing SSRF validation is a hard failure**, not a reason
   to fall back. Silently rerouting a rebound hostname would defeat the check.

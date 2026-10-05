@@ -23,9 +23,10 @@ from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.jobs.store import JobKind, enqueue_job
+from audr.providers.rpc_defaults import DEFAULT_PUBLIC_RPC_URLS
 from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url_async
 from audr.settings.integrations import RevisionConflictError, get_integration, upsert_integration
-from audr.settings.quotes import save_coingecko_credentials
+from audr.settings.quotes import get_coingecko_api_key, save_coingecko_credentials
 
 router = APIRouter(prefix="/api/v1")
 
@@ -45,6 +46,13 @@ _KIND_TO_JOB: dict[str, JobKind] = {
     "quotes": JobKind.VALIDATE_QUOTES,
 }
 
+# The quote providers the backend can actually drive, in the order the owner
+# should see them (AUD-440). `requires_api_key` is what makes the keyless
+# default explainable in the UI instead of the owner having to guess a name
+# into a free-text field; `coinmarketcap` is selected by storing no key at
+# all, which is exactly what jobs.quotes.get_active_quote_provider reads.
+_QUOTE_PROVIDER_IDS = ("coinmarketcap", "coingecko")
+
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -56,6 +64,15 @@ class IntegrationHealth(BaseModel):
     error_message: str | None = None
 
 
+class ProviderOption(BaseModel):
+    """One selectable provider, with what it costs the owner to use it."""
+
+    id: str
+    label: str
+    requires_api_key: bool
+    note: str
+
+
 class IntegrationEntry(BaseModel):
     kind: str
     configured: bool
@@ -64,6 +81,12 @@ class IntegrationEntry(BaseModel):
     host_label: str | None = None
     revision: str
     health: IntegrationHealth
+    # What this integration is actually using right now, configured or not —
+    # a fresh install has working keyless defaults, and the UI used to show
+    # it as simply unavailable (AUD-440).
+    effective_source: str | None = None
+    using_default: bool = False
+    options: list[ProviderOption] = []
 
 
 class IntegrationsResponse(BaseModel):
@@ -88,6 +111,34 @@ class UpdateQuotesInput(BaseModel):
 class JobRef(BaseModel):
     run_id: str
     coalesced: bool
+
+
+_QUOTE_PROVIDER_OPTIONS: list[ProviderOption] = [
+    ProviderOption(
+        id="coinmarketcap",
+        label="CoinMarketCap (public endpoints)",
+        requires_api_key=False,
+        note=(
+            "Used by default and needs no account or API key. Rate-limited for "
+            "anonymous callers, and only prices assets listed on CoinMarketCap."
+        ),
+    ),
+    ProviderOption(
+        id="coingecko",
+        label="CoinGecko (Demo API)",
+        requires_api_key=True,
+        note=(
+            "Needs a free CoinGecko Demo API key. Prices tokens by contract "
+            "address, so it covers more ERC-20 tokens than the default."
+        ),
+    ),
+]
+
+_QUOTE_PROVIDER_LABELS: dict[str, str] = {o.id: o.label for o in _QUOTE_PROVIDER_OPTIONS}
+
+# The keyless public endpoint a fresh install reads the chain through — the
+# head of the fallback list jobs actually use (providers.rpc_targets).
+_DEFAULT_RPC_HOST = urlparse(DEFAULT_PUBLIC_RPC_URLS[0]).hostname
 
 
 # ---------------------------------------------------------------------------
@@ -142,38 +193,68 @@ def _host_label(url: str | None) -> str | None:
         return None
 
 
-async def _build_entry(db: AsyncSession, fe_kind: str, db_kind: str) -> IntegrationEntry:
-    row = await get_integration(db, kind=db_kind, decrypt_fields=False)
-    health = await _get_health(db, fe_kind)
+async def _build_rpc_entry(db: AsyncSession) -> IntegrationEntry:
+    """Describe the RPC integration, including the default used when unset.
+
+    An unconfigured RPC is not an unusable one: jobs fall back to the keyless
+    public endpoints, so this reports that endpoint as the effective source
+    with `using_default` set, rather than reporting nothing (AUD-440).
+    """
+    row = await get_integration(db, kind="rpc", decrypt_fields=False)
+    health = await _get_health(db, "rpc")
 
     if row is None:
         return IntegrationEntry(
-            kind=fe_kind,
+            kind="rpc",
             configured=False,
-            enabled=False,
-            provider=None,
-            host_label=None,
+            enabled=True,
             revision="0",
             health=health,
+            effective_source=_DEFAULT_RPC_HOST,
+            using_default=True,
         )
 
-    # For quotes, derive provider label from db_kind; for rpc, provider is null.
-    provider: str | None = "coingecko" if db_kind == "coingecko" else None
-
-    # Decrypt to get URL (for host_label on rpc) — only for rpc kind.
-    host: str | None = None
-    if fe_kind == "rpc":
-        decrypted = await get_integration(db, kind=db_kind, decrypt_fields=True)
-        host = _host_label(decrypted.url if decrypted else None)
-
+    decrypted = await get_integration(db, kind="rpc", decrypt_fields=True)
+    host = _host_label(decrypted.url if decrypted else None)
     return IntegrationEntry(
-        kind=fe_kind,
+        kind="rpc",
         configured=True,
         enabled=True,
-        provider=provider,
         host_label=host,
         revision=str(row.revision),
         health=health,
+        effective_source=host,
+        using_default=False,
+    )
+
+
+async def _build_quotes_entry(db: AsyncSession) -> IntegrationEntry:
+    """Describe the quote provider actually in use, plus the selectable set.
+
+    The active provider is derived the same way the quote job derives it — a
+    stored CoinGecko key means CoinGecko, anything else means the keyless
+    CoinMarketCap default — so the UI cannot claim prices are unavailable
+    while the worker is happily pricing the portfolio (AUD-440).
+
+    A row with a blank key counts as *not* configured: blanking the key is how
+    the owner reverts to the default, and the row lingers to carry the
+    revision.
+    """
+    row = await get_integration(db, kind="coingecko", decrypt_fields=False)
+    health = await _get_health(db, "quotes")
+    api_key = await get_coingecko_api_key(db)
+
+    provider = "coingecko" if api_key else "coinmarketcap"
+    return IntegrationEntry(
+        kind="quotes",
+        configured=bool(api_key),
+        enabled=True,
+        provider=provider,
+        revision=str(row.revision) if row is not None else "0",
+        health=health,
+        effective_source=_QUOTE_PROVIDER_LABELS[provider],
+        using_default=provider == "coinmarketcap",
+        options=_QUOTE_PROVIDER_OPTIONS,
     )
 
 
@@ -188,8 +269,8 @@ async def get_integrations(
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationsResponse:
     items = [
-        await _build_entry(db, "rpc", "rpc"),
-        await _build_entry(db, "quotes", "coingecko"),
+        await _build_rpc_entry(db),
+        await _build_quotes_entry(db),
     ]
     now = datetime.now(tz=UTC)
     return IntegrationsResponse(
@@ -235,7 +316,7 @@ async def put_integration_rpc(
         ) from exc
 
     await db.commit()
-    return await _build_entry(db, "rpc", "rpc")
+    return await _build_rpc_entry(db)
 
 
 @router.put("/integrations/quotes", response_model=IntegrationEntry)
@@ -244,10 +325,20 @@ async def put_integration_quotes(
     _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationEntry:
-    if body.provider != "coingecko":
+    if body.provider not in _QUOTE_PROVIDER_IDS:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"unsupported provider: {body.provider!r}",
+        )
+
+    # Selecting the keyless default means storing no key — that is the single
+    # piece of state the quote job reads to pick a provider, so it must be
+    # cleared here rather than left behind pointing at CoinGecko (AUD-440).
+    api_key = (body.api_key or "").strip() if body.provider == "coingecko" else ""
+    if body.provider == "coingecko" and not api_key:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="coingecko requires an API key; select coinmarketcap to use the keyless default",
         )
 
     try:
@@ -258,7 +349,7 @@ async def put_integration_quotes(
     try:
         await save_coingecko_credentials(
             db,
-            api_key=body.api_key or "",
+            api_key=api_key,
             expected_revision=expected_rev,
         )
     except RevisionConflictError as exc:
@@ -268,7 +359,7 @@ async def put_integration_quotes(
         ) from exc
 
     await db.commit()
-    return await _build_entry(db, "quotes", "coingecko")
+    return await _build_quotes_entry(db)
 
 
 @router.post(

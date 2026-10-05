@@ -152,6 +152,13 @@ export interface IntegrationHealth {
   error_message: string | null
 }
 
+export interface ProviderOption {
+  id: string
+  label: string
+  requires_api_key: boolean
+  note: string
+}
+
 export interface IntegrationEntry {
   kind: string
   configured: boolean
@@ -160,6 +167,10 @@ export interface IntegrationEntry {
   host_label: string | null
   revision: string
   health: IntegrationHealth
+  /** What this integration is using right now — the keyless default when unset. */
+  effective_source: string | null
+  using_default: boolean
+  options: ProviderOption[]
 }
 
 export interface IntegrationsResponse {

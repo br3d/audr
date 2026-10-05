@@ -114,6 +114,34 @@ async def test_get_integrations_unconfigured_entries(http_client: httpx.AsyncCli
 
 
 @pytest.mark.integration
+async def test_unconfigured_entries_report_the_working_default(
+    http_client: httpx.AsyncClient,
+) -> None:
+    """A fresh install must name the keyless source it is actually using.
+
+    Reporting only `configured: false` let the UI tell the owner that prices
+    and chain reads were unavailable while the worker was using the keyless
+    defaults perfectly well (AUD-440).
+    """
+    await _setup_and_get_csrf(http_client)
+    r = await http_client.get(_INTEGRATIONS_URL)
+    assert r.status_code == 200
+    items = {item["kind"]: item for item in r.json()["items"]}
+
+    rpc = items["rpc"]
+    assert rpc["using_default"] is True
+    assert rpc["effective_source"] == "ethereum-rpc.publicnode.com"
+
+    quotes = items["quotes"]
+    assert quotes["using_default"] is True
+    assert quotes["provider"] == "coinmarketcap"
+    assert quotes["effective_source"]
+    # The owner picks from this set instead of typing a provider name blind.
+    assert [o["id"] for o in quotes["options"]] == ["coinmarketcap", "coingecko"]
+    assert [o["requires_api_key"] for o in quotes["options"]] == [False, True]
+
+
+@pytest.mark.integration
 async def test_get_integrations_no_csrf_needed(http_client: httpx.AsyncClient) -> None:
     """GET /integrations must not require CSRF — only a valid session cookie."""
     await _setup_and_get_csrf(http_client)  # sets session cookie; we ignore the csrf_token
@@ -272,7 +300,48 @@ async def test_put_quotes_saves_credentials(http_client: httpx.AsyncClient) -> N
     assert data["kind"] == "quotes"
     assert data["configured"] is True
     assert data["provider"] == "coingecko"
+    assert data["using_default"] is False
     assert data["revision"] == "1"
+
+
+@pytest.mark.integration
+async def test_put_quotes_coingecko_without_key_returns_422(
+    http_client: httpx.AsyncClient,
+) -> None:
+    """CoinGecko without a key used to save, then silently price via CoinMarketCap."""
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.put(
+        f"{_INTEGRATIONS_URL}/quotes",
+        json={"revision": "0", "provider": "coingecko"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+async def test_put_quotes_coinmarketcap_clears_the_coingecko_key(
+    http_client: httpx.AsyncClient,
+) -> None:
+    """Selecting the keyless default must revert the provider the job uses."""
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.put(
+        f"{_INTEGRATIONS_URL}/quotes",
+        json={"revision": "0", "provider": "coingecko", "api_key": "cg-test-key"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+    assert r.json()["provider"] == "coingecko"
+
+    r = await http_client.put(
+        f"{_INTEGRATIONS_URL}/quotes",
+        json={"revision": r.json()["revision"], "provider": "coinmarketcap"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "coinmarketcap"
+    assert data["configured"] is False
+    assert data["using_default"] is True
 
 
 @pytest.mark.integration

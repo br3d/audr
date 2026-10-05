@@ -39,10 +39,18 @@ Candidate areas include outgoing transfers, approvals, large outflows and suspic
 contract interactions. These are discussion topics, not promised detection capabilities.
 Balance changes alone do not prove compromise; lack of alerts does not prove safety.
 
-## Backlog
+## Shipped after release 1
 
-Full backup and restore: procedures, tooling, automation and validation. Explicitly
-removed from release 1 by the owner during clarification; export is not a full backup.
+Full backup and restore. Originally removed from release 1 by the owner during
+clarification — export is not a full backup — but since delivered and no longer a
+backlog item: `scripts/backup.sh` takes an encrypted (`age`/`gpg`) dump and
+`scripts/restore.sh` restores it, documented in
+[operations.md](operations.md#backups). A full backup → total volume loss →
+restore → API drill was verified in AUD-390 and recorded in
+[verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390).
+Scheduled/automated backups are still the operator's own cron job.
+
+## Backlog
 
 Additional EVM networks and opt-in network discovery; email and other channels;
 multi-owner SaaS. DeFi accounting, NFTs and historical PnL require separate prioritization.

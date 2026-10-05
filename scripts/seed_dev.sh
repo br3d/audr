@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Seed a running audr instance with canonical dev/test fixtures.
 #
+# DEVELOPMENT TOOL — NOT AN END-USER FEATURE.  It claims the owner account using
+# a password published in this repository, so it must never be pointed at an
+# instance that holds real addresses.  For that reason it is not part of the
+# README install path; see docs/development.md.
+#
 # Creates the owner account with the test password, registers the Buterin
 # wallet, and — when an RPC URL is available out of band — configures the RPC
 # integration.  Safe to run multiple times — skips steps that are already done.
@@ -28,7 +33,7 @@
 #     2. ./secrets/rpc_url.txt          (secrets/ is git-ignored)
 #     3. AUDR_SEED_RPC_URL=... in ./.env (.env is git-ignored)
 #   If none is present the RPC step is skipped with a note — seeding still
-#   succeeds, and the URL can be entered later through Settings → Integrations.
+#   succeeds, and the URL can be entered later through the Connections page.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
