@@ -1,0 +1,130 @@
+# At-rest encryption: the option space and the open decision
+
+Maintainer-facing companion to [security-at-rest.md](security-at-rest.md),
+which states what audr encrypts today and what an operator should do about it.
+This file records *why* it is that and not something else, so the comparison
+does not have to be redone from scratch. Originally written up under AUD-389.
+
+## 1. What rotki does, and why it does not port over
+
+rotki (our reference implementation for self-hosted portfolio tracking) uses
+SQLCipher on a per-user SQLite file. The DB key is derived from the **user's
+login password**; the file on disk is a single opaque blob, and rotki's
+background tasks only run while the user is unlocked. Their global DB (asset
+metadata, historical prices) is a *separate, unencrypted* SQLite file.
+
+Two things make that model work for rotki and not for us:
+
+1. **One file, one key.** SQLCipher encrypts pages of a single file. Postgres
+   has a cluster of files, WAL, temp files, and a shared buffer cache; there is
+   no single-file equivalent.
+2. **No unattended work.** rotki is a desktop app that does nothing while
+   locked. audr runs a `worker` container that polls quotes, indexes on-chain
+   events and refreshes news **24/7 with no user present**. A key that only
+   exists after a human types a password cannot drive that worker.
+
+The second point is the product decision in §4.
+
+## 2. The option space for PostgreSQL
+
+Community PostgreSQL **has no TDE** and, after ten years of mailing-list
+discussion, still has none; every TDE implementation lives in a fork or an
+extension. Ranked by fit for a self-hosted single-node deployment:
+
+### A. Volume / filesystem encryption — LUKS or ZFS native (recommended baseline)
+
+Encrypt the block device or dataset that backs the `db_data` Docker volume.
+Protects against a disk leaving the building; protects against nothing while
+the machine runs. Host setup only, no application or schema change. **This is
+the adopted baseline** and is the recommendation carried in
+[security-at-rest.md](security-at-rest.md#2-what-to-do-about-it).
+
+### B. `pg_tde` (Percona) — real TDE as an open-source extension
+
+Percona's `pg_tde` is open source, GA, and ships in Percona Distribution for
+PostgreSQL 17; 2.2.x (2026) added AES-256 and production WAL encryption, with
+keyring backends ranging from a local keyfile to KMIP/Vault.
+
+- **Protects against:** the same disk-theft threat as (A), plus leaked data
+  files or base backups copied off a *running* host, with per-database keys.
+- **Cost:** swapping `postgres:16-alpine` for the Percona PG17 image — a
+  different base, a major-version upgrade, and a vendor we do not control, on a
+  product whose whole pitch is "docker compose up and it works". Keyring config
+  becomes a new thing the self-hoster must get right, and a wrong keyring is an
+  unrecoverable database rather than a few unreadable credential rows.
+- **Verdict:** worth a timeboxed spike, not worth adopting blind. Revisit if a
+  user asks for compliance-grade at-rest encryption.
+
+### C. `pgcrypto` column encryption
+
+Encrypt columns in SQL with `pgp_sym_encrypt`.
+
+- **Verdict: no.** The key has to travel in the SQL statement, which puts it in
+  `pg_stat_activity` and potentially the server log. Strictly worse than the
+  envelope encryption already in the application, which keeps the key in the
+  API process and never sends it to the database.
+
+### D. Extend the existing application-level envelope encryption
+
+Keep `crypto.py`, widen its coverage from credentials to portfolio data.
+
+- **Protects against:** a Postgres-only compromise — a leaked dump, a read
+  replica, a DB-level backup, or anyone who gets the volume but not the
+  `secrets/` directory. The one layer that survives "attacker has the whole
+  database but not the host's env".
+- **Cost — the real constraint:** encrypted columns cannot be filtered,
+  joined, ordered or aggregated in SQL. `portfolio/history_query.py` and the
+  valuation rollups do exactly that, so blanket encryption would force those
+  aggregations into Python. Workable fields are the ones only ever read whole:
+  wallet labels, manual-asset notes, and (via a blind index — a keyed HMAC
+  column for lookup alongside the ciphertext) wallet addresses.
+- **Verdict:** a good incremental second layer, scoped to non-aggregated
+  columns. Do not attempt to encrypt the valuation/quote history this way.
+
+### E. Encrypted backups — done
+
+Whatever is picked above, the moment someone writes a dump it is a plaintext
+copy of everything, outside whatever protection the volume had. `pg_dump` piped
+through `age`/`gpg`, with the recipient key held to the same discipline as
+`master_key.hex`, is implemented in `scripts/backup.sh` / `scripts/restore.sh`
+(AUD-390) and drill-verified in
+[verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390).
+
+## 3. Where that leaves the backlog
+
+| # | Action | Option | Effort | Owner |
+| --- | --- | --- | --- | --- |
+| 1 | Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance | A | S | infra |
+| 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
+| 3 | Extend envelope encryption to wallet labels/addresses + manual-asset notes, with an HMAC blind index for address lookup | D | M | backend |
+| 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
+| 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
+
+Items 1–3 are additive, carry no migration risk, and together close the
+realistic threat (disk or backup leaves the building) without touching the
+zero-config promise.
+
+## 4. The open product decision
+
+Today `SECRET_KEY` sits in a file on the same host as the database. Anyone who
+takes the whole machine takes both halves, and volume encryption only helps
+while the machine is powered off. The rotki property — *"the data is useless
+without the password only the owner knows"* — requires deriving the KEK from
+the owner's login password (Argon2id) and holding the master key in memory only
+for the duration of a session.
+
+That directly conflicts with the always-on `worker`. The three ways out:
+
+1. **Keep the current model.** `SECRET_KEY` on disk, background jobs always
+   run. Simplest; disk theft of a *powered-off* box is covered by LUKS.
+2. **Password-derived key, degraded background work.** Jobs run only while a
+   session is live; quotes and the event index go stale when nobody logs in.
+   Maximum confidentiality, visibly worse product.
+3. **Two-tier keys.** A machine key (as today) protects operational data the
+   worker needs — quotes, the event index, news. A password-derived key
+   protects the owner-identifying set — addresses, labels, holdings — which the
+   worker arguably does not need in plaintext. Best balance, most work, and it
+   needs a careful audit of what the worker actually reads.
+
+Until that is decided, items 1–4 stand on their own and none of them foreclose
+any of the three.

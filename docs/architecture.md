@@ -22,9 +22,8 @@ audr is two application processes and a database, not one monolith.
 | `migrate` | `alembic upgrade head && python -m audr.operations.init_key` | One-shot bootstrap. Exits 0 and stays exited. |
 | `db` | PostgreSQL 16 | All persistent state, in the `db_data` named volume. |
 
-There used to be a fifth service, `web` (nginx), which served the SPA and
-reverse-proxied `^/(api|health)/` to `api:8000`. AUD-388 folded it into `api`
-— see [containers.md](containers.md) for the rationale and the trade-off.
+There is no separate web server: `api` serves the SPA itself. The reasoning and
+the trade-off that implies are in [containers.md](containers.md).
 
 The api/worker split is deliberate and load-bearing. `create_app()` installs
 middleware, exception handlers and routers — nothing else. A long RPC scan or a
@@ -120,8 +119,8 @@ PostgreSQL 16. All primary keys are UUIDs defaulted by `pgcrypto`'s
 columns are `numeric` — never float.
 
 Migrations are a linear chain from the squashed baseline **`0001`** to head
-**`0016`**. `0001_baseline.py` has `down_revision = None` and replaces the
-original 001–008; see the AUD-306 history if you need the pre-squash tree.
+**`0016`**. `0001_baseline.py` has `down_revision = None` and squashes the
+original revisions 001–008; the pre-squash tree exists only in the git history.
 
 ### Identity and ownership
 
@@ -237,8 +236,8 @@ again, so a keyed provider recovers by itself once its quota resets.
 Two deliberate exceptions:
 
 - **`validate_rpc` never falls back.** It probes exactly the endpoint you
-  configured, so the Connections page keeps telling the truth about *your*
-  key rather than about a public fallback.
+  configured, so the Connections page keeps telling the truth about *your* key
+  rather than about a public fallback.
 - **A URL that stops passing SSRF validation is a hard failure**, not a reason
   to fall back. Silently rerouting a rebound hostname would defeat the check.
 
@@ -312,8 +311,7 @@ unreadable; recovery is in
 ## 7. Frontend
 
 A React 19 SPA built by Vite and served as static files by the `api` process
-from `/app/static` (AUD-388; nginx did this before). No server-side rendering
-and no router library.
+from `/app/static`. No server-side rendering and no router library.
 
 - `main.tsx` → `App.tsx`. TanStack Query drives everything. The app gates on
   `fetchSetupStatus` then `fetchSession`, rendering `SetupPage` or `SignInPage`
@@ -329,13 +327,13 @@ and no router library.
 - `src/components/` — Layout (which owns the nav list), AllocationList,
   AssetEmblem, AssistantPanel, ErrorBoundary, HistoryChart, HistoryTable, Icons,
   MoneyValue, NewsFeed, ScanStatus.
-- The **assistant is an interface prototype, not a feature** (AUD-436). It has
-  no model and no backend; `AssistantPanel` replays a fixed list of phrases,
-  none of which may assert anything about the operator's actual holdings. It is
+- The **assistant is an interface prototype, not a feature**. It has no model
+  and no backend; `AssistantPanel` replays a fixed list of phrases, none of
+  which may assert anything about the operator's actual holdings. It is
   therefore kept out of the nav and out of every in-app link, and is reachable
   only by typing `#/assistant-prototype`, where the page says so in a banner
-  before the panel. When `POST /api/v1/assistant/chat` exists (AUD-302) the
-  route earns a nav slot again and the banner goes away.
+  before the panel. The route earns a nav slot again, and loses the banner,
+  once a real `POST /api/v1/assistant/chat` backs it.
 - `src/api/client.ts` — `BASE = '/api/v1'`, a module-level CSRF token
   (`setCSRFToken`/`getCSRFToken`), and `ApiError`/`AuthError` classes over the
   typed error envelope.
@@ -363,7 +361,7 @@ CLI path.
 | `CMC_RATE_LIMIT_PER_SECOND` | `0.5` | Keyless CoinMarketCap quota is tight and unpublished. |
 | `CMC_RATE_LIMIT_BURST` | `1` | |
 | `ASSET_ICONS_REMOTE_FETCH` | `true` | Set `false` to stop all outbound icon fetches; the UI then shows monograms only. |
-| `ASSET_ICON_CG_RATE_LIMIT_PER_SECOND` | `0.5` | Keyless CoinGecko icon fallback. |
+| `ASSET_ICON_CG_RATE_LIMIT_PER_SECOND` | `0.5` | Request budget for the keyless CoinGecko icon fallback, whose per-IP quota is as tight and as unpublished as the quote endpoint's. |
 | `ASSET_ICON_CG_RATE_LIMIT_BURST` | `1` | |
 
 Test-only variables (`TEST_DATABASE_URL`, `RPC_MOCK_URL`, `QUOTE_MOCK_URL`,

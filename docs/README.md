@@ -10,10 +10,10 @@ order you will need them.
 
 | Document | What it covers |
 |---|---|
-| [operations.md](operations.md) | **Start here.** Install, secrets, seeding, TLS, backup and restore, key loss, purge, reset, troubleshooting |
+| [operations.md](operations.md) | **Start here.** Install, secrets, TLS, backup and restore, key loss, purge, reset, troubleshooting |
 | [architecture.md](architecture.md) | What the parts are and how they fit: processes, data model, background jobs, auth, providers, and the full configuration reference |
 | [api.md](api.md) | The HTTP API as implemented — every route, its auth requirement and its behaviour. Needed if you script against audr |
-| [security-at-rest.md](security-at-rest.md) | What encryption at rest does and does not protect against here, and what is recommended |
+| [security-at-rest.md](security-at-rest.md) | What encryption at rest does and does not protect against here, what is recommended, and how to handle and rotate the key |
 
 Also useful: [third-party.md](third-party.md) lists the exact image and
 dependency pins in a release, with licence attribution.
@@ -25,6 +25,7 @@ dependency pins in a release, with licence attribution.
 | [development.md](development.md) | Developer setup, every test suite and how to run it, lint/typecheck, migrations, conventions |
 | [engineering-workflow.md](engineering-workflow.md) | Branches, the shared checkout and worktrees, when to self-merge vs. escalate, the QA gate, planning artifacts |
 | [containers.md](containers.md) | Why each compose service exists, what was removed, what could still go |
+| [security-at-rest-design.md](security-at-rest-design.md) | The at-rest option space (LUKS, `pg_tde`, `pgcrypto`, wider envelope encryption), the rotki comparison, and the open product decision |
 | [releases.md](releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [deploy-runbook.md](deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
 | [github-actions.md](github-actions.md) | The public GitHub workflows: the test gate, the manual image release, GHCR and the README badges |

@@ -240,7 +240,7 @@ These are the house rules that come up most often. The full list is in
   image and carries three settings a user can act on. Build stanzas go in
   `compose.dev.yaml`, our registry in `compose.deploy.yaml`, and a rationale
   longer than two lines goes in `docs/` or next to the code it explains — not
-  into the file a new user reads first (AUD-439).
+  into the file a new user reads first.
 
 ---
 

@@ -141,7 +141,7 @@ carried-forward balances — a subset, not an addition. Allocation percentages
 refer to the included priced subtotal; when that is zero or unknown they are
 `null` and the UI draws no slices.
 
-**Allocations (AUD-404)** are aggregated **per asset_id**, not per holding —
+**Allocations** are aggregated **per asset_id**, not per holding —
 two wallets holding the same asset collapse into a single row, so an asset
 never appears twice. Each row carries `asset_id`, `symbol`, `value_usd`
 (summed across contributing wallets, or `null` if the asset is unpriced),
@@ -210,7 +210,7 @@ in the database are `rpc` and `coingecko`.
 Neither integration has to be configured to work, so a read also reports what is
 being used right now: `effective_source` (the keyless public RPC host or the
 active price provider's label) and `using_default`. `configured: false` therefore
-means "no owner override", not "unavailable" (AUD-440).
+means "no owner override", not "unavailable".
 
 The quotes entry carries `options`, the providers the backend can actually drive
 — currently `coinmarketcap` (keyless, the default) and `coingecko` (requires a
@@ -325,7 +325,7 @@ Reads need only the cookie. Mutations need the cookie **and** the header.
 
 ## 6. Known divergences from the specification
 
-Tracked under AUD-335 and encoded as `xfail(strict=True)` tests, so an
+Each divergence below is encoded as an `xfail(strict=True)` test, so an
 accidental fix shows up in CI just as loudly as a regression.
 
 | ID | Divergence |
@@ -334,11 +334,11 @@ accidental fix shows up in CI just as loudly as a regression.
 | SD-2 | `GET /api/v1/catalog` is not implemented (404). Catalog coverage is therefore not exposed as its own endpoint. |
 | SD-3 | Password change is `PATCH /auth/password`; the spec mandates `PUT` (which returns 405). |
 | SD-4 | Async triggers (`POST /jobs`, `POST /integrations/{kind}/validate`, `POST /jobs/{id}/cancel`, `POST /data/provider-purge`) return **200**, not the specified 202. |
-| SD-5 | Error-envelope shape — **resolved** in AUD-320; no longer xfail. |
 | SD-8 | `POST /auth/login` returns 422 on a wrong password; the spec mandates 401. |
 | SD-9 | `GET /history` returns `{entries}`, not the specified `{items}`. |
 
-(SD-6 and SD-7 are unused; the numbering skips them.)
+(The numbering skips SD-5, which was resolved and is no longer a divergence,
+and SD-6/SD-7, which were never used.)
 
 One more gap worth knowing, from
 [release-1-coverage.md](release-1-coverage.md): `api/portfolio.py` hardcodes

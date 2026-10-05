@@ -27,8 +27,8 @@ maintained by hand.
 ### 1.1 Base images
 
 `Dockerfile` references its bases by tag (`node:22-alpine`, `python:3.14-slim`)
-so that a reader can see which runtimes the image is built on — AUD-418 replaced
-the `@sha256:` pins that used to be there. Tags float: the digests below are the
+so that a reader can see which runtimes the image is built on, rather than by
+`@sha256:` digest. Tags float: the digests below are the
 ones those tags resolved to on 2026-10-04, recorded here so a past build can be
 reproduced with `docker build --build-context` or by temporarily re-pinning the
 `FROM` lines to a digest. Re-check them after any base-image bump with:
@@ -43,9 +43,8 @@ docker buildx imagetools inspect python:3.14-slim --format '{{.Manifest.Digest}}
 | `frontend-builder` | `node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage only — not shipped. |
 | `backend-builder`, `runtime` | `python:3.14-slim` | `sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
 
-AUD-388 removed a fourth stage, `frontend-server` (`nginx:1.27-alpine`,
-BSD-2-Clause), along with the `audr-frontend` image it produced. nginx is no
-longer redistributed in any form: the API serves the SPA itself.
+These two stages are all there is. nginx is not redistributed in any form — the
+API serves the SPA itself — so no web-server licence applies to this image.
 
 ### 1.2 Published images
 
@@ -58,9 +57,8 @@ repository variable in CI); this repository is public and records no endpoint.
 | --- | --- | --- |
 | `$AUDR_REGISTRY/audr-backend` | `latest` | `sha256:9e9f2dfe31ffb030f1dca8eb6721832f8912e33407e1a1631495146a880f5c0e` |
 
-One image since AUD-388. The `audr-frontend` repository is no
-longer built or pushed; whatever tags remain in the registry are orphans from
-before that change.
+There is one image. An `audr-frontend` repository existed earlier and is no
+longer built or pushed; whatever tags remain in the registry are orphans.
 
 This digest moves on every build. To resolve the digest for the image a
 host is actually running, ask the registry for the manifest of the deployed
@@ -79,16 +77,15 @@ by tag rather than digest (see 1.1), so two builds of the same commit can sit on
 different base revisions; the pinned Python and npm lockfiles, and everything
 audr itself ships, do not move.
 
-Until AUD-379 there was one exception: the `runtime` stage ran
-`apt-get install --no-install-recommends curl` for the container health check,
-so `curl` and its dependencies resolved to whatever the Debian archive served
-at build time and two builds of the same commit could ship different versions.
-Pinning an exact Debian version would have required pinning the whole apt
-snapshot, so the apt layer was removed instead: the health check in
+The `runtime` stage installs no OS packages at all, which is what keeps that
+true. In particular it ships no `curl`: the container health check in
 `compose.yaml` calls the interpreter already present in the image
-(`python -m audr.operations.healthcheck`, stdlib `urllib`). `curl` is no longer
-installed or redistributed, so its [licence](https://curl.se/docs/copyright.html) (an MIT/X
-derivative) no longer applies to this image.
+(`python -m audr.operations.healthcheck`, stdlib `urllib`). An apt layer would
+resolve to whatever the Debian archive served at build time, and pinning an
+exact Debian version means pinning the whole apt snapshot. Since `curl` is
+neither installed nor redistributed, its
+[licence](https://curl.se/docs/copyright.html) (an MIT/X derivative) does not
+apply to this image.
 
 The host-side scripts (`scripts/deploy.sh`, `scripts/smoke-test.sh`,
 `scripts/seed_dev.sh`) and the Gitea deploy health-gate still use `curl`, but
@@ -103,8 +100,8 @@ dependency.
 
 Catalog data is **not code** and carries its own terms. Both files are vendored
 snapshots committed into the repository, so a fresh install needs no network
-call at worker startup (the rationale is in `backend/src/audr/assets/catalog.py`
-and AUD-357).
+call at worker startup (the rationale is in
+`backend/src/audr/assets/catalog.py`).
 
 | File | Entries | SHA-256 | Upstream | Licence |
 | --- | --- | --- | --- | --- |
@@ -114,10 +111,9 @@ and AUD-357).
 Notes:
 
 - The Uniswap list is GPL-3.0, which is compatible with audr's own GPL-3.0
-  licensing. Older internal design notes refer to `ethereum-lists/tokens`
-  (MIT); that source is **not** what ships —
-  the vendored snapshot was switched to the Uniswap default token list under
-  AUD-357, and this document describes what is actually in the image.
+  licensing. Older design notes refer to `ethereum-lists/tokens` (MIT); that
+  source is **not** what ships, and the table above describes what is actually
+  in the image.
 - Token names, symbols and contract addresses are third-party trademarks and
   factual data respectively; listing a token implies no endorsement.
 - `cmc_map_seed.json` is a seed only. `sync_cmc_map_live` can refresh it from
