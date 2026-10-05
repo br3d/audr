@@ -1,0 +1,17 @@
+# Installed by scripts/install-watchdog.sh as
+# /etc/systemd/system/audr-watchdog.timer. No substitution needed.
+[Unit]
+Description=Probe the audr stand every minute (AUD-444)
+
+[Timer]
+# 60s between probes, measured from the end of the last run rather than on a
+# calendar, so a slow probe cannot overlap itself.
+OnBootSec=2min
+OnUnitActiveSec=60
+AccuracySec=10s
+# Deliberately NOT Persistent=true, unlike audr-mirror.timer. A missed window
+# while the host was off is not an outage anyone can still respond to, and
+# replaying it on boot would alert about the past.
+
+[Install]
+WantedBy=timers.target

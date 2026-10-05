@@ -1,0 +1,18 @@
+# Template — scripts/install-watchdog.sh substitutes @INSTALL_DIR@ and
+# @REMOTE_DIR@ and installs the result as /etc/systemd/system/audr-watchdog.service.
+# The paths are not in the tracked file because they are host layout, and this
+# repository is public; keeping them out also stops a second host from
+# inheriting the first one's directories by accident.
+[Unit]
+Description=audr stand health watchdog — alerts on a sustained /health/ready outage (AUD-444)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=codex
+# Where the live stack's compose.yaml and secrets/telegram.env are. notify.sh
+# reads the Telegram credentials out of that secrets directory, so the token
+# exists in exactly one place on this host and the unit carries no secret.
+Environment=AUDR_REMOTE_DIR=@REMOTE_DIR@
+ExecStart=@INSTALL_DIR@/scripts/stand-watchdog.sh

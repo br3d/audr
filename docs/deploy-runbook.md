@@ -111,7 +111,9 @@ normally end in a rollback that leaves the previous release serving. So the run
 status alone does not tell you whether to drop everything.
 
 The **Report stand state (failure path)** step at the end of every failed deploy
-answers exactly that question. Read it first:
+answers exactly that question, and since AUD-444 it also sends the DOWN verdict
+to Telegram so you do not have to be looking at the run to learn about it (see
+[Alerting](#alerting-how-you-find-out-the-stand-is-down)). Read it first:
 
 - `[stand] deploy FAILED but the stand is serving` — no outage. Fix the build or
   the gate at human speed.
@@ -137,6 +139,91 @@ Note that 1 *causes* 2: the public image's alembic tree lags the live DB, so a
 silent downgrade presents as a migration failure. Fix the image resolution
 before touching the schema; downgrading a schema to match an image that was
 never meant to run is how a bad deploy becomes a bad database.
+
+## Alerting: how you find out the stand is down
+
+AUD-443's two hours were not deploy time, they were nobody-noticing time. Two
+independent paths now push that fact out of a log and onto a phone, and they
+cover deliberately different failure shapes:
+
+| | fires when | threshold | lives in |
+|---|---|---|---|
+| CI failure step | a deploy fails **and** leaves `/health/ready` not-ok | none — immediate | `ci/gitea-overlay/workflows/deploy.yaml` |
+| `audr-watchdog.timer` | `/health/ready` fails 5 probes in a row, deploy or no deploy | ~5 min sustained | `scripts/stand-watchdog.sh` on the host |
+
+The watchdog is the one that matters most, because the CI step structurally
+cannot see an outage that no deploy caused — an OOM kill, a reboot, Postgres
+dying on its own produce no CI run at all. It probes every 60s, alerts on the
+fifth consecutive failure, repeats hourly while still down, and sends one
+`✅ RECOVERED` message when `/health/ready` returns ok again so the responder
+knows to stand down.
+
+It does not fire on the first failed probe on purpose: a single miss is
+routinely just a container restarting mid-deploy, and paging on it teaches the
+one person on call to mute the channel, which costs more than the five minutes
+it saves. Target human response is 15 minutes.
+
+**Channel: Telegram.** Chosen because the stand is on a LAN address — Telegram
+needs one outbound HTTPS POST and nothing listening, whereas healthchecks.io or
+any hosted prober needs ingress to `192.168.1.228` plus a firewall change just
+to receive a heartbeat.
+
+### Credentials
+
+Both paths call `scripts/notify.sh`, which reads `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` from the environment or from `~/audr/secrets/telegram.env` on
+the deploy host. One file, one copy to rotate, and nothing in this repository —
+it is public. `secrets/` is gitignored.
+
+**`notify.sh` with no credentials logs the message and exits 0.** That is
+deliberate: every caller is already on a failure path, and an alerting helper
+that turns "the stand is down" into "the alerting helper also broke" is worse
+than none. The consequence is that the code paths all run on a fresh clone, and
+that activating the channel is purely dropping the file in place — no code
+change, no redeploy:
+
+```bash
+# 1. @BotFather -> /newbot, keep the token.
+# 2. Send the bot any message, then read the chat id from
+#    https://api.telegram.org/bot<TOKEN>/getUpdates  ->  result[].message.chat.id
+# 3. On the deploy host:
+umask 077
+cat > ~/audr/secrets/telegram.env <<'CREDS'
+TELEGRAM_BOT_TOKEN=123456:AA...
+TELEGRAM_CHAT_ID=987654321
+CREDS
+# 4. Prove delivery. --strict makes an unconfigured/undelivered send exit 1.
+~/.local/share/audr-watchdog/scripts/notify.sh --strict "audr alerting test"
+```
+
+### Installing and inspecting the watchdog
+
+```bash
+scripts/install-watchdog.sh            # install or update, then show status
+scripts/install-watchdog.sh --check    # what is installed, and whether creds exist
+```
+
+The installer copies the two scripts to `~/.local/share/audr-watchdog/scripts/`
+and renders the unit from `ci/host-units/audr-watchdog.service.in`. The copy is
+the point: the only git checkout on that host belongs to the CI runner, which
+rewrites it every deploy and resets it on a failed one, so a watchdog pointed at
+it would lose its code exactly when it is needed.
+
+**Editing `scripts/stand-watchdog.sh` or `scripts/notify.sh` does not reach the
+host until `install-watchdog.sh` runs again.** This is the opposite of the
+workflows, which ship with the commit since AUD-443 — remember the difference.
+
+```bash
+systemctl list-timers audr-watchdog.timer      # next/last probe
+journalctl -u audr-watchdog.service -n 50      # probe history and alert decisions
+sudo systemctl start audr-watchdog.service     # probe right now
+cat ~/.local/state/audr-watchdog/consecutive-failures   # 0 when healthy
+```
+
+To silence it during planned maintenance, `sudo systemctl stop
+audr-watchdog.timer` — and start it again afterwards. Stopping the timer is
+better than raising the threshold, because the counter file resets on the first
+healthy probe either way.
 
 ## Recovering a schema/image mismatch by hand
 
