@@ -14,13 +14,20 @@ normal workflow runs entirely in containers.
 ```bash
 git clone https://github.com/br3d/audr.git && cd audr
 bash scripts/setup-secrets.sh
-docker compose up -d
+export COMPOSE_FILE=compose.yaml:compose.dev.yaml   # build from this checkout
+docker compose up -d --build
 curl -s http://localhost/health/live       # {"status":"ok"}
 ./scripts/seed_dev.sh                      # dev fixtures — creates the owner with
                                            # the canonical *test* password
 ```
 
-`docker compose up` builds from source when the registry images are not present.
+`compose.yaml` on its own pulls the published release — that is what an operator
+installing audr gets. `compose.dev.yaml` is the development overlay that adds
+the `build:` stanzas, so the three backend services run the image built from
+your working tree (tagged `audr-backend:dev`) instead. Export `COMPOSE_FILE`
+once per shell as above and every later `docker compose` in that shell merges
+both files; otherwise pass `-f compose.yaml -f compose.dev.yaml` each time.
+
 `migrate` runs `alembic upgrade head` and then initialises the master key, and
 `api`/`worker` wait for it to exit 0.
 
@@ -84,7 +91,12 @@ ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
                     container release (github-actions.md)
 deploy.env.example  Template for the untracked deploy.env: registry and deploy
                     host for the scripts/ helpers (no addresses are tracked)
-compose.yaml        The production/local stack
+compose.yaml        The install: published image, no build, five lines of
+                    configuration. What an operator runs.
+compose.dev.yaml    Development overlay — adds `build:` so the stack runs your
+                    working tree
+compose.deploy.yaml Private-registry overlay for our own deploy host
+                    (AUDR_REGISTRY + BACKEND_TAG); not part of an install
 compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
 Dockerfile          3-stage build: frontend-builder, backend-builder, runtime
                     (runtime carries the SPA bundle at /app/static)
@@ -102,8 +114,8 @@ Vite SPA served by the `api` process itself.
 
 ### Backend
 
-The backend image bind-mounts nothing in `compose.yaml`, so a code change needs
-a rebuild:
+The backend image bind-mounts nothing, so a code change needs a rebuild — with
+the dev overlay active (`COMPOSE_FILE` exported as in §1, or `-f` twice):
 
 ```bash
 docker compose up -d --build api worker

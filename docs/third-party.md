@@ -86,8 +86,8 @@ at build time and two builds of the same commit could ship different versions.
 Pinning an exact Debian version would have required pinning the whole apt
 snapshot, so the apt layer was removed instead: the health check in
 `compose.yaml` calls the interpreter already present in the image
-(`python -c` with stdlib `urllib`). `curl` is no longer installed or
-redistributed, so its [licence](https://curl.se/docs/copyright.html) (an MIT/X
+(`python -m audr.operations.healthcheck`, stdlib `urllib`). `curl` is no longer
+installed or redistributed, so its [licence](https://curl.se/docs/copyright.html) (an MIT/X
 derivative) no longer applies to this image.
 
 The host-side scripts (`scripts/deploy.sh`, `scripts/smoke-test.sh`,

@@ -47,7 +47,8 @@ host unless you want the fast frontend loop below.
 ```bash
 git clone https://github.com/<you>/audr.git && cd audr
 bash scripts/setup-secrets.sh     # generates secrets/ and .env — idempotent
-docker compose up -d
+export COMPOSE_FILE=compose.yaml:compose.dev.yaml   # build from your checkout
+docker compose up -d --build
 curl -s http://localhost/health/live       # {"status":"ok"}
 ./scripts/seed_dev.sh                      # optional demo data
 ```
@@ -233,9 +234,13 @@ These are the house rules that come up most often. The full list is in
   needs a key.
 - **Runtime configuration belongs in the database and the UI**, not in
   environment variables. Env vars are for deployment-shaped facts only.
-- **Comments explain why.** Several comments in `compose.yaml`,
-  `compose.test.yaml` and the workflow files are load-bearing records of past
-  outages. Do not strip them.
+- **Comments explain why.** Several comments in the compose files and the
+  workflow files are load-bearing records of past outages. Do not strip them.
+- **`compose.yaml` is the install, not the workshop.** It pulls the published
+  image and carries three settings a user can act on. Build stanzas go in
+  `compose.dev.yaml`, our registry in `compose.deploy.yaml`, and a rationale
+  longer than two lines goes in `docs/` or next to the code it explains — not
+  into the file a new user reads first (AUD-439).
 
 ---
 

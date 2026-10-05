@@ -35,9 +35,9 @@ name: Build & Deploy (guarded)
 #          SIGTTOU and is STOPPED, hanging the job forever (the exact thing the
 #          timeout was added to prevent).
 #        * `compose run -T` — never allocate a TTY in a CI job.
-#   3b. Immutable tag pinning — compose.yaml resolves ${BACKEND_TAG} from
-#      $DEPLOY_DIR/.env and this job pins it to the build sha. A floating
-#      :latest is silently fatal: compose does not recreate a running service
+#   3b. Immutable tag pinning — the compose.deploy.yaml overlay resolves
+#      ${BACKEND_TAG} from $DEPLOY_DIR/.env and this job pins it to the build
+#      sha. A floating :latest is silently fatal: compose does not recreate a running service
 #      when a floating tag moves, so a deploy migrates the DB, passes the
 #      health-gate against the PREVIOUS containers and reports success while the
 #      running code never changed. Step 5b asserts each container actually runs
@@ -157,10 +157,13 @@ jobs:
           set -euo pipefail
           docker push "$REGISTRY/audr-backend:${{ steps.meta.outputs.tag }}"
 
-      - name: Sync compose file to deploy dir
+      - name: Sync compose files to deploy dir
         run: |
           set -euo pipefail
-          cp compose.yaml "$DEPLOY_DIR/compose.yaml"
+          # Both files: compose.yaml alone pulls the public ghcr.io release,
+          # compose.deploy.yaml is the overlay that redirects the three backend
+          # services at $AUDR_REGISTRY/$BACKEND_TAG.
+          cp compose.yaml compose.deploy.yaml "$DEPLOY_DIR/"
 
       - name: Guarded deploy
         env:
@@ -197,13 +200,21 @@ jobs:
           # DB_PASSWORD is needed for the direct alembic invocations below.
           set -a; . ./.env; set +a
 
-          # compose.yaml defaults to the public ghcr.io/br3d image; this host
-          # pulls from the private registry instead. Export it before
+          # compose.yaml pulls the public ghcr.io/br3d release; this host pulls
+          # from the private registry instead, which is what the
+          # compose.deploy.yaml overlay is for. All three are exported before
           # the first compose call — an exported value also wins over the .env
-          # file in compose's precedence order — and persist it into
+          # file in compose's precedence order — and persisted into
           # $DEPLOY_DIR/.env further down, so a manual `docker compose` on the
-          # host resolves this registry and not the public default.
+          # host resolves the same images this job deployed.
+          export COMPOSE_FILE="compose.yaml:compose.deploy.yaml"
           export AUDR_REGISTRY="$REGISTRY"
+          # BACKEND_TAG too, and this early: compose interpolates every
+          # service's `image:` when it loads the project — even for `up -d db`
+          # below — and the overlay requires the variable rather than defaulting
+          # it. The *pre-deploy* tag for the rollback snapshot is read out of
+          # .env with env_get, so exporting the new one here does not hide it.
+          export BACKEND_TAG="$TAG"
 
           # DB must be reachable before we touch the stack.
           timeout --foreground 180 docker compose up -d db
@@ -232,8 +243,8 @@ jobs:
           # Image tags are pinned in $DEPLOY_DIR/.env, NOT floated through
           # :latest. `docker compose up -d` does not recreate a running service
           # just because a floating tag now resolves to a different image ID —
-          # it compares the service *definition*. With `image: ...:latest` in
-          # compose.yaml, every deploy retagged :latest, ran the migrations,
+          # it compares the service *definition*. Back when the deployed image
+          # was `...:latest`, every deploy retagged :latest, ran the migrations,
           # passed the health-gate against the OLD containers and reported
           # "Deploy OK" while the running code never changed. Pinning the tag
           # makes the definition change, so the recreate — and therefore the
@@ -251,6 +262,7 @@ jobs:
             # resolving the stale value and silently skipping the recreate.
             export "$1=$2"
           }
+          env_set COMPOSE_FILE "compose.yaml:compose.deploy.yaml"
           env_set AUDR_REGISTRY "$REGISTRY"
           PREV_BACKEND_TAG="$(env_get BACKEND_TAG)";  PREV_BACKEND_TAG="${PREV_BACKEND_TAG:-latest}"
           log "pre-deploy pinned tag: backend=$PREV_BACKEND_TAG"

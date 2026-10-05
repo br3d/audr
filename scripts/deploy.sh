@@ -23,7 +23,7 @@ DEPLOY_TAG="${1:-}"
 DEPLOY_HOST="${DEPLOY_HOST:-${AUDR_DEPLOY_HOST:-}}"
 audr_require DEPLOY_HOST "SSH destination of the deploy host, e.g. deploy@audr.example.internal."
 REGISTRY="${REGISTRY:-${AUDR_REGISTRY:-}}"
-audr_require REGISTRY "Registry compose.yaml resolves \${AUDR_REGISTRY} against, e.g. registry.example.internal:5000."
+audr_require REGISTRY "Registry compose.deploy.yaml resolves \${AUDR_REGISTRY} against, e.g. registry.example.internal:5000."
 SSH_KEY="${AUDR_SSH_KEY:-${ROOT}/id_ed25519}"
 SSH="ssh -i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
 # Must be the directory the live compose project actually runs out of — check
@@ -39,9 +39,13 @@ else
   echo "==> Deploying to ${DEPLOY_HOST}:${REMOTE_DIR} (tag pinned in remote .env)"
 fi
 
-# Copy compose file to the remote host
+# Copy both compose files to the remote host. compose.yaml alone pulls the
+# public ghcr.io release; compose.deploy.yaml is the overlay that points the
+# three backend services at ${AUDR_REGISTRY}/${BACKEND_TAG} instead, and the
+# remote .env pins COMPOSE_FILE so every later `docker compose` — this
+# script's and any manual one on the host — merges the two.
 scp -i "${SSH_KEY}" -o StrictHostKeyChecking=accept-new \
-  "${ROOT}/compose.yaml" "${DEPLOY_HOST}:${REMOTE_DIR}/compose.yaml"
+  "${ROOT}/compose.yaml" "${ROOT}/compose.deploy.yaml" "${DEPLOY_HOST}:${REMOTE_DIR}/"
 
 # Pull new images, run migrations, restart services
 $SSH "${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" "${DEPLOY_TAG}" "${REGISTRY}" <<'REMOTE'
@@ -65,10 +69,12 @@ env_set() {
   fi
 }
 
-# compose.yaml defaults to the public ghcr.io/br3d image; this host pulls from
-# its own registry instead, so pin ${AUDR_REGISTRY} on every deploy — a fresh
-# bring-up would otherwise pull the public release rather than the image this
-# deploy just built.
+# Merge the private-registry overlay on every compose call in this directory.
+# Without it compose.yaml pulls the public ghcr.io release rather than the
+# image this deploy just built.
+env_set COMPOSE_FILE "compose.yaml:compose.deploy.yaml"
+# The overlay requires both variables, so pin the registry on every deploy —
+# compose fails loudly rather than falling back to the public image.
 env_set AUDR_REGISTRY "${REGISTRY}"
 
 # Pin the requested tag before pulling so every later step — pull, migrate,
@@ -76,7 +82,7 @@ env_set AUDR_REGISTRY "${REGISTRY}"
 if [ -n "${DEPLOY_TAG}" ]; then
   echo "  -> Pinning BACKEND_TAG to ${DEPLOY_TAG}"
   # Only BACKEND_TAG: the stack is one image. A stale FRONTEND_TAG line in the
-  # remote .env is inert — no service in compose.yaml interpolates it.
+  # remote .env is inert — no service interpolates it.
   env_set BACKEND_TAG "${DEPLOY_TAG}"
 fi
 

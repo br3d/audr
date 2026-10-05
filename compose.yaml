@@ -1,24 +1,19 @@
 name: audr
 
-# Out of the box this stack pulls the public release image
+# Installs the published release. Two commands, nothing to fill in:
 #
-#     ghcr.io/br3d/audr-backend:0.1.1
+#     bash scripts/setup-secrets.sh   # generates DB_PASSWORD and SECRET_KEY in .env
+#     docker compose up -d
 #
-# and nothing else from a registry (`postgres:16-alpine` aside). The default is
-# spelled out rather than hidden behind a variable so that you can see what your
-# machine is about to download before you run `docker compose up`. The
-# version moves with the repo: scripts/release.sh rewrites it here together with
-# the other version carriers, so a checkout of tag v0.4.1 pulls :0.4.1.
+# The version you run is the image tag below, and it moves with the repo:
+# `git pull && docker compose pull && docker compose up -d` upgrades you. To
+# stay on an older release, check out its tag (`git checkout v0.1.0`) — the tag
+# here always matches the checkout.
 #
-# Two overrides exist for operators who run their own registry — the deploy host
-# does, which is why they stay variables:
-#
-#   AUDR_REGISTRY  registry and namespace, e.g. registry.internal:5000
-#   BACKEND_TAG    image tag, e.g. 0.4.1-g1a2b3c4d5e6f
-#
-# scripts/deploy.sh and the CI deploy job pin both in the deploy directory's
-# .env. For local development use `docker compose up --build`, which builds the
-# image from the `build:` stanzas below and never consults a registry at all.
+# Building from source instead:  docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+# Deploying from a private registry:  see compose.deploy.yaml
+
+x-backend-image: &backend_image ghcr.io/br3d/audr-backend:0.1.1
 
 services:
   db:
@@ -27,9 +22,8 @@ services:
     environment:
       POSTGRES_DB: audr
       POSTGRES_USER: audr
-      # From .env, like every other credential in this stack: the DATABASE_URL
-      # lines below embed the same password, so a separate Docker secret file
-      # would only be a second copy of it to keep in sync.
+      # Generated into .env by scripts/setup-secrets.sh, like every other
+      # credential here; the DATABASE_URLs below embed the same value.
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is unset - run `bash scripts/setup-secrets.sh`}
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -42,15 +36,12 @@ services:
     networks:
       - internal
 
-  # Single one-shot bootstrap: schema migration, then master-key init. Order
-  # matters — `init_key` writes to `key_state`, which the 0001 baseline
-  # migration creates — hence `&&` rather than two parallel commands.
+  # One-shot bootstrap: schema migration, then master-key init. `&&` because
+  # init_key writes to a table the migration creates. `restart: "no"` because
+  # api/worker wait on it exiting 0 — retrying would hang `up` forever instead
+  # of failing. See docs/containers.md.
   migrate:
-    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *backend_image
     command:
       - sh
       - -c
@@ -64,18 +55,10 @@ services:
         condition: service_healthy
     networks:
       - internal
-    # One-shot. Must NOT restart: `api`/`worker` wait on it with
-    # service_completed_successfully, so an unbounded `restart: on-failure`
-    # turns a failed migration into a `docker compose up` that hangs forever
-    # instead of failing. Fail fast.
     restart: "no"
 
   api:
-    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *backend_image
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://audr:${DB_PASSWORD}@db:5432/audr
@@ -83,38 +66,13 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # The only published port in the project: this one process serves /api,
-    # /health and the built SPA out of /app/static. See docs/containers.md.
-    #
-    # Published on :80 by default. Set AUDR_HTTP_PORT in .env to move it — :80
-    # is often already taken by a local nginx or Portainer, and the resulting
-    # "port is already allocated" is the most common first-run failure. Only the
-    # host side is configurable; the container always listens on 8000, which is
-    # what the healthcheck and the deploy health-gate talk to.
+    # The only published port: this one process serves /api, /health and the
+    # SPA. Set AUDR_HTTP_PORT in .env if :80 is already taken on your host —
+    # only the host side moves, the container always listens on 8000.
     ports:
       - "${AUDR_HTTP_PORT:-80}:8000"
-    # Deliberately stdlib-Python and not `curl`: curl is not in the runtime
-    # image, and installing it would add an apt layer for a one-line HTTP
-    # request the interpreter already there can make. urllib raises on a
-    # connection failure and on any 4xx/5xx, so a non-zero exit covers every
-    # failure mode `curl -f` would.
-    #
-    # The except clause is not optional: letting the exception escape writes a
-    # ~2KB traceback into `.State.Health.Log`, and Docker keeps only the last 5
-    # entries at 4KB each, so the useful history gets crowded out. Printing the
-    # exception gives one readable line ("[Errno 111] Connection refused").
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - |
-          import sys, urllib.request
-          try:
-              sys.exit(0 if urllib.request.urlopen("http://localhost:8000/health/live", timeout=4).status == 200 else 1)
-          except Exception as exc:
-              print(exc)
-              sys.exit(1)
+      test: ["CMD", "python", "-m", "audr.operations.healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -123,7 +81,7 @@ services:
       - internal
 
   worker:
-    image: ${AUDR_REGISTRY:-ghcr.io/br3d}/audr-backend:${BACKEND_TAG:-0.1.1}
+    image: *backend_image
     restart: unless-stopped
     command: ["python", "-m", "audr.jobs"]
     environment:

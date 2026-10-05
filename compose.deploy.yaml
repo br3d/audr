@@ -1,0 +1,31 @@
+# Private-registry overlay for our own deploy host. Not part of a normal
+# install — compose.yaml alone pulls the public release.
+#
+# scripts/deploy.sh and ci/gitea-overlay/workflows/deploy.yaml copy this file
+# next to compose.yaml in the deploy directory and pin
+#
+#     COMPOSE_FILE=compose.yaml:compose.deploy.yaml
+#
+# in that directory's .env, so a manual `docker compose` on the host resolves
+# the same images the pipeline deployed.
+#
+# Both variables are required rather than defaulted: a missing value here must
+# fail the deploy, not silently fall back to the public image.
+#
+#   AUDR_REGISTRY  registry and namespace, e.g. registry.internal:5000
+#   BACKEND_TAG    immutable build tag, e.g. 0.4.1-g1a2b3c4d5e6f (never :latest —
+#                  compose will not recreate a running service whose image
+#                  reference is unchanged)
+#
+# See docs/deploy-runbook.md.
+
+x-backend-image: &backend_image
+  ${AUDR_REGISTRY:?AUDR_REGISTRY is unset - see deploy.env.example}/audr-backend:${BACKEND_TAG:?BACKEND_TAG is unset - pin the built tag in the deploy directory .env}
+
+services:
+  migrate:
+    image: *backend_image
+  api:
+    image: *backend_image
+  worker:
+    image: *backend_image
