@@ -306,6 +306,15 @@ export default function AssetsPage() {
     void queryClient.invalidateQueries({ queryKey: ['assets'] })
   }
 
+  // A just-added manual contract has no balance observation yet, so it is not
+  // held and the default held-only view would hide it the moment the modal
+  // closes — the add reads as a silent failure. Reveal the full catalog so the
+  // new row is actually on screen.
+  function onManualAssetAdded() {
+    setShowAllCatalog(true)
+    invalidate()
+  }
+
   if (isLoading) {
     return <p aria-busy="true">Loading assets…</p>
   }
@@ -442,7 +451,7 @@ export default function AssetsPage() {
 
       {showAddForm && (
         <AddManualAssetForm
-          onAdded={invalidate}
+          onAdded={onManualAssetAdded}
           onClose={() => setShowAddForm(false)}
         />
       )}
