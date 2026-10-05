@@ -16,7 +16,8 @@ git clone https://github.com/br3d/audr.git && cd audr
 bash scripts/setup-secrets.sh
 docker compose up -d
 curl -s http://localhost/health/live       # {"status":"ok"}
-./scripts/seed_dev.sh                      # optional demo data
+./scripts/seed_dev.sh                      # dev fixtures — creates the owner with
+                                           # the canonical *test* password
 ```
 
 `docker compose up` builds from source when the registry images are not present.
@@ -24,6 +25,11 @@ curl -s http://localhost/health/live       # {"status":"ok"}
 `api`/`worker` wait for it to exit 0.
 
 ### Demo data
+
+`scripts/seed_dev.sh` is a **development tool, not an end-user feature** — it is
+deliberately absent from the README's install path, because it creates the owner
+account with a password published in this repository. Never run it against an
+instance holding real addresses.
 
 `scripts/seed_dev.sh [BASE_URL]` creates the owner with the canonical test
 password `Rand0mP@ssw0rd` (the same one `backend/tests/fixtures/seed.py` uses),
@@ -55,7 +61,7 @@ gap. `AUDR_SEED_WALLET=skip` runs the RPC step only.
 
 This is a developer concern only. `scripts/setup-secrets.sh` — the install step
 an end user runs — deliberately knows nothing about it: a self-hosting user
-configures their RPC endpoint in Settings → Integrations, where the keyless
+configures their RPC endpoint on the Connections page, where the keyless
 default already works.
 
 ### Repository layout

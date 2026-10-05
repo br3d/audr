@@ -7,7 +7,7 @@ import {
   validateIntegration,
   ApiError,
 } from '../api/client'
-import type { IntegrationEntry } from '../api/client'
+import type { IntegrationEntry, ProviderOption } from '../api/client'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 function healthBadge(status: IntegrationEntry['health']['status']) {
@@ -25,6 +25,26 @@ function healthBadge(status: IntegrationEntry['health']['status']) {
   }
 }
 
+/** The source this integration is reading from right now, default or not.
+ *
+ * Both integrations work with no owner configuration at all, so the summary
+ * never says "unavailable" — it names the built-in keyless source and marks
+ * it as the default (AUD-440).
+ */
+function SourceSummary({ entry, fallback }: { entry: IntegrationEntry | null; fallback: string }) {
+  const source = entry?.effective_source ?? fallback
+  return (
+    <div className="row mb-16">
+      <span className="text-secondary fw-500">In use: {source}</span>
+      {entry?.using_default !== false && <span className="badge badge-neutral">Default</span>}
+      {entry?.configured && healthBadge(entry.health.status)}
+      {entry?.health.error_message && (
+        <span className="text-danger">{entry.health.error_message}</span>
+      )}
+    </div>
+  )
+}
+
 function RpcForm({
   current,
   onSaved,
@@ -34,6 +54,7 @@ function RpcForm({
   onSaved: () => void
   onValidated: () => void
 }) {
+  const [editing, setEditing] = useState(false)
   const [url, setUrl] = useState('')
   const [allowPrivate, setAllowPrivate] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +76,8 @@ function RpcForm({
         url: url.trim(),
         allow_private_host: allowPrivate || undefined,
       })
+      setEditing(false)
+      setUrl('')
       onSaved()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
@@ -85,8 +108,9 @@ function RpcForm({
         Ethereum RPC Endpoint
       </h2>
       <p className="muted-text mb-16">
-        Ethereum is the only supported network. Enter an HTTP(S) JSON-RPC URL for your own
-        node or a hosted service.
+        Ethereum is the only supported network. Balances are read through a public endpoint
+        that needs no account or key; pointing audr at your own node or a hosted service
+        (Infura, Alchemy, …) is an optional upgrade with higher rate limits.
       </p>
 
       <p className="muted-text mb-16">
@@ -95,67 +119,12 @@ function RpcForm({
         password, session, or quote credentials.
       </p>
 
-      {current?.configured && (
-        <div className="row mb-16">
-          <span className="text-secondary fw-500">
-            Current: {current.host_label ?? 'configured (URL masked)'}
-          </span>
-          {healthBadge(current.health.status)}
-          {current.health.error_message && (
-            <span className="text-danger">{current.health.error_message}</span>
-          )}
-        </div>
-      )}
+      <SourceSummary entry={current} fallback="public endpoint (no key required)" />
 
-      <form onSubmit={handleSave} noValidate className="form-grid">
-        <div className="form-group">
-          <label htmlFor="rpc-url" className="form-label">
-            RPC URL
-          </label>
-          <input
-            id="rpc-url"
-            type="url"
-            className="input-folio"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://mainnet.example.com/…"
-            required
-            disabled={submitting}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="toggle-row">
-          <input
-            type="checkbox"
-            id="allow-private"
-            className="checkbox-folio"
-            checked={allowPrivate}
-            onChange={(e) => setAllowPrivate(e.target.checked)}
-            disabled={submitting}
-          />
-          <label htmlFor="allow-private" className="toggle-label">
-            Allow private / LAN host
-          </label>
-        </div>
-        <p className="muted-text" style={{ marginTop: -8 }}>
-          Only enable if you run your own node on a private network. Redirects are always
-          denied.
-        </p>
-
-        {error !== null && (
-          <p role="alert" className="alert alert-danger">
-            {error}
-          </p>
-        )}
-
+      {!editing && (
         <div className="btn-group">
-          <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting
-              ? 'Saving…'
-              : current?.configured
-                ? 'Replace RPC endpoint'
-                : 'Save RPC endpoint'}
+          <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>
+            {current?.configured ? 'Change RPC endpoint' : 'Use my own RPC endpoint'}
           </button>
 
           {current?.configured && (
@@ -170,7 +139,69 @@ function RpcForm({
             </button>
           )}
         </div>
-      </form>
+      )}
+
+      {editing && (
+        <form onSubmit={handleSave} noValidate className="form-grid">
+          <div className="form-group">
+            <label htmlFor="rpc-url" className="form-label">
+              RPC URL
+            </label>
+            <input
+              id="rpc-url"
+              type="url"
+              className="input-folio"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://mainnet.example.com/…"
+              required
+              disabled={submitting}
+              autoComplete="off"
+            />
+          </div>
+
+          <div className="toggle-row">
+            <input
+              type="checkbox"
+              id="allow-private"
+              className="checkbox-folio"
+              checked={allowPrivate}
+              onChange={(e) => setAllowPrivate(e.target.checked)}
+              disabled={submitting}
+            />
+            <label htmlFor="allow-private" className="toggle-label">
+              Allow private / LAN host
+            </label>
+          </div>
+          <p className="muted-text" style={{ marginTop: -8 }}>
+            Only enable if you run your own node on a private network. Redirects are always
+            denied.
+          </p>
+
+          {error !== null && (
+            <p role="alert" className="alert alert-danger">
+              {error}
+            </p>
+          )}
+
+          <div className="btn-group">
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Save RPC endpoint'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setEditing(false)
+                setError(null)
+              }}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
 
       {validateMsg !== null && (
         <p role="status" className="alert alert-info mt-12">
@@ -181,6 +212,18 @@ function RpcForm({
   )
 }
 
+// Shown only until the server's option list arrives, so the picker is never
+// an empty select. Kept in sync with _QUOTE_PROVIDER_OPTIONS in
+// backend/src/audr/api/integrations.py.
+const FALLBACK_QUOTE_OPTIONS: ProviderOption[] = [
+  {
+    id: 'coinmarketcap',
+    label: 'CoinMarketCap (public endpoints)',
+    requires_api_key: false,
+    note: 'Used by default and needs no account or API key.',
+  },
+]
+
 function QuotesForm({
   current,
   onSaved,
@@ -190,27 +233,35 @@ function QuotesForm({
   onSaved: () => void
   onValidated: () => void
 }) {
-  const [provider, setProvider] = useState('')
+  const options = current?.options?.length ? current.options : FALLBACK_QUOTE_OPTIONS
+  const activeProvider = current?.provider ?? options[0].id
+
+  const [editing, setEditing] = useState(false)
+  const [provider, setProvider] = useState(activeProvider)
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [validating, setValidating] = useState(false)
   const [validateMsg, setValidateMsg] = useState<string | null>(null)
 
+  const selected = options.find((o) => o.id === provider) ?? options[0]
+
   async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError(null)
-    if (!provider.trim()) {
-      setError('Provider is required.')
+    if (selected.requires_api_key && !apiKey.trim()) {
+      setError(`${selected.label} requires an API key.`)
       return
     }
     setSubmitting(true)
     try {
       await updateQuotes({
         revision: current?.revision ?? '0',
-        provider: provider.trim(),
-        api_key: apiKey.trim() || undefined,
+        provider: selected.id,
+        api_key: selected.requires_api_key ? apiKey.trim() : undefined,
       })
+      setEditing(false)
+      setApiKey('')
       onSaved()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
@@ -241,8 +292,9 @@ function QuotesForm({
         Price Quote Provider
       </h2>
       <p className="muted-text mb-16">
-        A quote provider supplies USD prices for tokens in your portfolio. Without a
-        configured provider, quantities are tracked but values are unavailable.
+        A quote provider supplies the USD prices your portfolio is valued at. One is always
+        in use — the default needs no account or API key — so you only need to come here to
+        switch providers or add a key for wider token coverage.
       </p>
 
       <p className="muted-text mb-16">
@@ -251,65 +303,19 @@ function QuotesForm({
         password, or session credentials.
       </p>
 
-      {current?.configured && (
-        <div className="row mb-16">
-          <span className="text-secondary fw-500">
-            Current: {current.provider ?? current.host_label ?? 'configured'}
-          </span>
-          {healthBadge(current.health.status)}
-          {current.health.error_message && (
-            <span className="text-danger">{current.health.error_message}</span>
-          )}
-        </div>
-      )}
+      <SourceSummary entry={current} fallback="public price endpoint (no key required)" />
 
-      <form onSubmit={handleSave} noValidate className="form-grid">
-        <div className="form-group">
-          <label htmlFor="quotes-provider" className="form-label">
-            Provider
-          </label>
-          <input
-            id="quotes-provider"
-            type="text"
-            className="input-folio"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            placeholder="coingecko"
-            required
-            disabled={submitting}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="quotes-api-key" className="form-label">
-            API key <span className="text-muted">(optional)</span>
-          </label>
-          <input
-            id="quotes-api-key"
-            type="password"
-            className="input-folio"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            disabled={submitting}
-            autoComplete="new-password"
-          />
-          <p className="form-hint">Leave blank to use the public (rate-limited) tier.</p>
-        </div>
-
-        {error !== null && (
-          <p role="alert" className="alert alert-danger">
-            {error}
-          </p>
-        )}
-
+      {!editing && (
         <div className="btn-group">
-          <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting
-              ? 'Saving…'
-              : current?.configured
-                ? 'Replace quote provider'
-                : 'Save quote provider'}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setProvider(activeProvider)
+              setEditing(true)
+            }}
+          >
+            Change quote provider
           </button>
 
           {current?.configured && (
@@ -324,7 +330,80 @@ function QuotesForm({
             </button>
           )}
         </div>
-      </form>
+      )}
+
+      {editing && (
+        <form onSubmit={handleSave} noValidate className="form-grid">
+          <div className="form-group">
+            <label htmlFor="quotes-provider" className="form-label">
+              Provider
+            </label>
+            <select
+              id="quotes-provider"
+              className="input-folio"
+              value={selected.id}
+              onChange={(e) => {
+                setProvider(e.target.value)
+                setError(null)
+              }}
+              disabled={submitting}
+            >
+              {options.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                  {o.requires_api_key ? ' — API key required' : ' — no API key'}
+                </option>
+              ))}
+            </select>
+            <p className="form-hint">{selected.note}</p>
+          </div>
+
+          {selected.requires_api_key && (
+            <div className="form-group">
+              <label htmlFor="quotes-api-key" className="form-label">
+                API key
+              </label>
+              <input
+                id="quotes-api-key"
+                type="password"
+                className="input-folio"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                required
+                disabled={submitting}
+                autoComplete="new-password"
+              />
+              <p className="form-hint">
+                Stored encrypted and never shown again. To stop using it, switch back to the
+                keyless default.
+              </p>
+            </div>
+          )}
+
+          {error !== null && (
+            <p role="alert" className="alert alert-danger">
+              {error}
+            </p>
+          )}
+
+          <div className="btn-group">
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Save quote provider'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setEditing(false)
+                setError(null)
+              }}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
 
       {validateMsg !== null && (
         <p role="status" className="alert alert-info mt-12">
@@ -373,8 +452,9 @@ export default function ConnectionsPage() {
   return (
     <div style={{ display: 'grid', gap: 20 }}>
       <p className="page-subheading">
-        Configure the Ethereum RPC endpoint and price quote provider. No wallet connection,
-        private key, or seed phrase is ever requested.
+        audr works with no configuration here: it reads Ethereum through a public endpoint
+        and prices your holdings through a keyless provider. Change either one below. No
+        wallet connection, private key, or seed phrase is ever requested.
       </p>
       <RpcForm current={rpc} onSaved={handleRpcSaved} onValidated={handleRpcSaved} />
       <QuotesForm current={quotes} onSaved={handleQuotesSaved} onValidated={handleQuotesSaved} />

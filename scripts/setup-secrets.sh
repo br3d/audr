@@ -7,7 +7,7 @@
 # overwritten, so it is safe to re-run.
 #
 # Nothing else needs configuring here: blockchain RPC endpoints and price
-# providers are set up in the web interface under Settings → Integrations, and
+# providers are set up in the web interface on the Connections page, and
 # work without any key by default.
 set -euo pipefail
 

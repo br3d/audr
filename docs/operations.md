@@ -41,8 +41,8 @@ it is still there and `.env` is missing.
 
 ### Configuring an RPC endpoint
 
-There is nothing to configure on the host: open Settings → Integrations in the
-web interface and paste your RPC URL there. It is encrypted at rest with the
+There is nothing to configure on the host: open the Connections page in
+the web interface and paste your RPC URL there. It is encrypted at rest with the
 master key and validated on save. Leaving it empty is a supported setup — see
 the keyless fallback below.
 
@@ -69,7 +69,7 @@ Consequences for operators:
 - A rebound hostname is still a hard failure: if the stored URL stops passing
   SSRF validation the job fails rather than silently falling back.
 - `validate_rpc` deliberately does **not** fall back — it probes exactly the
-  endpoint you configured, so Settings → Integrations keeps telling the truth
+  endpoint you configured, so the Connections page keeps telling the truth
   about your own key.
 - Public endpoints are shared infrastructure with their own unannounced rate
   limits. A sustained 402 on the configured provider is worth fixing, not
@@ -450,5 +450,5 @@ The script:
 | `migrate` exits with `SECRET_KEY must be 32 bytes` | Corrupt `master_key.hex` | Regenerate per key-loss recovery above |
 | `migrate` exits non-zero | DB not healthy or migration conflict | `docker compose logs migrate`, check DB logs |
 | `api` health returns 503 | Migration not complete | Wait for `migrate` to finish; check `docker compose ps` |
-| `worker` logs `no RPC integration configured` | RPC provider not set | Informational — the keyless public endpoints still work; configure your own RPC URL in Settings → Integrations to upgrade |
+| `worker` logs `no RPC integration configured` | RPC provider not set | Informational — the keyless public endpoints still work; configure your own RPC URL on the Connections page to upgrade |
 | `GET /` returns 200 but the UI shows no data | The process is up and served the SPA, but the database behind it is not ready | Check `curl -s http://localhost/health/ready` for a `"status":"ok"` body, never a bare `/` |

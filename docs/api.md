@@ -199,13 +199,25 @@ These are implemented extensions beyond the release-1 spec.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/integrations` | session | Configured providers with derived health, a sanitized host label, and the current revision. |
+| GET | `/api/v1/integrations` | session | Each provider with derived health, a sanitized host label, the current revision, and the source actually in use. |
 | PUT | `/api/v1/integrations/rpc` | session + CSRF | Store an RPC URL and optional headers. Revision-checked; `allow_private_host` is an explicit opt-in. |
-| PUT | `/api/v1/integrations/quotes` | session + CSRF | Store the quote provider and API key. Revision-checked. |
+| PUT | `/api/v1/integrations/quotes` | session + CSRF | Select a quote provider, with an API key when that provider requires one. Revision-checked. |
 | POST | `/api/v1/integrations/{kind}/validate` | session + CSRF | Enqueue `validate_rpc` or `validate_quotes`. Returns `{run_id, coalesced}`. |
 
 `kind` in the validate path is `rpc` or `quotes`; the stored integration kinds
 in the database are `rpc` and `coingecko`.
+
+Neither integration has to be configured to work, so a read also reports what is
+being used right now: `effective_source` (the keyless public RPC host or the
+active price provider's label) and `using_default`. `configured: false` therefore
+means "no owner override", not "unavailable" (AUD-440).
+
+The quotes entry carries `options`, the providers the backend can actually drive
+— currently `coinmarketcap` (keyless, the default) and `coingecko` (requires a
+Demo API key) — each with `requires_api_key` and an explanatory `note`. `PUT
+/integrations/quotes` accepts only those ids: `coingecko` without a key is 422,
+and selecting `coinmarketcap` clears any stored CoinGecko key, which is the one
+piece of state that decides which provider the quote job uses.
 
 Secrets are never returned. A read exposes only `configured: true` and a
 sanitized host label — an RPC URL is not echoed back verbatim, and saving an

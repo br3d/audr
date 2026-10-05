@@ -37,7 +37,8 @@ private key.**
 - **ETH and ERC-20 balances over plain JSON-RPC.** No proprietary indexer and no
   portfolio API in the middle — a public endpoint works out of the box, your own
   Infura/Alchemy node is an upgrade.
-- **USD valuation** from a quote provider, refreshed on a schedule you control.
+- **USD valuation** out of the box — the default price provider needs no account
+  or API key — refreshed on a schedule you control.
 - **Value history** charted from the moment you add an address onward.
 - **Honest numbers.** A failed read says *failed*, a stale balance says *stale*
   and shows when it last succeeded, and token coverage is stated rather than
@@ -62,18 +63,18 @@ bash scripts/setup-secrets.sh     # generates .env and secrets/ — idempotent
 docker compose up -d              # pulls ghcr.io/br3d/audr-backend + postgres:16-alpine
 ```
 
-Then open <http://localhost/> and set the owner password (12–128 characters).
-Everything else — RPC endpoint, quote provider, addresses, schedules — is
-configured in the web interface; routine operation needs no file editing and no
-shell.
+Then open <http://localhost/>, set the owner password (12–128 characters) and add
+an address. Balances and USD prices start arriving without any further setup:
+audr reads the chain through a public JSON-RPC endpoint and prices holdings
+through a provider that needs no account or API key. Both are shown, with the
+source actually in use, under **Connections** — where you can swap in your own
+node or a keyed provider for higher rate limits and wider token coverage.
+Addresses and scan schedules live in the web interface too; routine operation
+needs no file editing and no shell.
 
-**No API keys are required to get started.** audr ships keyless defaults for
-every external provider. If port 80 is taken, set `AUDR_HTTP_PORT=8080` in
-`.env`. Only HTTP is served, so put a TLS-terminating reverse proxy in front of
-it before exposing it beyond localhost —
-see [operations.md](docs/operations.md#tls--https-proxy).
-
-Want a demo portfolio to look at first? `./scripts/seed_dev.sh`.
+If port 80 is taken, set `AUDR_HTTP_PORT=8080` in `.env`. Only HTTP is served, so
+put a TLS-terminating reverse proxy in front of it before exposing it beyond
+localhost — see [operations.md](docs/operations.md#tls--https-proxy).
 
 ---
 
