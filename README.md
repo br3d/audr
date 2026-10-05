@@ -37,8 +37,10 @@ private key.**
 - **ETH and ERC-20 balances over plain JSON-RPC.** No proprietary indexer and no
   portfolio API in the middle — a public endpoint works out of the box, your own
   Infura/Alchemy node is an upgrade.
-- **USD valuation** out of the box — the default price provider needs no account
-  or API key — refreshed on a schedule you control.
+- **USD valuation** out of the box — prices come from CoinMarketCap's public
+  endpoints, which need no account or API key — refreshed on a schedule you
+  control. A free CoinGecko Demo API key is the optional upgrade for wider token
+  coverage; those two are the only price sources audr supports.
 - **Value history** charted from the moment you add an address onward.
 - **Honest numbers.** A failed read says *failed*, a stale balance says *stale*
   and shows when it last succeeded, and token coverage is stated rather than
@@ -65,10 +67,14 @@ docker compose up -d              # pulls ghcr.io/br3d/audr-backend + postgres:1
 
 Then open <http://localhost/>, set the owner password (12–128 characters) and add
 an address. Balances and USD prices start arriving without any further setup:
-audr reads the chain through a public JSON-RPC endpoint and prices holdings
-through a provider that needs no account or API key. Both are shown, with the
-source actually in use, under **Connections** — where you can swap in your own
-node or a keyed provider for higher rate limits and wider token coverage.
+audr reads the chain through the public `ethereum-rpc.publicnode.com` endpoint
+and prices holdings through CoinMarketCap's public API, neither of which needs an
+account or an API key. Both are shown, with the source actually in use, under
+**Connections** — where you can point audr at your own node (any JSON-RPC URL)
+for higher rate limits, or switch the price source to CoinGecko's Demo API with
+a free key for wider token coverage. CoinMarketCap and CoinGecko are the only
+price providers audr can use; supporting another one takes a code change, not a
+setting.
 Addresses and scan schedules live in the web interface too; routine operation
 needs no file editing and no shell.
 
