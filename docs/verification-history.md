@@ -311,5 +311,65 @@ by the drill.
 The encrypted backup → total volume loss → encrypted restore path is proven
 end to end, including the safety refusal and the `gpg` fallback. See
 [operations.md#backups](operations.md#backups) for the operator-facing
-procedure and [security-at-rest.md](security-at-rest.md#e-encrypted-backups-separate--and-we-have-no-backup-path-at-all)
-for why this closes item 2 of the AUD-389 recommendation.
+procedure and [security-at-rest-design.md](security-at-rest-design.md#e-encrypted-backups--done)
+for why this closes item 2 of the at-rest backlog.
+
+---
+
+# Why `grep` over Postgres files and dumps is not evidence
+
+Measured on a PostgreSQL 16 instance unrelated to audr, on 2026-10-03, while
+checking whether a leaked credential had really been removed. Recorded here
+because the conclusion applies to any claim of the form "I grepped the data
+directory and it is clean".
+
+## Scope
+
+Two independent ways in which a `grep` that finds nothing runs over data that
+is demonstrably still present.
+
+## 1. The live heap — TOAST compression
+
+Postgres stores wide `text`/`jsonb` values out-of-line in a TOAST table,
+LZ-compressed. A row containing a 59-character marker string was present in
+the live database — `SELECT ... WHERE result_json::text LIKE '%marker%'`
+returned 1 row — while `grep -ra 'marker' <data-dir>` over the whole 526 MB
+data directory returned **0 files**. The columns were `attstorage = x`
+(extended) and large values compressed to ~0.32× their text length, so the
+plaintext bytes never appear contiguously on disk.
+
+## 2. The dumps — gzip, and encryption
+
+The same marker in an hourly `*.sql.gz` dump: `grep -c` → **0**, `zgrep -c` →
+**4**. audr's own `scripts/backup.sh` output is stronger still: `age`- or
+`gpg`-encrypted, so a raw `grep` is guaranteed to find nothing regardless of
+contents.
+
+## What a scan has to do instead
+
+```bash
+# dumps: decompress or decrypt on the fly — never raw grep, never to disk
+zgrep -c 'FINGERPRINT' dumps/*.sql.gz
+age -d -i secrets/backup_key.txt backups/audr-*.sql.age | grep -c 'FINGERPRINT'
+```
+
+```sql
+-- live DB: go through the engine, which decompresses TOAST transparently.
+-- Cast jsonb/json columns to text, and check every column that can hold
+-- captured process output, not just the obvious one.
+SELECT count(*) FROM public.some_table
+WHERE stdout_excerpt LIKE '%FINGERPRINT%'
+   OR result_json::text LIKE '%FINGERPRINT%';
+```
+
+Two further traps:
+
+- **Match on the secret's value, not its name.** Counting rows that contain
+  the string `SECRET_KEY` measures how often the *variable* is mentioned,
+  which includes every ticket, comment and transcript that merely discusses
+  the leak — the scan inflates itself. Fingerprint the rotated value.
+- **Scrubbing files is not scrubbing the database.** A value captured from
+  process output lands in database columns as well as log files, and from
+  there into every dump taken afterwards. Files need a rewrite; the database
+  needs an `UPDATE`. Rotate the credential first, then scrub copies — clearing
+  copies while the value is still live buys nothing.

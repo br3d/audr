@@ -80,6 +80,25 @@ blocks forever instead of failing.
   resolving the stale tag and skipping the recreate. `env_set` writes the file
   **and** exports.
 
+## Deploying by hand with `scripts/deploy.sh`
+
+The pipeline is the normal path; `./scripts/deploy.sh` is the same deploy driven
+from a workstation, for when the runner is unavailable. It needs the SSH key at
+`./id_ed25519` (mode `600`) and Docker Engine 26+ on the deploy host, and it:
+
+1. Copies `compose.yaml` and the private-registry overlay `compose.deploy.yaml`
+   to the host over SCP, and pins
+   `COMPOSE_FILE=compose.yaml:compose.deploy.yaml` in the remote `.env` so
+   manual compose commands there resolve the same images
+2. Pulls the current images from `$AUDR_REGISTRY`
+3. Runs `alembic upgrade head` via the `migrate` service
+4. Restarts the stack with `docker compose up -d --remove-orphans`
+5. Polls `/health` until healthy (60 s timeout)
+
+This is our deployment of our instance, not a self-hosting procedure — an
+operator running their own instance has no access to this registry and installs
+from `compose.yaml` alone, as [operations.md](operations.md) describes.
+
 ## Recovering a schema/image mismatch by hand
 
 Symptom: `migrate` crash-loops with `Can't locate revision identified by 'NNNN'`,

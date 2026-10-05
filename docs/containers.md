@@ -68,7 +68,7 @@ migration into a `docker compose up` that blocks forever. That is exactly what
 happened on 2026-09-29: the deploy job hung 2h18m mid-rollback and held the
 `audr-deploy` lock, starving every queued build.
 
-## What was removed in AUD-386
+## The `init` service that was folded into `migrate`
 
 There used to be a sixth service, `init`, which ran
 `python -m audr.operations.init_key` as a second one-shot chained after
@@ -118,7 +118,7 @@ A fair comparison is therefore: rotki 1 container because it is SQLite-backed
 and single-process; audr 3 because it is Postgres-backed with a separate job
 runner. The static-asset server that used to make it 4 is gone — see below.
 
-## What was removed in AUD-388
+## The `web` container that the API absorbed
 
 The `web` container (nginx) served the built SPA on port 80 and
 reverse-proxied `/api/*` and `/health/*` to `api`. It is gone, and the API

@@ -29,53 +29,49 @@ curl -s http://localhost/health/live
 | `secrets/master_key.hex` | 64-char hex master key-encryption-key — the backup copy of `SECRET_KEY`, which is not recoverable from anywhere else |
 | `.env` | `DB_PASSWORD` (generated here) and `SECRET_KEY` (copied from `master_key.hex`) — the only credentials Compose reads |
 
-Since AUD-418 the PostgreSQL password exists only as `DB_PASSWORD` in `.env`.
-There is no `secrets/db_password.txt` and no Docker secret: Compose needs the
-password in `.env` regardless, because the `DATABASE_URL` of the `api`,
-`worker` and `migrate` services embeds it, so the separate file was a second
-copy of the same value. Hosts installed before AUD-418 keep working — the file
-is simply no longer read, and `setup-secrets.sh` reuses the password from it if
-it is still there and `.env` is missing.
+The PostgreSQL password exists only as `DB_PASSWORD` in `.env`. There is no
+Docker secret for it and no separate password file: the `DATABASE_URL` of the
+`api`, `worker` and `migrate` services embeds the password, so Compose needs it
+in `.env` regardless. If an older install still has a `secrets/db_password.txt`,
+nothing reads it, and `setup-secrets.sh` will reuse the password from it when
+`.env` is missing.
 
 **Never commit `.env` or `secrets/`.** Both are in `.gitignore`.
 
 ### Configuring an RPC endpoint
 
-There is nothing to configure on the host: open the Connections page in
-the web interface and paste your RPC URL there. It is encrypted at rest with the
-master key and validated on save. Leaving it empty is a supported setup — see
-the keyless fallback below.
+There is nothing to configure on the host: open **Connections** in the web
+interface and paste your RPC URL there. It is encrypted at rest with the master
+key and validated on save. Leaving it empty is a supported setup — the keyless
+public endpoints below keep working.
 
 Filling a fresh instance with demo data (`scripts/seed_dev.sh`, including the
 `AUDR_SEED_RPC_URL` it reads) is a development-only workflow and is documented
 in [development.md](development.md#demo-data).
 
-### Keyless RPC fallback (AUD-364)
+### Keyless RPC fallback
 
 Configuring an RPC integration is an upgrade, not a prerequisite. The chain
 readers (`balance_scan`, `event_indexer`) always append the keyless public
 endpoints listed in `backend/src/audr/providers/rpc_defaults.py` after whatever
-is configured, and `RpcReader` moves to the next endpoint whenever one reports
-itself unusable — HTTP 402 (plan exhausted), 401/403 (bad or revoked key), 5xx,
-a transport failure, or a 429 that outlived its retries. The endpoint that
-answers is then used for the rest of that job run; a fresh run starts from the
-configured endpoint again, so a keyed provider recovers by itself once its quota
-resets.
-
-Consequences for operators:
+is configured, and move on to the next endpoint whenever one reports itself
+unusable. The failover rules are in
+[architecture.md](architecture.md#rpc-failover); what matters when you operate
+an instance:
 
 - An exhausted Infura/Alchemy plan degrades to public endpoints instead of
-  taking every chain-reading job down (the AUD-364 outage).
+  taking every chain-reading job down. A keyed provider is picked up again by
+  itself on the next job run, once its quota resets.
 - A rebound hostname is still a hard failure: if the stored URL stops passing
   SSRF validation the job fails rather than silently falling back.
-- `validate_rpc` deliberately does **not** fall back — it probes exactly the
-  endpoint you configured, so the Connections page keeps telling the truth
-  about your own key.
+- Validation on the Connections page does **not** fall back — it probes exactly
+  the endpoint you configured, so the page keeps telling the truth about your
+  own key.
 - Public endpoints are shared infrastructure with their own unannounced rate
   limits. A sustained 402 on the configured provider is worth fixing, not
   living on.
 
-### Keyless asset icon cache (AUD-385)
+### Keyless asset icon cache
 
 Token logos are resolved the same keyless-by-default way as RPC and quotes:
 the worker tries Trust Wallet's public GitHub asset repo first, then falls
@@ -85,11 +81,11 @@ serves what is already cached — the frontend falls back to a generated
 monogram for anything not yet resolved, so a cold cache never slows down the
 dashboard.
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `ASSET_ICONS_REMOTE_FETCH` | `true` | Set to `false` to stop the backend from ever contacting GitHub or CoinGecko for icons; the UI then shows monograms only. |
-| `ASSET_ICON_CG_RATE_LIMIT_PER_SECOND` | `0.5` | Request budget for the keyless CoinGecko fallback (shared with the CoinMarketCap quote limiter's caution — this endpoint has a tight, unpublished per-IP quota too). |
-| `ASSET_ICON_CG_RATE_LIMIT_BURST` | `1` | Burst allowance for the same limiter. |
+Set `ASSET_ICONS_REMOTE_FETCH=false` in `.env` to stop the backend from ever
+contacting GitHub or CoinGecko for icons; the UI then shows monograms only. The
+request budget for the keyless CoinGecko fallback is tunable too — both
+variables are in the
+[configuration reference](architecture.md#8-configuration-reference).
 
 ### Subsequent starts
 
@@ -114,10 +110,10 @@ docker compose ps             # check running services
 ```
 
 The `api` container serves everything on one port: the compiled React SPA for
-`/` and client-side routes, and the API for `/api/*` and `/health/*`. A separate
-nginx `web` container used to do the static serving and reverse-proxy the API;
-AUD-388 removed it — see `docs/containers.md` for the rationale and the
-trade-off. The worker polls the job queue; it never binds a port.
+`/` and client-side routes, and the API for `/api/*` and `/health/*`. There is
+no separate web server in the stack — see [containers.md](containers.md) for why
+each of the three services exists. The worker polls the job queue; it never
+binds a port.
 
 ---
 
@@ -136,16 +132,16 @@ docker compose exec api python -c \
   "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/live').read().decode())"
 ```
 
-The image ships no `curl` (AUD-379 removed the apt layer so the release image
-is fully digest-pinned), so use the interpreter for anything that needs an HTTP
-call from inside a container. From the host, `curl http://localhost/health/live`
-through the published port still works.
+The image installs no OS packages at all, which keeps it fully digest-pinned,
+so it ships no `curl`: use the interpreter for anything that needs an HTTP call
+from inside a container. From the host,
+`curl http://localhost/health/live` through the published port still works.
 
 ---
 
 ## TLS / HTTPS proxy
 
-The current configuration serves HTTP only. For production, place a reverse proxy (Caddy, Traefik, or nginx on the host) in front of the published port 80 and terminate TLS there. Doing so also recovers the static-serving qualities (gzip/brotli, cache headers) that were lost when the in-stack nginx container was removed in AUD-388.
+The stack serves HTTP only. For production, place a reverse proxy (Caddy, Traefik, or nginx on the host) in front of the published port 80 and terminate TLS there. That proxy is also where static-serving qualities belong — gzip/brotli compression and cache headers for the SPA assets, which the API process itself does not add.
 
 **Caddy example** (`/etc/caddy/Caddyfile` on the host):
 
@@ -158,10 +154,9 @@ yourdomain.com {
 Caddy handles certificate issuance and renewal automatically via Let's Encrypt.
 
 Note on forwarded headers: no application code reads `X-Forwarded-Proto`,
-`X-Forwarded-For` or `X-Real-IP`. The removed nginx container set them, but
-nothing consumed them, so removing it changed no behaviour. If you put a
-TLS-terminating proxy in front and need the app to know the external scheme or
-the real client IP, that is a uvicorn concern, not application code — add
+`X-Forwarded-For` or `X-Real-IP`. If you put a TLS-terminating proxy in front
+and need the app to know the external scheme or the real client IP, that is a
+uvicorn concern, not application code — add
 `--proxy-headers --forwarded-allow-ips=<proxy-ip>` to the `CMD` in the
 `Dockerfile`. Uvicorn only trusts these headers from `127.0.0.1` by default, so
 a proxy on another host or container IP is ignored until you widen that.
@@ -228,7 +223,7 @@ docker compose down -v    # WARNING: destroys all data
 docker volume rm audr_db_data
 ```
 
-On restart, the `migrate` service re-runs Alembic migrations (idempotent) and then `audr.operations.init_key`, which validates that the SECRET_KEY can unwrap the stored master key, before `api` and `worker` start. (These were two services, `migrate` and `init`, until AUD-386 folded them into one — see [containers.md](containers.md).)
+On restart, the `migrate` service re-runs Alembic migrations (idempotent) and then `audr.operations.init_key`, which validates that the SECRET_KEY can unwrap the stored master key, before `api` and `worker` start. Why that is a separate one-shot service rather than API startup code is in [containers.md](containers.md).
 
 ---
 
@@ -236,8 +231,8 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 
 audr has no proprietary indexer — a lost `db_data` volume with no backup means
 every wallet, holding, and valuation is gone. `scripts/backup.sh` and
-`scripts/restore.sh` (AUD-390) close that gap, encrypted from the first run.
-See [security-at-rest.md](security-at-rest.md) for the threat model this sits
+`scripts/restore.sh` close that gap, encrypted from the first run. See
+[security-at-rest.md](security-at-rest.md) for the threat model this sits
 inside.
 
 ### Running a backup
@@ -278,60 +273,22 @@ lifecycle rules. Each `master_key-<ts>.hex` is identical as long as the key
 hasn't been rotated, so only the most recent one needs to be kept offsite,
 but it costs nothing to keep one per dump.
 
-### Proving a database or dump is secret-free (`grep` lies here)
+### Searching a dump for a particular value
 
-If a secret leaks and you need to prove it is gone, **`grep` over the
-PostgreSQL data directory or over a dump file is not evidence**. It returns
-zero hits on data that is demonstrably still there, in two independent ways.
-Both were confirmed empirically on the Paperclip instance on ai-stuff under
-AUD-431:
-
-**1. The live heap — TOAST compression.** Postgres stores wide `text`/`jsonb`
-values out-of-line in a TOAST table, LZ-compressed. A row containing a
-59-character marker string was present in the live database
-(`... WHERE result_json::text LIKE '%marker%'` → 1 row), while
-`grep -ra 'marker' <data-dir>` over the whole 526 MB data directory returned
-**0 files**. The columns were `attstorage = x` (extended) and large values
-compressed to ~0.32× their text length, so the plaintext bytes never appear
-contiguously on disk. Anyone grepping the data dir would wrongly conclude the
-database was clean.
-
-**2. The dumps — gzip (and `age`).** The same marker in an hourly
-`*.sql.gz` dump: `grep -c` → **0**, `zgrep -c` → **4**. audr's own
-`scripts/backup.sh` output is stronger still — `age`/`gpg` encrypted, so a raw
-`grep` is guaranteed to find nothing regardless of contents.
-
-So a clean-bill-of-health scan has to decompress, or query through the
-database engine:
+A dump produced by `scripts/backup.sh` is encrypted, so a plain `grep` over it
+finds nothing regardless of what it contains. Decrypt on the fly rather than
+writing a plaintext copy to disk:
 
 ```bash
-# dumps: decompress on the fly — never raw grep
-zgrep -c 'FINGERPRINT' backups/*.sql.gz
-# age-encrypted audr dumps: decrypt on the fly, never to disk
-age -d -i secrets/backup_key.txt backups/audr-*.sql.age | grep -c 'FINGERPRINT'
+age -d -i secrets/backup_key.txt backups/audr-20261002-131755.sql.age | grep -c 'SOME_VALUE'
 ```
 
-```sql
--- live DB: go through the engine so TOAST is transparently decompressed.
--- Cast jsonb/json columns to text; check every column that can hold
--- captured process output, not just the obvious one.
-SELECT count(*) FROM public.heartbeat_runs
-WHERE stdout_excerpt LIKE '%FINGERPRINT%'
-   OR result_json::text LIKE '%FINGERPRINT%'
-   OR context_snapshot::text LIKE '%FINGERPRINT%';
-```
-
-Two further traps when scanning:
-
-- **Match on the secret's value, not its name.** Counting rows that contain
-  the string `SECRET_KEY` measures how often the *variable* is mentioned, which
-  includes every ticket, comment, and transcript that merely discusses the
-  leak — the scan inflates itself. Fingerprint the rotated *value*.
-- **Scrubbing files is not scrubbing the database.** A leaked value captured
-  from agent stdout lands in DB columns as well as transcript files, and from
-  there into every dump taken afterwards. Files need a rewrite; the database
-  needs an `UPDATE`. Always rotate the credential first, then scrub copies —
-  clearing copies while the value is still live buys nothing.
+The same caution applies to the live database: `grep` over the PostgreSQL data
+directory is not a reliable answer either, because Postgres stores wide
+`text`/`jsonb` values out-of-line and compressed. Query through the database
+engine (`docker compose exec db psql -U audr audr`), which decompresses
+transparently. The measurements behind this are in
+[verification-history.md](verification-history.md#why-grep-over-postgres-files-and-dumps-is-not-evidence).
 
 ### Restoring
 
@@ -362,10 +319,10 @@ depends on `migrate`'s completion.
 ### Restore drill
 
 A full backup → `docker compose down -v` (total volume loss) → restore → API
-health → data-intact cycle was run once against a throwaway Compose stack for
-AUD-390; see [verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390)
-for the steps and a race condition found (and worked around) in the drill
-itself.
+health → data-intact cycle has been run against a throwaway Compose stack; see
+[verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390)
+for the steps, which double as a template for rehearsing a restore on your own
+instance.
 
 ---
 
@@ -424,24 +381,16 @@ docker compose up -d
 
 ---
 
-## Deployment to remote host
+## Running on a remote host
 
-```bash
-# Deploy the latest images to the production host
-./scripts/deploy.sh
-```
+Nothing in the install is local-only: the same `scripts/setup-secrets.sh` plus
+`docker compose up -d` is the procedure on a remote box, run over SSH in its
+checkout. Upgrade it the same way as any other instance —
+`git pull && docker compose pull && docker compose up -d`.
 
-The script:
-1. Copies `compose.yaml` and the private-registry overlay
-   `compose.deploy.yaml` to the remote host over SCP, and pins
-   `COMPOSE_FILE=compose.yaml:compose.deploy.yaml` in the remote `.env` so
-   manual compose commands there resolve the same images
-2. Pulls the latest images from the Harbor registry
-3. Runs `alembic upgrade head` via the `migrate` service
-4. Restarts all services with `docker compose up -d --remove-orphans`
-5. Polls `/health` until healthy (60 s timeout)
-
-**Remote host requirements:** Docker Engine 26+, SSH key in `./id_ed25519`.
+Put a TLS-terminating proxy in front of it before exposing port 80 beyond
+localhost (see [TLS / HTTPS proxy](#tls--https-proxy)), and keep
+`secrets/master_key.hex` and the backups off that host.
 
 ---
 
