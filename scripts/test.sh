@@ -32,7 +32,17 @@ done
 
 teardown() {
   echo "==> Tearing down test environment"
-  "${COMPOSE[@]}" --profile backend --profile frontend down -v --remove-orphans || true
+  # `--rmi local` also removes the images Compose built for this project
+  # (`<project>-migrate-test`, `<project>-backend-tests`). Without it every run
+  # leaked two ~560MB images, because PROJECT is unique per invocation and so
+  # nothing ever reclaimed the previous run's tags: 238 orphans had accumulated
+  # on the agent host and took it to 97% disk. Rebuild cost is unaffected — a
+  # per-run project name means the image was never reused anyway, and the shared
+  # BuildKit cache still serves the layers. Skipped when the caller pinned
+  # AUDR_TEST_PROJECT, since that opts into reusing a long-lived stack.
+  local rmi=(--rmi local)
+  [[ -n "${AUDR_TEST_PROJECT:-}" ]] && rmi=()
+  "${COMPOSE[@]}" --profile backend --profile frontend down -v --remove-orphans "${rmi[@]}" || true
 }
 trap teardown EXIT
 
