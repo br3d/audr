@@ -213,6 +213,7 @@ export interface AssetItem {
   name: string | null
   decimals: number | null
   excluded: boolean
+  held: boolean
   metadata_source: MetadataSource
   has_metadata_conflict: boolean
   created_at: string
@@ -408,12 +409,20 @@ export function deleteWallet(id: string): Promise<DeleteWalletResponse> {
 
 // --- Assets API ---
 
-export function fetchAssets(excluded?: boolean, cursor?: string): Promise<AssetsResponse> {
-  const params = new URLSearchParams()
-  if (excluded !== undefined) params.set('excluded', String(excluded))
-  if (cursor) params.set('cursor', cursor)
-  const qs = params.toString()
-  return get<AssetsResponse>(`/assets${qs ? '?' + qs : ''}`)
+export interface FetchAssetsParams {
+  excluded?: boolean
+  held?: boolean
+  cursor?: string
+}
+
+export function fetchAssets(params: FetchAssetsParams = {}): Promise<AssetsResponse> {
+  const { excluded, held, cursor } = params
+  const qs = new URLSearchParams()
+  if (excluded !== undefined) qs.set('excluded', String(excluded))
+  if (held !== undefined) qs.set('held', String(held))
+  if (cursor) qs.set('cursor', cursor)
+  const query = qs.toString()
+  return get<AssetsResponse>(`/assets${query ? '?' + query : ''}`)
 }
 
 export interface AddManualAssetInput {
