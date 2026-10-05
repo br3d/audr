@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Sync ci/gitea-overlay/workflows/ -> the deploy host's mirror overlay.
 #
-# The Gitea Actions workflow files that actually run live only on the deploy
-# host, at ~/.config/audr-mirror/overlay/.gitea/workflows/. This script keeps
-# the versioned copies in ci/gitea-overlay/workflows/ and that directory in
-# agreement. See ci/gitea-overlay/README.md.
+# MAINTENANCE ONLY — this is not how a workflow change ships. Since AUD-443 the
+# mirror reads the workflow content out of the main commit it is mirroring, so
+# ci/gitea-overlay/workflows/ IS what runs: commit, push to main, done.
+#
+# The host directory ~/.config/audr-mirror/overlay/.gitea/workflows/ now only
+# supplies files the commit does not carry. This script still reconciles the two,
+# which is worth doing to prune a stale host copy so that fallback cannot
+# surprise anyone. See ci/gitea-overlay/README.md.
 #
 #   scripts/sync-ci-overlay.sh           diff, then push on confirmation
 #   scripts/sync-ci-overlay.sh --check   diff only; exit 1 on drift (CI/drift guard)

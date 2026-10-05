@@ -382,13 +382,14 @@ owns `main`, or drive it with `git -C /home/codex/git/audr`.
 
 ## 8. Build and deploy
 
-The authoritative pipeline is **Gitea Actions**, whose versioned source of
-record is `ci/gitea-overlay/` (deliberately not tracked at `.gitea/workflows/`,
-so the mirror does not replay the suite for every stale branch). `ci.yaml` runs
-the backend and frontend suites on push to `main`; `deploy.yaml` is a single
+The authoritative pipeline is **Gitea Actions**, and the files that run are
+`ci/gitea-overlay/workflows/` in this repo — the mirror reads them out of the
+`main` commit and bakes them in as `.gitea/workflows/` (they are deliberately not
+tracked there, so the mirror does not replay the suite for every stale branch).
+Editing one and pushing to `main` is all that is needed. `ci.yaml` runs the
+backend and frontend suites on push to `main`; `deploy.yaml` is a single
 serialized, guarded build-and-deploy job. Read
-[deploy-runbook.md](deploy-runbook.md) before touching either, and use
-`scripts/sync-ci-overlay.sh --check` as a drift guard.
+[deploy-runbook.md](deploy-runbook.md) before touching either.
 
 The shell scripts are the manual fallback:
 

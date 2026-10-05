@@ -216,6 +216,32 @@ jobs:
           # .env with env_get, so exporting the new one here does not hide it.
           export BACKEND_TAG="$TAG"
 
+          # Assert the overlay actually took effect before anything touches the
+          # DB. Every variable above can be set correctly and still resolve to
+          # the public image — e.g. if compose.deploy.yaml never made it into
+          # $DEPLOY_DIR, which is exactly how AUD-443 happened: a stale host
+          # overlay copied compose.yaml alone, the three backend services
+          # silently resolved to ghcr.io/br3d/audr-backend:0.1.1, and `migrate`
+          # then died on a revision that old image had never heard of. Health
+          # gates cannot catch it — by then the stack is already down. This can,
+          # in one second, before the first destructive step.
+          for f in compose.yaml compose.deploy.yaml; do
+            [ -f "$f" ] || { log "FATAL: $f missing in $DEPLOY_DIR — overlay not synced"; exit 2; }
+          done
+          resolved="$(docker compose config --images | sort -u)"
+          log "resolved images:"; printf '%s\n' "$resolved" | sed 's/^/    /'
+          # Every audr-backend reference must be the tag this job just built in
+          # the private registry. Anything else — public ghcr.io, a floating
+          # :latest, a stale tag — is a deploy that would not ship this build.
+          if printf '%s\n' "$resolved" | grep 'audr-backend' | grep -qv "^${REGISTRY}/audr-backend:${TAG}$"; then
+            log "FATAL: compose resolved a backend image that is not ${REGISTRY}/audr-backend:${TAG}"
+            log "       the compose.deploy.yaml overlay did not take effect — refusing to deploy"
+            exit 2
+          fi
+          printf '%s\n' "$resolved" | grep -q "^${REGISTRY}/audr-backend:${TAG}$" \
+            || { log "FATAL: ${REGISTRY}/audr-backend:${TAG} absent from resolved images"; exit 2; }
+          log "overlay verified: backend services pinned to ${REGISTRY}/audr-backend:${TAG}"
+
           # DB must be reachable before we touch the stack.
           timeout --foreground 180 docker compose up -d db
           for i in $(seq 1 20); do
