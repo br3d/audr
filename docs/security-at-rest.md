@@ -175,6 +175,76 @@ That directly conflicts with the always-on `worker`. The three ways out:
 Until that is decided, items 1–4 stand on their own and none of them foreclose
 any of the three.
 
+## 6. Handling key material: never echo a secret value (AUD-428)
+
+Everything above protects keys *at rest in the database*. It does nothing about
+the much easier leak: a key value copied into a place nobody thinks of as a
+secret store. That is not hypothetical here. In AUD-428 the live `SECRET_KEY`
+and `DB_PASSWORD` were found sitting in plaintext in **12 files on a different
+machine** — agent transcripts, session files, and run logs — the oldest dating
+to 2026-09-27. Two of those twelve were created by an agent printing a value
+where only a hash was intended, while verifying a claim about a *different*
+leak. The containment was luck (restrictive directory modes, unpublished
+Postgres port), not design.
+
+So the rule, for humans and agents alike:
+
+**Never write a secret value anywhere it will be recorded.** That includes
+command output, log lines, issue comments, documents, commit messages, test
+fixtures, and — the one that keeps catching us — shell commands whose arguments
+are captured in history or visible in `ps`.
+
+When you need to talk about *which* key you have, print a fingerprint:
+
+```bash
+printf '%s' "$SECRET_KEY" | sha256sum | head -c 12
+```
+
+Twelve hex characters of SHA-256 is enough to confirm two parties hold the same
+key, or that a rotation changed it, and it reveals nothing. The rotation CLI
+follows this: it prints only `_kek_fingerprint(new_kek)`, never a key value.
+Match that pattern.
+
+Two corollaries that are easy to get wrong:
+
+- **Pass secrets in files, not arguments.** `docker run -e KEY=<value>` writes
+  the value into your shell history and exposes it in `ps` for the container's
+  lifetime. Use `umask 077` + `--env-file`, then `shred -u` the file.
+- **Do not leave rollback copies behind.** A `.env` backup or a tarball of a
+  deploy directory is key material at rest in an unmanaged place; AUD-426 and
+  AUD-427 were both exactly this. If you make one, shred it in the same
+  session.
+
+### Rotating the KEK
+
+A leaked `SECRET_KEY` cannot simply be edited in `.env`. It is a
+key-encryption-key: it wraps the master key stored in `key_state`, so changing
+it without re-wrapping the blob makes every stored credential undecryptable and
+fails `/health/ready` (`key`). `backend/tests/integration/test_restart.py`
+asserts that failure deliberately.
+
+Use the rotation operation instead
+(`backend/src/audr/operations/init_key.py`, AUD-428). It decrypts the blob with
+the old KEK and re-encrypts it with the new one in a single transaction; the
+raw master key never changes, so existing ciphertext stays readable and nothing
+needs re-encrypting. It is idempotent — if the blob already decrypts under the
+new KEK it is a no-op — and it refuses a wrong old KEK rather than writing a
+corrupt blob.
+
+```bash
+umask 077 && cat > rotate.env <<'EOF'
+OLD_SECRET_KEY=...
+NEW_SECRET_KEY=...
+EOF
+docker compose run --rm --env-file rotate.env \
+    migrate python -m audr.operations.init_key rotate
+shred -u rotate.env
+```
+
+It reads `OLD_SECRET_KEY`/`NEW_SECRET_KEY` rather than `SECRET_KEY` so a
+half-configured environment cannot run it by accident. Rollback is the same
+command with the two values swapped.
+
 ## References
 
 - [PostgreSQL wiki — Transparent Data Encryption](https://wiki.postgresql.org/wiki/Transparent_Data_Encryption)
