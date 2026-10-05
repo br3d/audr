@@ -1,9 +1,10 @@
-"""Integration tests for GET /assets, POST /assets/manual, PATCH /assets/{id} (AUD-317)."""
+"""Integration tests for GET /assets, POST /assets/manual, PATCH /assets/{id} (AUD-317, AUD-433)."""
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -20,6 +21,7 @@ _ASSETS_MANUAL_URL = "/api/v1/assets/manual"
 _PASSWORD = "correct-horse-battery-staple-99"
 _CONTRACT_A = "0x" + "a" * 40
 _CONTRACT_B = "0x" + "b" * 40
+_CONTRACT_C = "0x" + "c" * 40
 
 
 def _make_override(factory: async_sessionmaker[AsyncSession]):
@@ -36,9 +38,11 @@ _CLEAN_ORDER = (
     "valuation_line",
     "valuation_snapshot",
     "monitored_pair",
+    "discovery_coverage",
     "balance_observation",
     "asset_metadata_revision",
     "asset",
+    "wallet",
     "login_attempt",
     "session",
     "owner",
@@ -113,6 +117,47 @@ async def _insert_asset(
     return asset_id
 
 
+async def _insert_wallet(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    address: str,
+) -> str:
+    wallet_id = str(uuid.uuid4())
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("INSERT INTO wallet (id, address) VALUES (:id, :addr)"),
+                {"id": wallet_id, "addr": address.lower()},
+            )
+    return wallet_id
+
+
+async def _insert_balance_observation(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    wallet_id: str,
+    asset_id: str,
+    raw_amount: int,
+    block_number: int = 1,
+    observed_at: datetime | None = None,
+) -> None:
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO balance_observation"
+                    " (wallet_id, asset_id, raw_amount, block_number, observed_at)"
+                    " VALUES (:wallet_id, :asset_id, :raw_amount, :block_number,"
+                    " COALESCE(:observed_at, now()))"
+                ),
+                {
+                    "wallet_id": wallet_id,
+                    "asset_id": asset_id,
+                    "raw_amount": raw_amount,
+                    "block_number": block_number,
+                    "observed_at": observed_at,
+                },
+            )
+
+
 # ---------------------------------------------------------------------------
 # GET /assets
 # ---------------------------------------------------------------------------
@@ -172,6 +217,161 @@ async def test_list_assets_excluded_filter(
 async def test_list_assets_requires_session(http_client: httpx.AsyncClient) -> None:
     r = await http_client.get(_ASSETS_URL)
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /assets?held=... (AUD-433)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_list_assets_held_defaults_to_full_catalog(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """No `held` param -> unchanged behaviour: the whole catalog, `held` flag included."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    held_asset = await _insert_asset(db_session_factory, _CONTRACT_A, "HELD")
+    await _insert_asset(db_session_factory, _CONTRACT_B, "CANDIDATE")
+    await _insert_balance_observation(db_session_factory, wallet_id, held_asset, raw_amount=100)
+
+    r = await http_client.get(_ASSETS_URL)
+    assert r.status_code == 200
+    items = {item["symbol"]: item for item in r.json()["items"]}
+    assert len(items) == 2
+    assert items["HELD"]["held"] is True
+    assert items["CANDIDATE"]["held"] is False
+
+
+@pytest.mark.integration
+async def test_list_assets_held_true_filters_to_nonzero_latest_balance(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    held_asset = await _insert_asset(db_session_factory, _CONTRACT_A, "HELD")
+    candidate_asset = await _insert_asset(db_session_factory, _CONTRACT_B, "CANDIDATE")
+    await _insert_balance_observation(db_session_factory, wallet_id, held_asset, raw_amount=100)
+
+    r = await http_client.get(_ASSETS_URL, params={"held": "true"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["symbol"] == "HELD"
+    assert items[0]["held"] is True
+    assert candidate_asset  # kept out of the held=true result
+
+
+@pytest.mark.integration
+async def test_list_assets_held_false_returns_unheld_only(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    held_asset = await _insert_asset(db_session_factory, _CONTRACT_A, "HELD")
+    await _insert_asset(db_session_factory, _CONTRACT_B, "CANDIDATE")
+    await _insert_balance_observation(db_session_factory, wallet_id, held_asset, raw_amount=100)
+
+    r = await http_client.get(_ASSETS_URL, params={"held": "false"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["symbol"] == "CANDIDATE"
+    assert items[0]["held"] is False
+    assert held_asset  # kept out of the held=false result
+
+
+@pytest.mark.integration
+async def test_list_assets_held_uses_latest_observation_not_ever_held(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """held must track the LATEST (wallet, asset) observation, not "ever nonzero"."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    asset_id = await _insert_asset(db_session_factory, _CONTRACT_A, "DRAINED")
+    base = datetime(2025, 6, 1, tzinfo=UTC)
+    await _insert_balance_observation(
+        db_session_factory, wallet_id, asset_id, raw_amount=100, observed_at=base
+    )
+    await _insert_balance_observation(
+        db_session_factory,
+        wallet_id,
+        asset_id,
+        raw_amount=0,
+        block_number=2,
+        observed_at=base + timedelta(hours=1),
+    )
+
+    r_true = await http_client.get(_ASSETS_URL, params={"held": "true"})
+    assert r_true.json()["items"] == []
+
+    r_false = await http_client.get(_ASSETS_URL, params={"held": "false"})
+    items = r_false.json()["items"]
+    assert len(items) == 1
+    assert items[0]["symbol"] == "DRAINED"
+    assert items[0]["held"] is False
+
+
+@pytest.mark.integration
+async def test_list_assets_held_true_includes_excluded_asset(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """An excluded-but-held asset must stay reachable via held=true&excluded=true.
+
+    Regression guard: held must NOT be implemented as "held AND NOT excluded" —
+    the UI needs a way to un-exclude an asset it is still holding.
+    """
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    excluded_held_asset = await _insert_asset(
+        db_session_factory, _CONTRACT_A, "EXCLUDED_HELD", excluded=True
+    )
+    await _insert_balance_observation(
+        db_session_factory, wallet_id, excluded_held_asset, raw_amount=100
+    )
+
+    r = await http_client.get(_ASSETS_URL, params={"held": "true", "excluded": "true"})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["symbol"] == "EXCLUDED_HELD"
+    assert items[0]["held"] is True
+    assert items[0]["excluded"] is True
+
+
+@pytest.mark.integration
+async def test_list_assets_held_paginates_with_cursor(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _insert_wallet(db_session_factory, "0x" + "1" * 40)
+    asset_ids = []
+    for i, contract in enumerate((_CONTRACT_A, _CONTRACT_B, _CONTRACT_C)):
+        asset_id = await _insert_asset(db_session_factory, contract, f"HELD{i}")
+        await _insert_balance_observation(db_session_factory, wallet_id, asset_id, raw_amount=1)
+        asset_ids.append(asset_id)
+
+    seen: list[str] = []
+    cursor = None
+    for _ in range(3):
+        params = {"held": "true", "limit": "2"}
+        if cursor:
+            params["cursor"] = cursor
+        r = await http_client.get(_ASSETS_URL, params=params)
+        assert r.status_code == 200
+        body = r.json()
+        seen.extend(item["symbol"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+
+    assert sorted(seen) == ["HELD0", "HELD1", "HELD2"]
 
 
 # ---------------------------------------------------------------------------
