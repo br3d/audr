@@ -58,6 +58,38 @@ an end user runs — deliberately knows nothing about it: a self-hosting user
 configures their RPC endpoint in Settings → Integrations, where the keyless
 default already works.
 
+### Repository layout
+
+```
+backend/            FastAPI application, worker, Alembic migrations, pytest suites
+  src/audr/         api/ auth/ wallets/ assets/ portfolio/ providers/ settings/
+                    jobs/ operations/   (see architecture.md)
+  migrations/       Alembic revisions; baseline 0001, head 0016
+  tests/            unit/ contract/ integration/ fixtures/
+frontend/           React SPA (src/pages, src/components, src/api) + Vitest specs
+tests/e2e/          Playwright end-to-end specs (run locally, not in CI)
+assets/brand/       Logo masters and the derived transparent PNGs (brand.md)
+assets/screenshots/ Interface captures used by the README
+scripts/            Operator helpers (setup-secrets, backup, restore, seed_dev)
+                    plus the build/release/maintenance set — scripts/README.md
+                    says which is which
+ci/gitea-overlay/   Versioned source of record for the Gitea Actions workflows
+.github/workflows/  Public GitHub Actions: the test gate and the manual
+                    container release (github-actions.md)
+deploy.env.example  Template for the untracked deploy.env: registry and deploy
+                    host for the scripts/ helpers (no addresses are tracked)
+compose.yaml        The production/local stack
+compose.test.yaml   Ephemeral test stack (db-test, provider-mock, test runners)
+Dockerfile          3-stage build: frontend-builder, backend-builder, runtime
+                    (runtime carries the SPA bundle at /app/static)
+docs/               Everything in the index at README.md
+```
+
+The technology choices behind each of those directories, and the reasoning for
+the process split, are in [architecture.md](architecture.md); the stack is
+Python 3.14 / FastAPI / SQLAlchemy 2.0 async on PostgreSQL 16, with a React 19 +
+Vite SPA served by the `api` process itself.
+
 ---
 
 ## 2. Edit loops
