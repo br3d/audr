@@ -32,6 +32,15 @@ recommendations and address-security monitoring. See the
 > `audr` is the repository name; "AUDR Crypto" is an older working title still
 > used in some of the planning documents.
 
+<p align="center">
+  <img src="assets/screenshots/dashboard-overview.png" alt="The audr dashboard: portfolio value, tracked holdings and priced assets above a portfolio-value chart" width="900">
+</p>
+
+<p align="center">
+  <em>The dashboard overview — totals, freshness of the underlying reads, and the
+  value history recorded since tracking began.</em>
+</p>
+
 ---
 
 ## What it does
@@ -155,6 +164,7 @@ backend/            FastAPI application, worker, Alembic migrations, pytest suit
 frontend/           React SPA (src/pages, src/components, src/api) + Vitest specs
 tests/e2e/          Playwright end-to-end specs (run locally, not in CI)
 assets/brand/       Logo masters and the derived transparent PNGs (docs/brand.md)
+assets/screenshots/ Interface captures used by the README
 scripts/            Operator helpers (setup-secrets, backup, restore, seed_dev)
                     plus the build/release/maintenance set — scripts/README.md
                     says which is which
