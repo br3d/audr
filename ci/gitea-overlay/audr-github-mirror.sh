@@ -44,10 +44,38 @@ if [ "$GH_MAIN" != "$LAST" ]; then
   log "GitHub main changed ($LAST -> $GH_MAIN); rebuilding Gitea main + CI overlay"
   export GIT_INDEX_FILE; GIT_INDEX_FILE="$(mktemp)"
   git read-tree "$GH_MAIN"
+
+  # Workflow content comes from the commit being mirrored
+  # (ci/gitea-overlay/workflows/) whenever that path exists there, so the repo
+  # is the single source of truth for what actually executes. It used to come
+  # only from $OVERLAY on this host, which meant a commit could change the
+  # versioned workflow while the stale host copy kept running — AUD-443: a
+  # pre-split deploy.yaml copied compose.yaml without its compose.deploy.yaml
+  # overlay, silently downgraded the stand to the public image and took it down
+  # for two hours. Reading from the commit removes that failure mode rather than
+  # relying on someone remembering scripts/sync-ci-overlay.sh.
+  covered=""
+  if git rev-parse --quiet --verify "$GH_MAIN:ci/gitea-overlay/workflows" >/dev/null; then
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      blob="$(git rev-parse "$GH_MAIN:ci/gitea-overlay/workflows/$name")"
+      git update-index --add --cacheinfo "100644,$blob,.gitea/workflows/$name"
+      covered="$covered .gitea/workflows/$name"
+    done < <(git ls-tree --name-only "$GH_MAIN:ci/gitea-overlay/workflows")
+    log "overlay from commit: ${covered# }"
+  else
+    log "commit has no ci/gitea-overlay/workflows; falling back to $OVERLAY entirely"
+  fi
+
+  # $OVERLAY still contributes anything the commit does not carry, so a
+  # host-only file (or an older commit predating the versioned copies) keeps
+  # working. Files the commit does provide are NOT overridden from the host.
   while IFS= read -r -d '' f; do
     rel="${f#"$OVERLAY"/}"
+    case " $covered " in *" $rel "*) continue ;; esac
     blob="$(git hash-object -w "$f")"
     git update-index --add --cacheinfo "100644,$blob,$rel"
+    log "overlay from host: $rel"
   done < <(find "$OVERLAY" -type f -print0)
   tree="$(git write-tree)"
   rm -f "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE

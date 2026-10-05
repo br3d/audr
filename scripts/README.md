@@ -30,7 +30,7 @@ or an SSH key, and they act on infrastructure outside your installation.
 | `smoke-test.sh` | Post-deploy health probe against a live instance; non-zero exit on any failed check |
 | `ci.sh` | The whole pipeline end to end — build → test → deploy → smoke-test — with per-stage skip flags |
 | `release.sh` | Cuts a semantic-version release: rewrites the version everywhere it appears, commits, and creates the annotated tag. Pushing is opt-in (`--push`) because a pushed `v*` tag triggers the deploy pipeline |
-| `sync-ci-overlay.sh` | Reconciles `ci/gitea-overlay/workflows/` with the deploy host's mirror overlay, which is where the Gitea Actions files actually run from |
+| `sync-ci-overlay.sh` | Reconciles `ci/gitea-overlay/workflows/` with the deploy host's mirror overlay. Maintenance only: the mirror reads the workflows out of the `main` commit, so this is not a step in shipping a workflow change |
 
 ## Internal — maintenance and generated files
 

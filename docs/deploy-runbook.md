@@ -8,19 +8,23 @@ environment, and the CI workflows read the registry from the Gitea repository
 variable `AUDR_REGISTRY`.
 
 The deploy pipeline is a single guarded Gitea Actions job, `.gitea/workflows/deploy.yaml`.
-The copy that actually **runs** lives in the Gitea mirror overlay on the deploy
-host (`~/.config/audr-mirror/overlay/.gitea/workflows/`);
-`~/bin/audr-github-mirror.sh` bakes it into the Gitea `main` commit each time
-GitHub `main` moves. Editing the overlay therefore has no effect until the next
-push to GitHub `main`.
+The file you edit is `ci/gitea-overlay/workflows/deploy.yaml` in this repository,
+and it is the copy that **runs**: `~/bin/audr-github-mirror.sh` reads it out of
+the GitHub `main` commit it is mirroring and bakes it into the Gitea `main` commit
+as `.gitea/workflows/deploy.yaml`. A workflow change therefore ships like any
+other change — commit, push to `main`, wait for the next mirror tick (15 min).
 
-The **versioned source of record** for those files is `ci/gitea-overlay/` in this
-repository. They are deliberately not tracked at `.gitea/workflows/`, because the
-mirror pushes every non-`main` branch verbatim and Gitea would then replay the
-suite for every stale branch it syncs (see `ci/gitea-overlay/README.md`). Keep the
-two copies in agreement with `scripts/sync-ci-overlay.sh`; `--check` diffs without
-writing and exits 1 on drift, which is the first thing to run when the pipeline
-misbehaves after a workflow was edited on the host.
+They are deliberately not tracked at `.gitea/workflows/` because the mirror pushes
+every non-`main` branch verbatim, and Gitea would then replay the suite for every
+stale branch it syncs (see `ci/gitea-overlay/README.md`).
+
+The host overlay directory (`~/.config/audr-mirror/overlay/.gitea/workflows/`) is
+now only a **fallback** for files the commit does not carry; it cannot override
+one that it does. `scripts/sync-ci-overlay.sh --check` still diffs the two and
+exits 1 on a difference — worth running if you suspect a host-only file is in
+play, but no longer a step in shipping a workflow change. Before AUD-443 the host
+copy won, and a forgotten sync silently ran a stale `deploy.yaml` that took the
+stand down for two hours.
 
 ## Invariants the pipeline depends on
 
