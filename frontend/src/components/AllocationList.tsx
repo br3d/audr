@@ -161,7 +161,7 @@ function ExcludedAssetsStrip() {
 
   const { data } = useQuery({
     queryKey: ['assets', 'excluded-strip'],
-    queryFn: () => fetchAssets(true),
+    queryFn: () => fetchAssets({ excluded: true, held: true }),
   })
 
   const excludedAssets = data?.items ?? []

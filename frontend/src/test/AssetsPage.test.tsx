@@ -38,6 +38,7 @@ const ASSET_ETH: AssetItem = {
   name: 'Ether',
   decimals: 18,
   excluded: false,
+  held: true,
   metadata_source: 'catalog',
   has_metadata_conflict: false,
   created_at: '2026-01-01T00:00:00Z',
@@ -52,6 +53,7 @@ const ASSET_USDC: AssetItem = {
   name: 'USD Coin',
   decimals: 6,
   excluded: false,
+  held: true,
   metadata_source: 'catalog',
   has_metadata_conflict: false,
   created_at: '2026-01-01T00:00:00Z',
@@ -115,7 +117,7 @@ describe('AssetsPage — search and exclusion filter persistence in the URL (AUD
     await vi.waitFor(() =>
       expect(container.querySelector('input[type="search"]')).toBeTruthy(),
     )
-    expect(mockFetchAssets).toHaveBeenCalledWith(true, undefined)
+    expect(mockFetchAssets).toHaveBeenCalledWith({ excluded: true, held: true, cursor: undefined })
     const searchInput = container.querySelector('input[type="search"]') as HTMLInputElement
     expect(searchInput.value).toBe('usdc')
     const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement
@@ -132,6 +134,69 @@ describe('AssetsPage — search and exclusion filter persistence in the URL (AUD
     })
 
     expect(window.location.hash).toBe('#/assets?excluded=1')
-    await vi.waitFor(() => expect(mockFetchAssets).toHaveBeenCalledWith(true, undefined))
+    await vi.waitFor(() =>
+      expect(mockFetchAssets).toHaveBeenCalledWith({ excluded: true, held: true, cursor: undefined }),
+    )
+  })
+})
+
+describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/')
+  })
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount()
+    })
+    document.body.removeChild(container)
+    vi.clearAllMocks()
+  })
+
+  it('requests held=true by default, without opting in via the URL', async () => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse())
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() =>
+      expect(mockFetchAssets).toHaveBeenCalledWith({
+        excluded: undefined,
+        held: true,
+        cursor: undefined,
+      }),
+    )
+  })
+
+  it('drops the held filter once "Show all catalog tokens" is checked', async () => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse())
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy(),
+    )
+
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]')
+    const showAllToggle = checkboxes[1] as HTMLInputElement
+    await act(async () => {
+      showAllToggle.click()
+    })
+
+    expect(window.location.hash).toBe('#/assets?all=1')
+    await vi.waitFor(() =>
+      expect(mockFetchAssets).toHaveBeenCalledWith({
+        excluded: undefined,
+        held: undefined,
+        cursor: undefined,
+      }),
+    )
+  })
+
+  it('shows a "run a balance scan" hint rather than a generic empty state when the held-only view is empty', async () => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse([]))
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('No held assets yet'))
+    expect(container.textContent).toContain('Run a balance scan')
   })
 })

@@ -470,6 +470,7 @@ describe('AllocationList', () => {
       name: 'Dai',
       decimals: 18,
       excluded: true,
+      held: true,
       metadata_source: 'catalog',
       has_metadata_conflict: false,
       created_at: '2026-01-01T00:00:00Z',
@@ -495,7 +496,7 @@ describe('AllocationList', () => {
       const strip = container.querySelector('.allocation-excluded-strip')!
       expect(strip.textContent).toContain('Excluded (1)')
       expect(container.querySelector('.allocation-excluded-list')).toBeNull()
-      expect(mockFetchAssets).toHaveBeenCalledWith(true)
+      expect(mockFetchAssets).toHaveBeenCalledWith({ excluded: true, held: true })
       await unmount(container, root)
     })
 

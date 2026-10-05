@@ -14,6 +14,7 @@ import { boolField, stringField, useHashQueryState } from '../routing'
 const ASSETS_SCHEMA = {
   q: stringField(''),
   excluded: boolField(false),
+  all: boolField(false),
 }
 
 function AddManualAssetForm({
@@ -269,13 +270,18 @@ function AssetRow({
 
 export default function AssetsPage() {
   const queryClient = useQueryClient()
-  const [{ q: search, excluded: showExcluded }, updateQuery] = useHashQueryState(
-    'assets',
-    ASSETS_SCHEMA,
-  )
+  const [{ q: search, excluded: showExcluded, all: showAllCatalog }, updateQuery] =
+    useHashQueryState('assets', ASSETS_SCHEMA)
   const [showAddForm, setShowAddForm] = useState(false)
   const setSearch = (value: string) => updateQuery({ q: value })
   const setShowExcluded = (value: boolean) => updateQuery({ excluded: value })
+  const setShowAllCatalog = (value: boolean) => updateQuery({ all: value })
+
+  // Discovery seeds a catalog row for every candidate token so balanceOf can be
+  // checked against it — the catalog runs to hundreds of entries the owner has
+  // never held. Default to the held-only view; "Show all catalog tokens" is the
+  // escape hatch for pre-configuring a token before it has a balance.
+  const heldFilter = showAllCatalog ? undefined : true
 
   const {
     data,
@@ -285,9 +291,13 @@ export default function AssetsPage() {
     fetchNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['assets', showExcluded],
+    queryKey: ['assets', showExcluded, showAllCatalog],
     queryFn: ({ pageParam }) =>
-      fetchAssets(showExcluded ? true : undefined, pageParam as string | undefined),
+      fetchAssets({
+        excluded: showExcluded ? true : undefined,
+        held: heldFilter,
+        cursor: pageParam as string | undefined,
+      }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
@@ -361,6 +371,16 @@ export default function AssetsPage() {
           </span>
         </label>
 
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            className="checkbox-folio"
+            checked={showAllCatalog}
+            onChange={(e) => setShowAllCatalog(e.target.checked)}
+          />
+          <span className="toggle-label">Show all catalog tokens</span>
+        </label>
+
         <button
           type="button"
           className="btn btn-primary btn-sm"
@@ -377,7 +397,11 @@ export default function AssetsPage() {
           <div className="empty-state-icon">🪙</div>
           <div className="empty-state-text">No assets found</div>
           <div className="empty-state-hint">
-            {showExcluded ? 'No excluded assets.' : 'Run a balance scan to discover holdings.'}
+            {showExcluded
+              ? 'No excluded assets.'
+              : heldFilter
+                ? 'No held assets yet. Run a balance scan to discover holdings, or show all catalog tokens to pre-configure one.'
+                : 'No assets found.'}
           </div>
         </div>
       ) : (
