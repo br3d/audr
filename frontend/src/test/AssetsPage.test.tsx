@@ -24,10 +24,18 @@ vi.mock('../api/client', () => {
 })
 
 import AssetsPage from '../pages/AssetsPage'
-import { fetchAssets } from '../api/client'
+import { fetchAssets, addManualAsset } from '../api/client'
 import type { AssetItem, AssetsResponse } from '../api/client'
 
 const mockFetchAssets = vi.mocked(fetchAssets)
+const mockAddManualAsset = vi.mocked(addManualAsset)
+
+// Use the native setter so React's synthetic onChange fires in jsdom.
+function nativeSetValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setter?.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
 
 const ASSET_ETH: AssetItem = {
   id: 'a1',
@@ -198,5 +206,40 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
 
     await vi.waitFor(() => expect(container.textContent).toContain('No held assets yet'))
     expect(container.textContent).toContain('Run a balance scan')
+  })
+
+  it('reveals the full catalog after a manual contract is added, so the new row is not hidden by the held filter', async () => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse())
+    mockAddManualAsset.mockResolvedValue({} as never)
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy(),
+    )
+
+    const addButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add contract'),
+    ) as HTMLButtonElement
+    await act(async () => {
+      addButton.click()
+    })
+
+    const addressInput = document.querySelector('#contract-address') as HTMLInputElement
+    await act(async () => {
+      nativeSetValue(addressInput, '0x3333333333333333333333333333333333333333')
+    })
+    const form = addressInput.closest('form') as HTMLFormElement
+    await act(async () => {
+      form.requestSubmit()
+    })
+
+    await vi.waitFor(() => expect(mockAddManualAsset).toHaveBeenCalled())
+    await vi.waitFor(() => expect(window.location.hash).toBe('#/assets?all=1'))
+    await vi.waitFor(() =>
+      expect(mockFetchAssets).toHaveBeenCalledWith({
+        excluded: undefined,
+        held: undefined,
+        cursor: undefined,
+      }),
+    )
   })
 })
