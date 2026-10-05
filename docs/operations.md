@@ -278,6 +278,61 @@ lifecycle rules. Each `master_key-<ts>.hex` is identical as long as the key
 hasn't been rotated, so only the most recent one needs to be kept offsite,
 but it costs nothing to keep one per dump.
 
+### Proving a database or dump is secret-free (`grep` lies here)
+
+If a secret leaks and you need to prove it is gone, **`grep` over the
+PostgreSQL data directory or over a dump file is not evidence**. It returns
+zero hits on data that is demonstrably still there, in two independent ways.
+Both were confirmed empirically on the Paperclip instance on ai-stuff under
+AUD-431:
+
+**1. The live heap — TOAST compression.** Postgres stores wide `text`/`jsonb`
+values out-of-line in a TOAST table, LZ-compressed. A row containing a
+59-character marker string was present in the live database
+(`... WHERE result_json::text LIKE '%marker%'` → 1 row), while
+`grep -ra 'marker' <data-dir>` over the whole 526 MB data directory returned
+**0 files**. The columns were `attstorage = x` (extended) and large values
+compressed to ~0.32× their text length, so the plaintext bytes never appear
+contiguously on disk. Anyone grepping the data dir would wrongly conclude the
+database was clean.
+
+**2. The dumps — gzip (and `age`).** The same marker in an hourly
+`*.sql.gz` dump: `grep -c` → **0**, `zgrep -c` → **4**. audr's own
+`scripts/backup.sh` output is stronger still — `age`/`gpg` encrypted, so a raw
+`grep` is guaranteed to find nothing regardless of contents.
+
+So a clean-bill-of-health scan has to decompress, or query through the
+database engine:
+
+```bash
+# dumps: decompress on the fly — never raw grep
+zgrep -c 'FINGERPRINT' backups/*.sql.gz
+# age-encrypted audr dumps: decrypt on the fly, never to disk
+age -d -i secrets/backup_key.txt backups/audr-*.sql.age | grep -c 'FINGERPRINT'
+```
+
+```sql
+-- live DB: go through the engine so TOAST is transparently decompressed.
+-- Cast jsonb/json columns to text; check every column that can hold
+-- captured process output, not just the obvious one.
+SELECT count(*) FROM public.heartbeat_runs
+WHERE stdout_excerpt LIKE '%FINGERPRINT%'
+   OR result_json::text LIKE '%FINGERPRINT%'
+   OR context_snapshot::text LIKE '%FINGERPRINT%';
+```
+
+Two further traps when scanning:
+
+- **Match on the secret's value, not its name.** Counting rows that contain
+  the string `SECRET_KEY` measures how often the *variable* is mentioned, which
+  includes every ticket, comment, and transcript that merely discusses the
+  leak — the scan inflates itself. Fingerprint the rotated *value*.
+- **Scrubbing files is not scrubbing the database.** A leaked value captured
+  from agent stdout lands in DB columns as well as transcript files, and from
+  there into every dump taken afterwards. Files need a rewrite; the database
+  needs an `UPDATE`. Always rotate the credential first, then scrub copies —
+  clearing copies while the value is still live buys nothing.
+
 ### Restoring
 
 ```bash
