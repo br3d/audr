@@ -487,7 +487,11 @@ jobs:
         run: |
           set -uo pipefail
           ready="$(curl -s -m 5 http://localhost:80/health/ready 2>/dev/null || true)"
-          api="$(docker inspect --format '{{.State.Status}}' audr-api-1 2>/dev/null || echo absent)"
+          # Two steps rather than `|| echo absent`: a failing docker inspect
+          # still writes an empty line to stdout, so the one-liner yields
+          # "\nabsent" and splits the value across two lines in the alert body.
+          api="$(docker inspect --format '{{.State.Status}}' audr-api-1 2>/dev/null)" || api=""
+          api="${api:-absent}"
           case "$ready" in
             *'"status":"ok"'*)
               echo "::warning title=Deploy failed, stand still serving::$ready"
@@ -501,6 +505,29 @@ jobs:
               echo "[stand] /health/ready       : ${ready:-<no response>}"
               echo "[stand] Recovery: docs/deploy-runbook.md, 'Stand down after a failed deploy'."
               echo "[stand] ############################################################"
+              # Push the alert out of the run log and onto a phone (AUD-444).
+              # Everything above only reaches someone already looking at this
+              # run, which in AUD-443 was nobody for two hours.
+              #
+              # No threshold and no debounce, unlike the host watchdog: a deploy
+              # that has just finished and left /health/ready not-ok is a
+              # confirmed outage, not a probe that might be a restart in flight.
+              #
+              # notify.sh exits 0 both when no channel is configured and when
+              # delivery fails, so this cannot replace the diagnosis above with
+              # an alerting error of its own. It reads the token from
+              # $DEPLOY_DIR/secrets/telegram.env — the same file the host
+              # watchdog uses — so nothing secret appears in this public
+              # workflow, and there is no Gitea secret to rotate separately.
+              AUDR_REMOTE_DIR="$DEPLOY_DIR" bash scripts/notify.sh "$(printf '%s\n' \
+                "🔴 audr stand DOWN after a failed deploy" \
+                "" \
+                "Deploy of ${GITHUB_SHA:0:12} failed and the stand is NOT serving." \
+                "api           : ${api}" \
+                "/health/ready : ${ready:-<no response>}" \
+                "run           : #${GITHUB_RUN_NUMBER:-?} of ${GITHUB_REPOSITORY:-audr} (${GITHUB_REF_NAME:-?})" \
+                "" \
+                "Runbook: docs/deploy-runbook.md — 'Stand down after a failed deploy'.")" || true
               ;;
           esac
           # Unconditional, both paths: this is the state a responder needs first
