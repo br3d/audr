@@ -156,12 +156,18 @@ async def _main() -> None:
 async def _main_rotate() -> None:
     """One-shot KEK rotation entrypoint.
 
-    Usage inside the audr-api image::
+    Usage inside the audr-api image.  Pass the two keys in a file rather than
+    as ``-e VAR=<value>`` arguments: inline values land in the operator's shell
+    history and are readable in ``ps`` output for the life of the container,
+    which is the exact leak class AUD-428 exists to clean up.
 
-        docker compose run --rm \\
-            -e OLD_SECRET_KEY=<current SECRET_KEY> \\
-            -e NEW_SECRET_KEY=<new SECRET_KEY> \\
+        umask 077 && cat > rotate.env <<'EOF'
+        OLD_SECRET_KEY=...
+        NEW_SECRET_KEY=...
+        EOF
+        docker compose run --rm --env-file rotate.env \\
             migrate python -m audr.operations.init_key rotate
+        shred -u rotate.env
 
     Reads OLD_SECRET_KEY / NEW_SECRET_KEY (not SECRET_KEY) so the rotation
     cannot be run by accident with only one key configured, and prints only a
@@ -183,7 +189,14 @@ async def _main_rotate() -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "rotate":
+    # Reject an unrecognised argument instead of falling through to init: a
+    # mistyped `rotate` would otherwise run the idempotent initialiser, print
+    # "Master key initialised." and exit 0, which during a maintenance window
+    # reads as a successful rotation that never happened.
+    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] != "rotate"):
+        print("usage: python -m audr.operations.init_key [rotate]", file=sys.stderr)
+        raise SystemExit(2)
+    if len(sys.argv) == 2:
         asyncio.run(_main_rotate())
     else:
         asyncio.run(_main())
