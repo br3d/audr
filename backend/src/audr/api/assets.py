@@ -42,6 +42,29 @@ _SOURCE_TO_KIND: dict[str, str] = {
     "chain": "discovered",
 }
 
+# "Held" mirrors _get_current_holdings in portfolio/snapshot.py: the latest
+# balance_observation per (wallet, asset) is nonzero. An asset that was once
+# funded and later drained to zero is NOT held — only the most recent
+# observation counts. Deliberately independent of `asset.excluded`, so an
+# excluded-but-held asset is still reachable via held=true&excluded=true.
+#
+# DISTINCT ON (wallet_id), ordered by (wallet_id, observed_at DESC), picks the
+# latest row per wallet for this asset; the ix_balance_observation_asset_wallet
+# index (asset_id, wallet_id, observed_at DESC) added in 0019 serves exactly
+# that scan without touching other assets' history.
+_HELD_EXISTS_SQL = """
+    EXISTS(
+        SELECT 1
+        FROM (
+            SELECT DISTINCT ON (bo.wallet_id) bo.raw_amount
+            FROM balance_observation bo
+            WHERE bo.asset_id = a.id
+            ORDER BY bo.wallet_id, bo.observed_at DESC
+        ) latest
+        WHERE latest.raw_amount > 0
+    )
+"""
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -57,6 +80,7 @@ class AssetItemOut(BaseModel):
     name: str
     decimals: int | None
     excluded: bool
+    held: bool
     metadata_source: str
     has_metadata_conflict: bool
     created_at: str
@@ -126,6 +150,7 @@ def _row_to_asset_item(row: dict) -> AssetItemOut:
         name=str(row["name"]),
         decimals=effective_decimals,
         excluded=bool(row["excluded"]),
+        held=bool(row.get("held", False)),
         metadata_source=metadata_source,
         has_metadata_conflict=bool(row.get("has_conflict", False)),
         created_at=created_at,
@@ -135,7 +160,7 @@ def _row_to_asset_item(row: dict) -> AssetItemOut:
 async def _get_asset_by_id(db: AsyncSession, asset_id: uuid.UUID) -> dict | None:
     result = await db.execute(
         sa.text(
-            """
+            f"""
             SELECT
                 a.id, a.token_address, a.symbol, a.name, a.decimals,
                 a.source, a.excluded, a.decimals_override, a.created_at,
@@ -143,10 +168,11 @@ async def _get_asset_by_id(db: AsyncSession, asset_id: uuid.UUID) -> dict | None
                     SELECT 1 FROM asset_metadata_revision r
                     WHERE r.asset_id = a.id
                       AND (r.symbol != a.symbol OR r.decimals != a.decimals)
-                ) AS has_conflict
+                ) AS has_conflict,
+                {_HELD_EXISTS_SQL} AS held
             FROM asset a
             WHERE a.id = :id
-            """
+            """  # noqa: S608 -- _HELD_EXISTS_SQL is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         {"id": str(asset_id)},
     )
@@ -164,10 +190,16 @@ async def list_assets(
     _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
     excluded: bool | None = None,
+    held: bool | None = None,
     cursor: str | None = None,
     limit: int = 50,
 ) -> AssetsResponseOut:
-    """List assets with optional exclusion filter and cursor pagination."""
+    """List assets with optional exclusion/held filters and cursor pagination.
+
+    `held` and `excluded` are independent filters — an excluded asset that is
+    still held by a wallet must remain reachable via held=true&excluded=true,
+    so it can be un-excluded from the UI.
+    """
     if limit > 200:
         limit = 200
 
@@ -177,6 +209,10 @@ async def list_assets(
     if excluded is not None:
         conditions.append("a.excluded = :excluded")
         params["excluded"] = excluded
+
+    if held is not None:
+        conditions.append(f"{_HELD_EXISTS_SQL} = :held")
+        params["held"] = held
 
     if cursor:
         conditions.append("a.id > :cursor")
@@ -194,12 +230,13 @@ async def list_assets(
                     SELECT 1 FROM asset_metadata_revision r
                     WHERE r.asset_id = a.id
                       AND (r.symbol != a.symbol OR r.decimals != a.decimals)
-                ) AS has_conflict
+                ) AS has_conflict,
+                {_HELD_EXISTS_SQL} AS held
             FROM asset a
             {where_clause}
             ORDER BY a.id
             LIMIT :limit
-            """  # noqa: S608 -- where_clause is built from a fixed vocabulary of ":param" fragments; values are bound, never interpolated
+            """  # noqa: S608 -- where_clause and _HELD_EXISTS_SQL are fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )

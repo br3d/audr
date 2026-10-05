@@ -161,7 +161,7 @@ to ~100%. `unpriced_asset_count` counts distinct unpriced assets, not lines.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/assets` | session | List assets. `excluded`, `cursor`, `limit` (default 50, max 200). |
+| GET | `/api/v1/assets` | session | List assets. `excluded`, `held`, `cursor`, `limit` (default 50, max 200). |
 | POST | `/api/v1/assets/manual` | session + CSRF | Add a manual contract. 201; 409 with `existing_id` on conflict. |
 | PATCH | `/api/v1/assets/{asset_id}` | session + CSRF | Update `excluded` or `decimals_override`. |
 | GET | `/api/v1/assets/{asset_id}/icon` | session | Serve cached icon bytes. Sets its own `Cache-Control`. |
