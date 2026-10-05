@@ -209,7 +209,7 @@ Two corollaries that are easy to get wrong:
 
 - **Pass secrets in files, not arguments.** `docker run -e KEY=<value>` writes
   the value into your shell history and exposes it in `ps` for the container's
-  lifetime. Use `umask 077` + `--env-file`, then `shred -u` the file.
+  lifetime. Use `umask 077` + `--env-from-file`, then `shred -u` the file.
 - **Do not leave rollback copies behind.** A `.env` backup or a tarball of a
   deploy directory is key material at rest in an unmanaged place; AUD-426 and
   AUD-427 were both exactly this. If you make one, shred it in the same
@@ -236,10 +236,17 @@ umask 077 && cat > rotate.env <<'EOF'
 OLD_SECRET_KEY=...
 NEW_SECRET_KEY=...
 EOF
-docker compose run --rm --env-file rotate.env \
+docker compose run --rm --env-from-file rotate.env \
     migrate python -m audr.operations.init_key rotate
 shred -u rotate.env
 ```
+
+The flag is `--env-from-file`, not `--env-file`. `docker compose run` has no
+`--env-file` and exits 1 with `unknown flag` (verified against Compose v5.5.1
+on the deploy host); the similarly-named *global* `docker compose --env-file`
+only feeds variable interpolation of the compose file and would not put
+`OLD_SECRET_KEY` inside the container, so the mistake is worse than a typo — it
+can look like it ran.
 
 It reads `OLD_SECRET_KEY`/`NEW_SECRET_KEY` rather than `SECRET_KEY` so a
 half-configured environment cannot run it by accident. Rollback is the same

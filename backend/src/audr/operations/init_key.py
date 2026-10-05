@@ -165,9 +165,14 @@ async def _main_rotate() -> None:
         OLD_SECRET_KEY=...
         NEW_SECRET_KEY=...
         EOF
-        docker compose run --rm --env-file rotate.env \\
+        docker compose run --rm --env-from-file rotate.env \\
             migrate python -m audr.operations.init_key rotate
         shred -u rotate.env
+
+    The flag is ``--env-from-file``; ``docker compose run`` has no
+    ``--env-file`` and exits 1 with ``unknown flag``.  The global
+    ``docker compose --env-file`` is a different thing (compose-file variable
+    interpolation) and would not put the keys in the container.
 
     Reads OLD_SECRET_KEY / NEW_SECRET_KEY (not SECRET_KEY) so the rotation
     cannot be run by accident with only one key configured, and prints only a
