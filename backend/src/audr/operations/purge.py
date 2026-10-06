@@ -13,6 +13,7 @@ from argon2.exceptions import VerifyMismatchError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.auth.service import AuthenticationError
+from audr.portfolio.history import rematerialize_history_points
 
 # Same Argon2id parameters as auth.service (OWASP minimum config).
 _hasher = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=2)
@@ -139,8 +140,25 @@ async def execute_purge(session: AsyncSession, *, kind: str, password: str) -> d
             )
         )
 
+        # Snapshots that keep an unpriced line survive the delete below; capture
+        # them before it so their history_point aggregates can be re-derived.
+        surviving_snapshots = list(
+            (
+                await session.execute(
+                    sa.text(
+                        "SELECT DISTINCT snapshot_id FROM valuation_line WHERE price_usd IS NULL"
+                    )
+                )
+            ).scalars()
+        )
+
         # Delete valuation_line rows that carry coingecko-derived prices.
         await session.execute(sa.text("DELETE FROM valuation_line WHERE price_usd IS NOT NULL"))
+
+        # Their history_points still total the priced lines just deleted. Re-derive
+        # from what remains so the chart stops reporting purged values (AUD-454) —
+        # with every price gone the total becomes NULL, i.e. unknown, not zero.
+        await rematerialize_history_points(session, surviving_snapshots)
 
         # Delete valuation_snapshot rows that are now childless.
         await session.execute(

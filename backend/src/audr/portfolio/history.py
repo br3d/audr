@@ -5,11 +5,17 @@ It reads the newly published snapshot's valuation_lines, computes aggregate stat
 and inserts a history_point row.
 
 Rules:
-- Excluded assets do not appear in valuation_lines and are not counted.
 - total_value_usd is the sum of non-null value_usd lines (NULL lines are unknown).
 - has_gap is true when quality is 'stale', 'partial', or 'gaps' (some values are unknown).
 - is_canonical is always true on first write; the canonicality job clears it later.
 - Idempotent: a second call for the same snapshot_id returns the existing row ID.
+
+rematerialize_history_points():
+  history_point.total_value_usd and the two counts are a denormalised aggregate of
+  the snapshot's valuation_lines. Anything that deletes lines from an already
+  published snapshot — deleting a wallet, purging a provider — must call this so
+  the aggregate still describes the lines that remain (AUD-454). Points left with
+  no lines at all are dropped: an empty snapshot has no total to report.
 """
 
 from __future__ import annotations
@@ -142,6 +148,81 @@ async def materialize_history_point(
         is_canonical=True,
         created=True,
     )
+
+
+async def rematerialize_history_points(
+    session: AsyncSession,
+    snapshot_ids: list[uuid.UUID] | list[str],
+) -> dict[str, int]:
+    """Re-derive history_point aggregates for *snapshot_ids* from their lines.
+
+    history_point stores the total and the wallet/asset counts that
+    materialize_history_point() computed from the snapshot's valuation_lines at
+    publication. Deleting lines afterwards leaves that aggregate describing rows
+    that are no longer there: a chart point keeps the value of a wallet the owner
+    deleted, and GET /history's exclusion re-cut — which subtracts a sum taken
+    from the surviving lines — then subtracts from a total those lines never
+    added up to (AUD-454).
+
+    Recomputes total_value_usd (NULL when no surviving line carries a value, i.e.
+    the point's value is unknown rather than zero) and the two counts, and deletes
+    points whose snapshot has no lines left.
+
+    Returns {"updated": n, "deleted": n}. A no-op for an empty id list.
+    """
+    if not snapshot_ids:
+        return {"updated": 0, "deleted": 0}
+
+    ids = [str(sid) for sid in snapshot_ids]
+
+    deleted = await session.execute(
+        sa.text(
+            """
+            DELETE FROM history_point hp
+            WHERE hp.snapshot_id IN :snapshot_ids
+              AND NOT EXISTS (
+                SELECT 1 FROM valuation_line vl WHERE vl.snapshot_id = hp.snapshot_id
+              )
+            """
+        ).bindparams(sa.bindparam("snapshot_ids", expanding=True)),
+        {"snapshot_ids": ids},
+    )
+
+    updated = await session.execute(
+        sa.text(
+            """
+            UPDATE history_point hp
+            SET total_value_usd = agg.total_value_usd,
+                included_wallet_count = agg.wallet_count,
+                included_asset_count = agg.asset_count
+            FROM (
+                SELECT vl.snapshot_id,
+                       SUM(vl.value_usd)             AS total_value_usd,
+                       COUNT(DISTINCT vl.wallet_id)  AS wallet_count,
+                       COUNT(DISTINCT vl.asset_id)   AS asset_count
+                FROM valuation_line vl
+                WHERE vl.snapshot_id IN :snapshot_ids
+                GROUP BY vl.snapshot_id
+            ) agg
+            WHERE hp.snapshot_id = agg.snapshot_id
+              AND (
+                hp.total_value_usd IS DISTINCT FROM agg.total_value_usd
+                OR hp.included_wallet_count IS DISTINCT FROM agg.wallet_count
+                OR hp.included_asset_count IS DISTINCT FROM agg.asset_count
+              )
+            """
+        ).bindparams(sa.bindparam("snapshot_ids", expanding=True)),
+        {"snapshot_ids": ids},
+    )
+
+    counts = {"updated": int(updated.rowcount or 0), "deleted": int(deleted.rowcount or 0)}
+    if counts["updated"] or counts["deleted"]:
+        logger.info(
+            "history_point re-materialized after line deletion: updated=%d deleted=%d",
+            counts["updated"],
+            counts["deleted"],
+        )
+    return counts
 
 
 # ---------------------------------------------------------------------------

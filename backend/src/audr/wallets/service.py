@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.portfolio.history import rematerialize_history_points
 from audr.wallets.models import Wallet
 
 
@@ -199,18 +200,15 @@ async def delete_wallet(
         "DELETE FROM event_indexer_checkpoint WHERE wallet_id = :wid",
     )
     # history_point hangs off valuation_snapshot, so clear it for the snapshots
-    # this wallet just emptied, then drop those snapshots.  Snapshots that
-    # still carry lines from other wallets are kept as they are.
+    # this wallet just emptied, then drop those snapshots.  Snapshots that still
+    # carry lines from other wallets are kept, but their history_point's stored
+    # total and counts still include the lines just deleted, so re-derive them
+    # from what survives — otherwise the chart keeps charting a deleted wallet's
+    # value forever, and GET /history's exclusion re-cut subtracts a sum of
+    # surviving lines from a total those lines never added up to (AUD-454).
     if touched_snapshots:
-        await _delete(
-            "history_point",
-            "DELETE FROM history_point"
-            " WHERE snapshot_id IN :snapshot_ids"
-            "   AND NOT EXISTS ("
-            "     SELECT 1 FROM valuation_line vl"
-            "     WHERE vl.snapshot_id = history_point.snapshot_id"
-            "   )",
-        )
+        remat = await rematerialize_history_points(session, touched_snapshots)
+        deleted["history_point"] = remat["deleted"]
         await _delete(
             "valuation_snapshot",
             "DELETE FROM valuation_snapshot"
