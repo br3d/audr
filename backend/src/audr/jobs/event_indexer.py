@@ -5,13 +5,18 @@ Algorithm per run:
   1. Load all active wallets.
   2. Load all tracked token addresses (from asset table).
   3. For each wallet, read its checkpoint (last_processed_block).
-     If no checkpoint, start from current_block (no backfill).
+     If no checkpoint, start `event_indexer_backfill_blocks` behind
+     current_block so the Events/Allowances views have history to show
+     immediately (AUD-445).
   4. For each wallet, fetch events from checkpoint+1 to current_block in
      LOG_CHUNK_SIZE chunks:
        - Transfer logs where wallet is sender (topics[1] = wallet)
        - Transfer logs where wallet is receiver (topics[2] = wallet)
        - Approval logs where wallet is owner (topics[1] = wallet) — feeds the
          allowance/security-signals view (GET /api/v1/allowances)
+
+Transfer logs are restricted to tracked tokens; approval logs are not. See
+_index_wallet for why the two filters differ.
   5. Insert events into onchain_event (ON CONFLICT DO NOTHING).
   6. Advance checkpoint to current_block.
 """
@@ -63,7 +68,9 @@ async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None
         logger.info("event_indexer skipped — no active wallets run_id=%s", run_id)
         return
 
-    max_chunks = get_settings().event_indexer_max_chunks_per_run
+    settings = get_settings()
+    max_chunks = settings.event_indexer_max_chunks_per_run
+    backfill_blocks = settings.event_indexer_backfill_blocks
 
     async with RpcReader(
         url=rpc_endpoints[0],
@@ -96,6 +103,7 @@ async def handle_event_indexer(session: AsyncSession, run_id: uuid.UUID) -> None
                 token_addresses=token_addresses,
                 current_block=current_block,
                 max_chunks=chunks_remaining,
+                backfill_blocks=backfill_blocks,
             )
             total_events += indexed
             chunks_remaining -= chunks_used
@@ -128,6 +136,7 @@ async def _index_wallet(
     token_addresses: list[str],
     current_block: int,
     max_chunks: int,
+    backfill_blocks: int = 0,
 ) -> tuple[int, int]:
     """Index one wallet's events; returns (events_inserted, chunks_used).
 
@@ -135,18 +144,25 @@ async def _index_wallet(
     process — once exhausted, progress is checkpointed at the last completed
     chunk boundary and the remaining range resumes on the wallet's next run
     (AUD-362), so a long catch-up range can't burn the whole run's RPC budget.
+
+    ``backfill_blocks`` is how far behind the tip a wallet with no checkpoint
+    starts (AUD-445); the catch-up itself then runs through the ordinary
+    chunk-budget path below, so the first run is bounded like any other.
     """
     checkpoint = await _get_checkpoint(session, wallet_id)
     if checkpoint is None:
-        # First run: record current block and index nothing (no backfill)
-        await _upsert_checkpoint(session, wallet_id, current_block)
+        # First time we see this wallet: start `backfill_blocks` behind the tip
+        # so the Events/Allowances views are not empty until the wallet next
+        # transacts. The range is indexed by the normal path below.
+        checkpoint = max(0, current_block - backfill_blocks)
+        await _upsert_checkpoint(session, wallet_id, checkpoint)
         await session.flush()
         logger.info(
-            "event_indexer wallet=%s checkpoint initialised at block=%d",
+            "event_indexer wallet=%s checkpoint initialised at block=%d (backfill=%d blocks)",
             wallet_address,
-            current_block,
+            checkpoint,
+            backfill_blocks,
         )
-        return 0, 0
 
     from_block = checkpoint + 1
     if from_block > current_block or max_chunks <= 0:
@@ -186,11 +202,17 @@ async def _index_wallet(
                 address=token_addresses,
                 topics=[TRANSFER_TOPIC, None, wallet_topic],
             )
-            # Approvals granted by the wallet, as owner — topic[1]
+            # Approvals granted by the wallet, as owner — topic[1].
+            # Deliberately NOT restricted to tracked tokens (AUD-445): an
+            # Approval with owner == our wallet can only come from a
+            # transaction the owner signed, so there is no spam vector to
+            # filter out, and the approvals that matter most for the security
+            # view are exactly the ones on tokens the catalog never heard of.
+            # Inbound transfers are the opposite — anyone can airdrop a log at
+            # our wallet — so those stay filtered to the tracked set.
             approval_logs = await reader.get_logs(
                 from_block=chunk_start,
                 to_block=chunk_end,
-                address=token_addresses,
                 topics=[APPROVAL_TOPIC, wallet_topic],
             )
         except (RpcError, MalformedResponseError):
@@ -276,6 +298,19 @@ async def _insert_event(
         # Approval(owner indexed, spender indexed, value) — from_addr=owner,
         # to_addr=spender. Our topic filter only asks for owner == wallet.
         if from_addr != wallet_norm:
+            return 0
+        # ERC-721 shares this event signature but indexes the third parameter
+        # (tokenId), giving four topics and an empty data field. Since the
+        # approval filter is not restricted to the tracked ERC-20 catalog
+        # (AUD-445), drop those here rather than recording an NFT approval as
+        # a zero-value token allowance.
+        if len(log.topics) != 3:
+            logger.debug(
+                "event_indexer skipping non-ERC20 Approval (topics=%d) tx=%s idx=%d",
+                len(log.topics),
+                log.tx_hash,
+                log.log_index,
+            )
             return 0
         event_type = "approval"
     elif from_addr == wallet_norm:

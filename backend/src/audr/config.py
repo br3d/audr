@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     # (AUD-362) so one run can't balloon into an unbounded RPC burst.
     event_indexer_max_chunks_per_run: int = 50
 
+    # How far back event_indexer reaches the first time it sees a wallet
+    # (AUD-445). Before this setting the first run checkpointed at the current
+    # block and indexed nothing, so the Events and Allowances views stayed
+    # empty until a tracked-token transfer or an approval happened to land at
+    # the chain tip — days or weeks for a quiet wallet, which reads as a broken
+    # page. The default is ~16 days of mainnet blocks, which is exactly one
+    # full `event_indexer_max_chunks_per_run` budget at LOG_CHUNK_SIZE, so a
+    # new wallet's backfill completes in a single run without a second RPC
+    # burst. Set to 0 to restore the old index-from-now-on behaviour.
+    event_indexer_backfill_blocks: int = 100_000
+
     # Anonymous CoinMarketCap rate-limit budget for the worker process
     # (AUD-370). The keyless public API's unpublished per-IP quota is far
     # tighter than any RPC provider's — quote_refresh kept tripping HTTP 429
