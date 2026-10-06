@@ -32,8 +32,9 @@ vi.mock('../components/NewsFeed', () => ({
 }))
 
 import DashboardPage from '../pages/DashboardPage'
-import { fetchPortfolio, fetchHistory, fetchEvents, fetchAssets } from '../api/client'
+import { fetchPortfolio, fetchHistory, fetchEvents, fetchAssets, patchAsset } from '../api/client'
 
+const mockPatchAsset = vi.mocked(patchAsset)
 const mockFetchPortfolio = vi.mocked(fetchPortfolio)
 const mockFetchHistory = vi.mocked(fetchHistory)
 const mockFetchEvents = vi.mocked(fetchEvents)
@@ -814,6 +815,118 @@ describe('DashboardPage', () => {
       expect(container.textContent).toMatch(/loading/i)
       await act(async () => { root.unmount() })
       document.body.removeChild(container)
+    })
+  })
+  describe('instant exclude/include (AUD-448)', () => {
+    // The founder's report: pressing Exclude left the row in the table with
+    // "Applies next snapshot" on it and the percentages untouched. The table,
+    // the share bars and the Portfolio Value card must all move on the click
+    // itself, with no snapshot and no round trip to wait for.
+    const TWO_ASSET_PORTFOLIO: PortfolioResponse = {
+      ...EMPTY_PORTFOLIO,
+      snapshot_id: 'snap-1',
+      priced_subtotal_usd: '4000.00',
+      total_usd: '4000.00',
+      balance_block: 100,
+      holdings: [
+        makeHolding({ asset_id: 'eth', value_usd: '3000.00' }),
+        makeHolding({ asset_id: 'omg', value_usd: '1000.00' }),
+      ],
+      allocations: [
+        makeAllocation({ asset_id: 'eth', symbol: 'ETH', value_usd: '3000.00', percentage: '75.00' }),
+        makeAllocation({ asset_id: 'omg', symbol: 'OMG', value_usd: '1000.00', percentage: '25.00' }),
+      ],
+    }
+
+    it('redraws the table and the total on the click, before the server answers', async () => {
+      // A patch that never settles: whatever the UI shows is owed entirely to
+      // the local recomputation, not to a refetch.
+      mockPatchAsset.mockReturnValue(new Promise(() => {}))
+      const { container, root } = mountWithData(TWO_ASSET_PORTFOLIO)
+      await flush()
+
+      expect(container.textContent).toContain('$4,000.00')
+
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Exclude OMG"]') as HTMLButtonElement).click()
+      })
+
+      // The row is gone from the table — not badged and left in place.
+      expect(container.querySelector('[aria-label="Exclude OMG"]')).toBeNull()
+      expect(container.textContent).not.toContain('Applies next snapshot')
+
+      // The survivor is the whole portfolio now, and the headline agrees.
+      expect(container.textContent).toContain('100.00%')
+      expect(container.textContent).toContain('$3,000.00')
+      expect(container.textContent).not.toContain('$4,000.00')
+
+      await unmount(container, root)
+    })
+
+    it('puts the asset back on the click too, without waiting for a refetch', async () => {
+      mockPatchAsset.mockReturnValue(new Promise(() => {}))
+      const { container, root } = mountWithData({
+        ...TWO_ASSET_PORTFOLIO,
+        priced_subtotal_usd: '3000.00',
+        total_usd: '3000.00',
+        holdings: [
+          makeHolding({ asset_id: 'eth', value_usd: '3000.00' }),
+          makeHolding({ asset_id: 'omg', value_usd: '1000.00', included: false }),
+        ],
+        allocations: [
+          makeAllocation({ asset_id: 'eth', symbol: 'ETH', value_usd: '3000.00', percentage: '100.00' }),
+          makeAllocation({ asset_id: 'omg', symbol: 'OMG', value_usd: '1000.00', percentage: '0', included: false }),
+        ],
+      })
+      await flush()
+
+      const spoiler = container.querySelector('.allocation-excluded-strip .allocation-spoiler') as HTMLButtonElement
+      await act(async () => { spoiler.click() })
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Include OMG"]') as HTMLButtonElement).click()
+      })
+
+      // Back in the table with its share, and the total restored — the value
+      // was never thrown away, so nothing had to be re-scanned.
+      expect(container.querySelector('[aria-label="Exclude OMG"]')).toBeTruthy()
+      expect(container.textContent).toContain('$4,000.00')
+      expect(container.textContent).toContain('75.00%')
+
+      await unmount(container, root)
+    })
+
+    it('snaps the row back when the server rejects the toggle', async () => {
+      mockPatchAsset.mockRejectedValue(new Error('network down'))
+      const { container, root } = mountWithData(TWO_ASSET_PORTFOLIO)
+      await flush()
+
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Exclude OMG"]') as HTMLButtonElement).click()
+      })
+      await flush()
+
+      // Nothing was persisted, so the row and the total must not pretend otherwise.
+      expect(container.querySelector('[aria-label="Exclude OMG"]')).toBeTruthy()
+      expect(container.textContent).toContain('$4,000.00')
+
+      await unmount(container, root)
+    })
+
+    it('refetches the chart so the curve cannot disagree with the total', async () => {
+      mockPatchAsset.mockResolvedValue({} as never)
+      const { container, root, qc } = mountWithData(TWO_ASSET_PORTFOLIO)
+      await flush()
+      const invalidate = vi.spyOn(qc, 'invalidateQueries')
+
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Exclude OMG"]') as HTMLButtonElement).click()
+      })
+      await flush()
+
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['history'] })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['portfolio'] })
+
+      await unmount(container, root)
     })
   })
 })

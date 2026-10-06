@@ -212,17 +212,14 @@ async def get_portfolio(
 
     # 2. Query valuation lines joined with asset and wallet info.
     #
-    # Exclusion is applied here, at read time, against the asset's *current*
-    # `excluded` flag rather than relying on the snapshot having been rebuilt
-    # (AUD-447). publish_valuation_snapshot already omits excluded assets, so
-    # for a freshly published snapshot this filter is a no-op — but a snapshot
-    # published before the owner hit Exclude still carries the line, and
-    # waiting for the next valuation run meant the dashboard total, the
-    # allocation table and the percentages all kept counting an asset the
-    # owner had just dropped. Every figure below (priced_subtotal, total_usd,
-    # allocation percentages, quality) is derived from these rows, so
-    # filtering them is enough to make Exclude take effect on the next
-    # refetch.
+    # Exclusion is applied at read time against the asset's *current*
+    # `excluded` flag (AUD-447), but the excluded rows are still returned,
+    # flagged `included=false` (AUD-448). They are omitted from every total
+    # below — priced_subtotal, total_usd, the allocation percentages and the
+    # unpriced count — so Exclude takes full effect on the next refetch,
+    # while the client keeps the row's value and can therefore redraw
+    # instantly in *both* directions: dropping a row needs no round trip, and
+    # putting it back needs no re-scan to recover a number it never lost.
     wallet_filter = "AND vl.wallet_id = :wallet_id" if wallet_id else ""
     lines_result = await db.execute(
         sa.text(
@@ -239,6 +236,7 @@ async def get_portfolio(
                 a.symbol,
                 COALESCE(a.decimals_override, a.decimals) AS decimals,
                 a.source,
+                COALESCE(a.excluded, false) AS excluded,
                 bo.observed_at        AS observed_at
             FROM valuation_line vl
             JOIN asset a ON a.id = vl.asset_id
@@ -248,7 +246,6 @@ async def get_portfolio(
                 WHERE bo2.id = vl.observation_id
             ) bo ON true
             WHERE vl.snapshot_id = :snap_id
-              AND NOT COALESCE(a.excluded, false)
               {wallet_filter}
             ORDER BY vl.value_usd DESC NULLS LAST
             """  # noqa: S608 -- wallet_filter is a fixed ":param" fragment; the value is bound, never interpolated
@@ -264,9 +261,15 @@ async def get_portfolio(
     # so a line whose block is behind the max was not updated by the latest
     # run and is a carried-forward (stale) balance — this is what
     # stale_contribution_usd below sums (AUD-72).
+    #
+    # Excluded lines are skipped: `balance_block` describes the portfolio the
+    # owner actually holds, and letting an excluded asset set the baseline
+    # would let it mark every real holding Stale (AUD-448).
     max_block: int | None = None
     max_block_time: datetime | None = None
     for line in lines:
+        if line["excluded"]:
+            continue
         block_number = line["block_number"]
         if block_number is not None:
             bn = int(block_number)
@@ -282,6 +285,7 @@ async def get_portfolio(
     max_observed: datetime | None = None
 
     for line in lines:
+        is_included = not bool(line["excluded"])
         token_address = str(line["token_address"])
         is_native = is_native_eth(token_address)
         source = str(line["source"])
@@ -307,7 +311,7 @@ async def get_portfolio(
         price_usd_str: str | None = line["price_usd"]
         value_usd_str: str | None = line["value_usd"]
 
-        if price_usd_str is not None and value_usd_str is not None:
+        if is_included and price_usd_str is not None and value_usd_str is not None:
             try:
                 priced_subtotal += Decimal(value_usd_str)
             except Exception:
@@ -322,7 +326,12 @@ async def get_portfolio(
         is_stale_balance = (
             block_number is not None and max_block is not None and int(block_number) < max_block
         )
-        if is_stale_balance and price_usd_str is not None and value_usd_str is not None:
+        if (
+            is_included
+            and is_stale_balance
+            and price_usd_str is not None
+            and value_usd_str is not None
+        ):
             try:
                 stale_subtotal += Decimal(value_usd_str)
             except Exception:
@@ -359,7 +368,7 @@ async def get_portfolio(
                 quantity=quantity_str,
                 price_usd=price_usd_str,
                 value_usd=value_usd_str,
-                included=True,
+                included=is_included,
                 metadata_source=metadata_source,
                 read_status="ok",
                 block_time=block_time_str,
@@ -376,7 +385,10 @@ async def get_portfolio(
     total_usd_str: str | None = (
         format_decimal(priced_subtotal) if quality_str in ("complete", "gaps") else None
     )
-    if not holdings:
+    # "No subtotal" means nothing counts towards one. Excluded rows are in
+    # `holdings` now (AUD-448), so an all-excluded portfolio must still report
+    # a null subtotal rather than a misleading $0.00.
+    if not any(h.included for h in holdings):
         priced_subtotal_str: str | None = None
         stale_contribution_str: str | None = None
     else:
@@ -430,39 +442,65 @@ async def get_portfolio(
         if _STATUS_RANK[line_status] > _STATUS_RANK[agg["status"]]:
             agg["status"] = line_status
 
+    # Only included assets can leave the total incomplete — an excluded
+    # unpriced token is not a gap in a figure it never contributed to.
     unpriced_asset_count = sum(
-        1 for asset_id in asset_order if not asset_aggs[asset_id]["has_priced_line"]
+        1
+        for asset_id in asset_order
+        if asset_aggs[asset_id]["included"] and not asset_aggs[asset_id]["has_priced_line"]
     )
 
+    # Excluded rows are emitted with their value but a 0% share, and
+    # unconditionally — the `priced_subtotal > 0` guard below only governs
+    # whether a *share* is computable, and an all-excluded portfolio has a
+    # zero subtotal yet must still hand the client the rows it needs to put
+    # an asset back (AUD-448).
     allocations: list[AllocationItemOut] = []
-    if priced_subtotal > 0:
-        for asset_id in asset_order:
-            agg = asset_aggs[asset_id]
-            if not agg["has_priced_line"]:
-                continue
-            try:
-                pct = (agg["value_usd"] / priced_subtotal * 100).quantize(Decimal("0.01"))
-            except Exception:
-                logger.warning(
-                    "Failed to compute allocation percentage for asset %s; omitted",
-                    asset_id,
-                    exc_info=True,
-                )
-                continue
+    for asset_id in asset_order:
+        agg = asset_aggs[asset_id]
+        if not agg["has_priced_line"]:
+            continue
+        if not agg["included"]:
             allocations.append(
                 AllocationItemOut(
                     asset_id=asset_id,
                     symbol=agg["symbol"],
                     value_usd=format_decimal(agg["value_usd"]),
-                    percentage=str(pct),
+                    percentage="0",
                     quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
                     price_usd=agg["price_usd"],
                     wallet_count=len(agg["wallet_ids"]),
                     read_status=agg["status"],
-                    included=agg["included"],
+                    included=False,
                     logo_url=_icon_url(asset_id),
                 )
             )
+            continue
+        if priced_subtotal <= 0:
+            continue
+        try:
+            pct = (agg["value_usd"] / priced_subtotal * 100).quantize(Decimal("0.01"))
+        except Exception:
+            logger.warning(
+                "Failed to compute allocation percentage for asset %s; omitted",
+                asset_id,
+                exc_info=True,
+            )
+            continue
+        allocations.append(
+            AllocationItemOut(
+                asset_id=asset_id,
+                symbol=agg["symbol"],
+                value_usd=format_decimal(agg["value_usd"]),
+                percentage=str(pct),
+                quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
+                price_usd=agg["price_usd"],
+                wallet_count=len(agg["wallet_ids"]),
+                read_status=agg["status"],
+                included=True,
+                logo_url=_icon_url(asset_id),
+            )
+        )
 
     # Unpriced assets are surfaced in allocations too (sorted after the
     # priced ones) — dropping the Holdings page must not make them invisible.

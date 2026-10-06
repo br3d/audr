@@ -13,7 +13,12 @@ publish_valuation_snapshot() atomically:
 
 Rules:
 - Unknown ≠ zero: holdings without prices get NULL price_usd/value_usd lines.
-- Excluded assets are excluded from the snapshot (neither line nor quality count).
+- Excluded assets still get a line; exclusion is a read-time concern (AUD-448).
+  The snapshot records what the wallets actually held, so GET /portfolio and
+  GET /history can honour the *current* exclusion set over any past snapshot
+  and the owner can un-exclude an asset without waiting for a re-scan.
+  Exclusion still shapes `quality` and the priced counts, which describe the
+  part of the portfolio that counts towards the total.
 - All arithmetic uses Python Decimal — never float.
 - The snapshot is immutable once published_at is set.
 - Publication is idempotent by exact input key: the same observation set and
@@ -51,6 +56,9 @@ class HoldingRow:
     # provider about it and the provider didn't know it (AUD-361) — as
     # opposed to the asset simply never having been asked about.
     price_unavailable: bool = False
+    # The asset's current `excluded` flag. The line is still written — only
+    # quality, the priced counts and every read-side total skip it (AUD-448).
+    excluded: bool = False
 
 
 @dataclass
@@ -78,7 +86,12 @@ async def publish_valuation_snapshot(session: AsyncSession) -> SnapshotResult:
 
     latest_prices, quote_set_ids = await _get_latest_prices(session)
 
-    quality, priced_count = _compute_quality(holdings, latest_prices)
+    # Quality describes the part of the portfolio that counts towards the
+    # total, so it is computed over the included holdings only — an excluded
+    # unpriceable dust token must not downgrade the snapshot or null out
+    # total_usd (AUD-448). Every holding still gets a line below.
+    included = [h for h in holdings if not h.excluded]
+    quality, priced_count = _compute_quality(included, latest_prices)
 
     input_key = _compute_input_key(holdings, quote_set_ids)
 
@@ -158,6 +171,12 @@ async def get_latest_snapshot_lines(
 ) -> list[dict[str, object]]:
     """Return valuation lines from the most recently published snapshot.
 
+    Excluded assets are filtered out here. Snapshots record them now (AUD-448)
+    so the dashboard can toggle exclusion without waiting for a re-scan, but
+    this feeds GET /portfolio/holdings, whose rows carry no `included` flag —
+    returning them would silently put excluded assets back into a list that
+    has no way to say they don't count.
+
     Returns an empty list when no published snapshot exists.
     """
     result = await session.execute(
@@ -183,6 +202,7 @@ async def get_latest_snapshot_lines(
                 SELECT MAX(published_at) FROM valuation_snapshot
                 WHERE published_at IS NOT NULL
             )
+              AND NOT COALESCE(a.excluded, false)
             ORDER BY vl.value_usd DESC NULLS LAST
             """
         )
@@ -213,7 +233,15 @@ async def get_latest_snapshot_lines(
 
 
 async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
-    """Latest non-zero balance observation per (wallet, asset), skipping excluded assets.
+    """Latest non-zero balance observation per (wallet, asset).
+
+    Excluded assets are returned too, carrying their current ``excluded``
+    flag (AUD-448). They used to be filtered out here, which made exclusion
+    destructive: once a snapshot had been published without the line, the
+    asset's value was gone from that point in history, so un-excluding it
+    could not restore anything until the next balance scan, and a read-time
+    filter had nothing to filter. Recording the line and deciding at read
+    time keeps the toggle reversible and instant in both directions.
 
     Only ``active`` wallets contribute (AUD-446). A stopped wallet is never
     scanned again by handle_balance_scan, so its last observation is frozen at
@@ -237,12 +265,12 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
                 bo.block_time,
                 COALESCE(a.decimals_override, a.decimals) AS effective_decimals,
                 bo.id  AS observation_id,
-                a.price_unavailable_since IS NOT NULL AS price_unavailable
+                a.price_unavailable_since IS NOT NULL AS price_unavailable,
+                COALESCE(a.excluded, false) AS excluded
             FROM balance_observation bo
             JOIN wallet w ON w.id = bo.wallet_id
             JOIN asset  a ON a.id = bo.asset_id
-            WHERE NOT COALESCE(a.excluded, false)
-              AND w.status = 'active'
+            WHERE w.status = 'active'
               AND bo.observed_at = (
                   SELECT MAX(bo2.observed_at)
                   FROM balance_observation bo2
@@ -264,6 +292,7 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
             block_time=row[5],
             decimals=int(row[6]),
             price_unavailable=bool(row[8]),
+            excluded=bool(row[9]),
         )
         for row in result
     ]
@@ -303,15 +332,22 @@ def _compute_input_key(
 ) -> str:
     """Deterministic hash of the exact inputs a snapshot was built from.
 
-    The key is the sorted set of included holdings' observation ids plus the
-    sorted set of quote_set ids the prices came from. Two publish calls with
-    the same key always describe the same snapshot: the same holdings (an
-    exclusion change removes/adds an observation id, changing the key) priced
-    from the same quote data.
+    The key is the sorted set of holdings' observation ids, the sorted set of
+    currently-excluded asset ids, and the sorted set of quote_set ids the
+    prices came from. Two publish calls with the same key always describe the
+    same snapshot: the same holdings, priced from the same quote data, under
+    the same exclusion set.
+
+    The exclusion set is part of the key because it shapes the stored
+    `quality` (AUD-448). Excluded assets are no longer dropped from the
+    holdings list, so without this an exclusion toggle would leave the
+    observation ids untouched, match the previous key, and return a snapshot
+    whose quality was computed under the old exclusion set.
     """
     obs_part = ",".join(sorted(str(h.observation_id) for h in holdings))
+    excl_part = ",".join(sorted({str(h.asset_id) for h in holdings if h.excluded}))
     qs_part = ",".join(sorted(str(qs_id) for qs_id in quote_set_ids))
-    payload = f"obs:{obs_part}|qs:{qs_part}"
+    payload = f"obs:{obs_part}|excl:{excl_part}|qs:{qs_part}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
