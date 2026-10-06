@@ -80,17 +80,135 @@ async def test_get_logs_empty_list() -> None:
 
 @pytest.mark.contract
 async def test_get_logs_rpc_error_raises() -> None:
-    """An RPC error response raises RpcError."""
+    """An unnamed range error on a range wider than LOG_CHUNK_SIZE raises.
+
+    Chunking that far down is the caller's job, and halving blindly would turn
+    one doomed call into thousands (AUD-445).
+    """
     error_body = {
         "jsonrpc": "2.0",
         "id": 1,
         "error": {"code": -32005, "message": "range too large"},
     }
     with respx.mock() as mock:
-        mock.post("http://rpc.test/").mock(return_value=Response(200, json=error_body))
+        route = mock.post("http://rpc.test/").mock(return_value=Response(200, json=error_body))
         reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
         with pytest.raises(RpcError):
             await reader.get_logs(from_block=0, to_block=999_999)
+
+    assert route.call_count == 1
+
+
+@pytest.mark.contract
+async def test_get_logs_splits_when_provider_names_its_cap() -> None:
+    """A "Max range: 800" rejection is retried as 800-block sub-ranges (AUD-445)."""
+    ranges: list[tuple[int, int]] = []
+
+    def respond(request, *args, **kwargs):  # type: ignore[no-untyped-def]
+        import json
+
+        params = json.loads(request.content.decode())["params"][0]
+        lo = int(params["fromBlock"], 16)
+        hi = int(params["toBlock"], 16)
+        if hi - lo + 1 > 800:
+            return Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32047,
+                        "message": (
+                            "Invalid eth_getLogs request. 'fromBlock'-'toBlock' "
+                            "range too large. Max range: 800"
+                        ),
+                    },
+                },
+            )
+        ranges.append((lo, hi))
+        return Response(200, json=_rpc_ok([_transfer_log(block_number=lo)]))
+
+    with respx.mock() as mock:
+        mock.post("http://rpc.test/").mock(side_effect=respond)
+        reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+        result = await reader.get_logs(from_block=1_000, to_block=2_999)
+
+    # 2000 blocks served as 800 + 800 + 400, contiguous and without gaps.
+    assert ranges == [(1_000, 1_799), (1_800, 2_599), (2_600, 2_999)]
+    assert len(result) == 3
+
+
+@pytest.mark.contract
+async def test_get_logs_learned_cap_narrows_log_chunk_size() -> None:
+    """Once a cap is learned the reader advertises it, so callers stop over-asking."""
+    calls: list[int] = []
+
+    def respond(request, *args, **kwargs):  # type: ignore[no-untyped-def]
+        import json
+
+        params = json.loads(request.content.decode())["params"][0]
+        lo = int(params["fromBlock"], 16)
+        hi = int(params["toBlock"], 16)
+        span = hi - lo + 1
+        calls.append(span)
+        if span > 800:
+            return Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {"code": -32047, "message": "range too large. Max range: 800"},
+                },
+            )
+        return Response(200, json=_rpc_ok([]))
+
+    with respx.mock() as mock:
+        mock.post("http://rpc.test/").mock(side_effect=respond)
+        reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+        assert reader.log_chunk_size == LOG_CHUNK_SIZE
+
+        await reader.get_logs(from_block=0, to_block=1_999)
+        assert reader.log_chunk_size == 800
+
+        # A second oversized range is split up front — no repeat discovery cost.
+        calls.clear()
+        await reader.get_logs(from_block=10_000, to_block=11_999)
+        assert max(calls) <= 800
+
+
+@pytest.mark.contract
+async def test_get_logs_does_not_split_below_floor() -> None:
+    """A provider claiming an absurd cap is not honoured; the error propagates."""
+    error_body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32047, "message": "range too large. Max range: 1"},
+    }
+    with respx.mock() as mock:
+        route = mock.post("http://rpc.test/").mock(return_value=Response(200, json=error_body))
+        reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+        with pytest.raises(RpcError):
+            await reader.get_logs(from_block=0, to_block=1_999)
+
+    assert route.call_count == 1
+    assert reader.log_chunk_size == LOG_CHUNK_SIZE
+
+
+@pytest.mark.contract
+async def test_get_logs_non_range_error_is_not_split() -> None:
+    """An error unrelated to range width propagates untouched."""
+    error_body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32000, "message": "execution reverted"},
+    }
+    with respx.mock() as mock:
+        route = mock.post("http://rpc.test/").mock(return_value=Response(200, json=error_body))
+        reader = RpcReader(url="http://rpc.test/", expected_chain_id=1)
+        with pytest.raises(RpcError):
+            await reader.get_logs(from_block=0, to_block=1_999)
+
+    assert route.call_count == 1
 
 
 @pytest.mark.contract

@@ -35,9 +35,13 @@ async def _checkpoint(session: AsyncSession, wallet_id: uuid.UUID) -> int:
     return int(row.scalar_one())
 
 
-def _fake_reader() -> AsyncMock:
+def _fake_reader(log_chunk_size: int = LOG_CHUNK_SIZE) -> AsyncMock:
     reader = AsyncMock()
     reader.get_logs = AsyncMock(return_value=[])
+    # Real readers expose this as a plain int property that narrows when an
+    # endpoint rejects a range as too wide (AUD-445); an AsyncMock attribute
+    # would hand the indexer a MagicMock to do arithmetic on.
+    reader.log_chunk_size = log_chunk_size
     return reader
 
 

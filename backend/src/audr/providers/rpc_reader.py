@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,6 +33,35 @@ APPROVAL_TOPIC = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3
 
 # Maximum block range per eth_getLogs call; avoids RPC timeout on large ranges
 LOG_CHUNK_SIZE = 2_000
+
+# Providers cap how wide an eth_getLogs range may be, and the cap varies between
+# them (AUD-445). One of our public fallbacks allows 800 blocks where
+# LOG_CHUNK_SIZE is 2000, so once the primary endpoint started answering 429
+# every single chunk died on a "range too large" JSON-RPC error and the indexer
+# could never advance past the first chunk — the Events and Allowances views
+# stayed empty no matter how far back the checkpoint reached. Rather than pin
+# LOG_CHUNK_SIZE to the stingiest provider we know about, learn the real cap
+# from the error and re-chunk around it.
+_RANGE_LIMIT_MARKERS = (
+    "range too large",
+    "range too wide",
+    "block range",
+    "too many blocks",
+    "query returned more than",
+    "more than 10000 results",
+    "log response size exceeded",
+    "query timeout exceeded",
+)
+
+# Several providers name the ceiling in the message ("Max range: 800"); prefer
+# that over blind halving so we converge in one retry instead of log2(n).
+_MAX_RANGE_RE = re.compile(r"max(?:imum)?[\s_-]*range:?\s*(\d+)", re.IGNORECASE)
+
+# Floor on the learned cap. Public endpoints bottom out around a few hundred
+# blocks, so a "range too large" that survives narrowing to this width is
+# telling us something other than what it says, and halving further would only
+# multiply failing requests.
+_MIN_LOG_RANGE = 128
 
 
 @dataclass
@@ -105,6 +135,22 @@ class RpcReader:
         # a reader directly are unaffected.
         self._rate_limiter = rate_limiter
         self._retry_policy = retry_policy or RetryPolicy()
+        # Narrowest eth_getLogs block span the endpoints have accepted so far,
+        # learned on the first "range too large" rejection (AUD-445). None means
+        # "no cap discovered yet, LOG_CHUNK_SIZE is fine".
+        self._max_log_range: int | None = None
+
+    @property
+    def log_chunk_size(self) -> int:
+        """Block span callers should chunk eth_getLogs by, honouring any learned cap.
+
+        Starts at LOG_CHUNK_SIZE and drops once an endpoint tells us its real
+        ceiling, so a caller that re-reads this between chunks stops paying for
+        a doomed oversized request on every iteration.
+        """
+        if self._max_log_range is None:
+            return LOG_CHUNK_SIZE
+        return min(LOG_CHUNK_SIZE, self._max_log_range)
 
     async def validate_chain(self) -> None:
         """Confirm the node is on the expected chain.  Raises ChainMismatchError."""
@@ -169,12 +215,91 @@ class RpcReader:
         address: list[str] | None = None,
         topics: list[str | list[str] | None] | None = None,
     ) -> list[LogEntry]:
-        """Fetch logs via eth_getLogs for a single block range (no chunking).
+        """Fetch logs via eth_getLogs for a block range.
 
-        The caller is responsible for chunking long ranges using LOG_CHUNK_SIZE.
-        ``address`` is a list of contract addresses to filter by (OR logic).
-        ``topics`` follows the eth_getLogs topic filter spec.
+        Callers should chunk long ranges by :attr:`log_chunk_size`, but a range
+        wider than the endpoint allows is not fatal: when a provider rejects it
+        for being too large this splits the range and fetches the pieces, so the
+        caller gets the same flat list either way (AUD-445). ``address`` is a
+        list of contract addresses to filter by (OR logic). ``topics`` follows
+        the eth_getLogs topic filter spec.
         """
+        span = to_block - from_block + 1
+        # A cap learned on an earlier call — split up front rather than spending
+        # a request to rediscover it.
+        if self._max_log_range is not None and span > self._max_log_range:
+            return await self._get_logs_split(
+                from_block=from_block,
+                to_block=to_block,
+                span=self._max_log_range,
+                address=address,
+                topics=topics,
+            )
+
+        try:
+            return await self._get_logs_once(
+                from_block=from_block,
+                to_block=to_block,
+                address=address,
+                topics=topics,
+            )
+        except RpcError as exc:
+            cap = _parse_range_cap(str(exc), span=span)
+            # Not a range complaint, or a cap that wouldn't actually narrow the
+            # request — either way retrying cannot help, so let it propagate.
+            if cap is None or cap >= span:
+                raise
+            known = self._max_log_range
+            self._max_log_range = cap if known is None else min(known, cap)
+            logger.info(
+                "RPC endpoint caps eth_getLogs at %d blocks (asked for %d) — re-chunking",
+                cap,
+                span,
+            )
+            return await self._get_logs_split(
+                from_block=from_block,
+                to_block=to_block,
+                span=cap,
+                address=address,
+                topics=topics,
+            )
+
+    async def _get_logs_split(
+        self,
+        *,
+        from_block: int,
+        to_block: int,
+        span: int,
+        address: list[str] | None,
+        topics: list[str | list[str] | None] | None,
+    ) -> list[LogEntry]:
+        """Fetch ``from_block..to_block`` as consecutive ``span``-wide sub-ranges."""
+        entries: list[LogEntry] = []
+        start = from_block
+        while start <= to_block:
+            end = min(start + span - 1, to_block)
+            # Recurse through get_logs so a sub-range that is *still* too wide
+            # (a provider that narrows its cap further) splits again.
+            entries.extend(
+                await self.get_logs(
+                    from_block=start,
+                    to_block=end,
+                    address=address,
+                    topics=topics,
+                )
+            )
+            start = end + 1
+        return entries
+
+    async def _get_logs_once(
+        self,
+        *,
+        from_block: int,
+        to_block: int,
+        address: list[str] | None,
+        topics: list[str | list[str] | None] | None,
+    ) -> list[LogEntry]:
+        """Issue exactly one eth_getLogs request for the given range."""
         filter_params: dict[str, Any] = {
             "fromBlock": hex(from_block),
             "toBlock": hex(to_block),
@@ -294,6 +419,34 @@ def _retry_after_seconds(resp: httpx.Response, policy: RetryPolicy, attempt: int
         except ValueError:
             pass
     return policy.delay_for(attempt)
+
+
+def _parse_range_cap(message: str, *, span: int) -> int | None:
+    """Return the block span to retry an over-wide eth_getLogs call with.
+
+    ``None`` means "do not retry" — either *message* is not a range complaint at
+    all, or it is one we cannot safely act on. When the provider names its
+    ceiling ("Max range: 800") we take it at face value. When it only says the
+    range was too wide we fall back to halving, but *only* for a span the caller
+    was already supposed to have chunked down to LOG_CHUNK_SIZE: blindly halving
+    an arbitrarily wide range that is rejected at every size would expand one
+    call into thousands of doomed requests. Splitting below _MIN_LOG_RANGE is
+    likewise refused — no real provider caps that low, so continuing to halve
+    means the error was never about the range to begin with.
+    """
+    lowered = message.lower()
+    if not any(marker in lowered for marker in _RANGE_LIMIT_MARKERS):
+        return None
+
+    match = _MAX_RANGE_RE.search(message)
+    if match:
+        named = int(match.group(1))
+        return named if named >= _MIN_LOG_RANGE else None
+
+    if span > LOG_CHUNK_SIZE:
+        return None
+    halved = span // 2
+    return halved if halved >= _MIN_LOG_RANGE else None
 
 
 def _parse_hex_int(value: str) -> int:

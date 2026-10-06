@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     # page. The default is ~16 days of mainnet blocks, which is exactly one
     # full `event_indexer_max_chunks_per_run` budget at LOG_CHUNK_SIZE, so a
     # new wallet's backfill completes in a single run without a second RPC
-    # burst. Set to 0 to restore the old index-from-now-on behaviour.
+    # burst — more runs if the live endpoint caps eth_getLogs below
+    # LOG_CHUNK_SIZE, since chunks then shrink to that cap (AUD-445) and the
+    # run budget covers proportionally fewer blocks. Progress is checkpointed
+    # either way, so the backfill just resumes on the next scheduled run.
+    # Set to 0 to restore the old index-from-now-on behaviour.
     event_indexer_backfill_blocks: int = 100_000
 
     # Anonymous CoinMarketCap rate-limit budget for the worker process
