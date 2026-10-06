@@ -14,11 +14,11 @@ Algorithm per run:
        - Transfer logs where wallet is receiver (topics[2] = wallet)
        - Approval logs where wallet is owner (topics[1] = wallet) — feeds the
          allowance/security-signals view (GET /api/v1/allowances)
+  5. Insert events into onchain_event (ON CONFLICT DO NOTHING).
+  6. Advance checkpoint to current_block.
 
 Transfer logs are restricted to tracked tokens; approval logs are not. See
 _index_wallet for why the two filters differ.
-  5. Insert events into onchain_event (ON CONFLICT DO NOTHING).
-  6. Advance checkpoint to current_block.
 """
 
 from __future__ import annotations
