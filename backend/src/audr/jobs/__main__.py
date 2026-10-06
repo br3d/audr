@@ -23,7 +23,7 @@ from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
 from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.jobs.quotes import handle_quote_refresh
-from audr.jobs.store import JobKind, get_job_params, upsert_worker_status
+from audr.jobs.store import JobKind, enqueue_job, get_job_params, upsert_worker_status
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
 from audr.operations.cleanup import cleanup_expired_auth_rows
@@ -252,6 +252,14 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                         token_addr,
                         run_id,
                     )
+
+    # Republish the portfolio off the balances we just read (AUD-446). The
+    # dashboard renders the latest valuation_snapshot, not balance_observation,
+    # so without this a "Refresh balances" click updated the observations and
+    # changed nothing the user could see until the next hourly quote_refresh
+    # happened to enqueue a valuation of its own — the button looked broken.
+    # handle_valuation no-ops with a log line when there are no prices yet.
+    await enqueue_job(session, kind=JobKind.VALUATION)
 
     logger.info("balance_scan run_id=%s block=%d", run_id, block_number)
     await session.commit()
