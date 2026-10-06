@@ -216,3 +216,34 @@ async def test_handle_discovery_scoped_to_one_wallet(
     assert discovered == [_WALLET_A], (
         "a wallet-scoped discovery run must never discover for another wallet"
     )
+
+
+@pytest.mark.integration
+async def test_balance_scan_enqueues_a_valuation_run(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    fake_rpc_readers: list[_FakeRpcReader],
+    test_secret_key: str,
+) -> None:
+    """AUD-446: a finished scan must republish the portfolio.
+
+    The dashboard renders the latest valuation_snapshot, not
+    balance_observation. Without this enqueue, "Refresh balances" updated the
+    observations and changed nothing the user could see until the next hourly
+    quote_refresh happened to enqueue a valuation of its own.
+    """
+    async with db_session_factory() as session:
+        await add_wallet(session, address=_WALLET_A, label="A")
+        run_id = await enqueue_job(session, kind=JobKind.BALANCE_SCAN)
+        await session.commit()
+
+    async with db_session_factory() as session:
+        await worker_main.handle_balance_scan(session, run_id)
+
+    async with db_session_factory() as session:
+        pending = (
+            await session.execute(
+                text("SELECT count(*) FROM job_run WHERE kind = 'valuation' AND status = 'pending'")
+            )
+        ).scalar_one()
+
+    assert pending == 1, "balance_scan must queue exactly one valuation republish"

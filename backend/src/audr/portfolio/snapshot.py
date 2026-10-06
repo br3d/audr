@@ -213,7 +213,18 @@ async def get_latest_snapshot_lines(
 
 
 async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
-    """Latest non-zero balance observation per (wallet, asset), skipping excluded assets."""
+    """Latest non-zero balance observation per (wallet, asset), skipping excluded assets.
+
+    Only ``active`` wallets contribute (AUD-446). A stopped wallet is never
+    scanned again by handle_balance_scan, so its last observation is frozen at
+    the block it was stopped on. Carrying those lines into new snapshots pinned
+    every one of its assets below the live wallets' block_number, which
+    api/portfolio.py reports as a permanent "Stale" badge that no amount of
+    "Refresh balances" can ever clear. Excluding them also restores the
+    behaviour the Wallets page already promises: "Stopping tracking removes
+    this address from balance calculations but retains its historical records"
+    — the observation rows stay, they just stop being current holdings.
+    """
     result = await session.execute(
         sa.text(
             """
@@ -231,6 +242,7 @@ async def _get_current_holdings(session: AsyncSession) -> list[HoldingRow]:
             JOIN wallet w ON w.id = bo.wallet_id
             JOIN asset  a ON a.id = bo.asset_id
             WHERE NOT COALESCE(a.excluded, false)
+              AND w.status = 'active'
               AND bo.observed_at = (
                   SELECT MAX(bo2.observed_at)
                   FROM balance_observation bo2
