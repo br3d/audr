@@ -9,7 +9,8 @@ Algorithm per run:
      current_block so the Events/Allowances views have history to show
      immediately (AUD-445).
   4. For each wallet, fetch events from checkpoint+1 to current_block in
-     LOG_CHUNK_SIZE chunks:
+     chunks of `reader.log_chunk_size` blocks (LOG_CHUNK_SIZE, narrowed to
+     whatever range limit the live RPC endpoint turns out to enforce):
        - Transfer logs where wallet is sender (topics[1] = wallet)
        - Transfer logs where wallet is receiver (topics[2] = wallet)
        - Approval logs where wallet is owner (topics[1] = wallet) — feeds the
@@ -33,7 +34,6 @@ from audr.config import get_settings
 from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.providers.rpc_reader import (
     APPROVAL_TOPIC,
-    LOG_CHUNK_SIZE,
     TRANSFER_TOPIC,
     LogEntry,
     MalformedResponseError,
@@ -140,7 +140,7 @@ async def _index_wallet(
 ) -> tuple[int, int]:
     """Index one wallet's events; returns (events_inserted, chunks_used).
 
-    ``max_chunks`` bounds how many LOG_CHUNK_SIZE block-ranges this call may
+    ``max_chunks`` bounds how many ``reader.log_chunk_size`` block-ranges this call may
     process — once exhausted, progress is checkpointed at the last completed
     chunk boundary and the remaining range resumes on the wallet's next run
     (AUD-362), so a long catch-up range can't burn the whole run's RPC budget.
@@ -172,7 +172,7 @@ async def _index_wallet(
     inserted = 0
     chunks_used = 0
 
-    # Process in LOG_CHUNK_SIZE block chunks
+    # Process in reader.log_chunk_size block chunks
     chunk_start = from_block
     while chunk_start <= current_block:
         if chunks_used >= max_chunks:
@@ -185,7 +185,11 @@ async def _index_wallet(
             )
             return inserted, chunks_used
 
-        chunk_end = min(chunk_start + LOG_CHUNK_SIZE - 1, current_block)
+        # Re-read per chunk: the reader narrows this the first time an endpoint
+        # rejects a range as too wide (AUD-445), and picking it up here keeps
+        # one chunk of budget equal to one accepted request instead of silently
+        # becoming several.
+        chunk_end = min(chunk_start + reader.log_chunk_size - 1, current_block)
 
         try:
             # Outbound transfers (wallet is sender — topic[1])
