@@ -1,8 +1,10 @@
 """Quote-refresh job handler — fetches prices for currently held assets (T054 / US2 / AUD-67).
 
 Only assets with at least one non-zero balance observation are priced
-(held-asset-only).  Assets with no recent observation, zero balance, or
-that are excluded are skipped.
+(held-asset-only).  Assets with no recent observation or a zero balance are
+skipped.  Excluded assets are still priced: exclusion only keeps an asset out
+of the portfolio's value (AUD-447), so putting it back must show a current
+price immediately rather than a blank waiting for the next refresh.
 
 Provider selection (AUD-358): CoinGecko Demo requires an API key that a
 fresh install never has, so it used to be the only provider and
@@ -274,7 +276,14 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
 
 
 async def _get_held_asset_addresses(session: AsyncSession) -> list[str]:
-    """Return lowercase token addresses that have at least one non-zero balance."""
+    """Return lowercase token addresses that have at least one non-zero balance.
+
+    Exclusion is deliberately not a filter here (AUD-447). `excluded` means
+    "do not count this towards my portfolio", not "stop tracking it": the
+    owner can put the asset back at any time, and a re-include that lands on
+    a stale or missing price would make the dashboard wait for the next
+    refresh to show a number the exclusion never invalidated.
+    """
     result = await session.execute(
         sa.text(
             """
@@ -282,7 +291,6 @@ async def _get_held_asset_addresses(session: AsyncSession) -> list[str]:
             FROM balance_observation bo
             JOIN asset a ON a.id = bo.asset_id
             WHERE bo.raw_amount > 0
-              AND NOT COALESCE(a.excluded, false)
             """
         )
     )

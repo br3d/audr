@@ -25,7 +25,10 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
     """Export the current portfolio state as a structured dict.
 
     Uses the latest balance_observation per (wallet, asset) pair.
-    Assets with ``excluded = true`` are omitted entirely.
+    Excluded assets are exported too (AUD-447) — the export is a record of
+    what the wallets hold, and exclusion only decides what counts towards the
+    portfolio's value. The full-history export has always behaved this way;
+    omitting them here made a round-trip through the export lose holdings.
     Unknown balance (no observation) is represented as ``None``, never ``0``.
 
     Returns::
@@ -67,7 +70,6 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
                 ORDER BY observed_at DESC
                 LIMIT 1
             ) bo ON true
-            WHERE a.excluded = false
             ORDER BY w.address, a.symbol
             """
         )

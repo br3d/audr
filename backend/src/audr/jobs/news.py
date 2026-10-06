@@ -90,7 +90,13 @@ def match_assets(title: str, assets: list[HeldAsset]) -> list[uuid.UUID]:
 
 
 async def _get_held_assets(session: AsyncSession) -> list[HeldAsset]:
-    """Return held assets (id, symbol, name) with at least one non-zero balance."""
+    """Return held assets (id, symbol, name) with at least one non-zero balance.
+
+    Excluded assets are included (AUD-447): exclusion scopes what counts
+    towards the portfolio's value, and the owner asked for it to change
+    nothing outside the dashboard and the Assets list. News about an asset
+    you still hold is worth reading whether or not you count it.
+    """
     result = await session.execute(
         sa.text(
             """
@@ -98,7 +104,6 @@ async def _get_held_assets(session: AsyncSession) -> list[HeldAsset]:
             FROM balance_observation bo
             JOIN asset a ON a.id = bo.asset_id
             WHERE bo.raw_amount > 0
-              AND NOT COALESCE(a.excluded, false)
             """
         )
     )
