@@ -132,7 +132,9 @@ async def _get_assets_needing_icon(
     """Return (asset_id, token_address) for held assets with no fresh icon cache row.
 
     "Held" mirrors quote_refresh/news_refresh: at least one non-zero balance
-    observation. Excludes assets already cached with status='ok', and assets
+    observation, excluded or not (AUD-447) — the Assets list still renders
+    excluded rows behind "Show excluded", so they still need an icon.
+    Excludes assets already cached with status='ok', and assets
     negative-cached ('missing') more recently than `_NEGATIVE_CACHE_TTL`.
     """
     result = await session.execute(
@@ -143,7 +145,6 @@ async def _get_assets_needing_icon(
             JOIN asset a ON a.id = bo.asset_id
             LEFT JOIN asset_icon ai ON ai.asset_id = a.id
             WHERE bo.raw_amount > 0
-              AND NOT COALESCE(a.excluded, false)
               AND (
                 ai.asset_id IS NULL
                 OR (ai.status = 'missing' AND ai.fetched_at < now() - :ttl)

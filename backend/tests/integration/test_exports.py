@@ -9,7 +9,9 @@ Covers:
   - Exact Decimal preservation: raw_amount serialised as a string, never float
   - Unknown-vs-zero: a wallet with no balance observation renders as null (JSON)
     or empty string (CSV), never as 0
-  - Excluded assets (excluded=True) are absent from the current-portfolio export
+  - Excluded assets (excluded=True) are still present in the current-portfolio
+    export (AUD-447): exclusion scopes the portfolio's *value*, not what the
+    wallets are recorded as holding
   - Historical asset names are sourced from asset_metadata_revision at snapshot time
   - Full-history export includes all published snapshots ordered by snapshotted_at
     ascending
@@ -342,8 +344,14 @@ async def test_export_csv_unknown_not_zero(db_session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_export_excluded_asset_omitted(db_session: AsyncSession) -> None:
-    """Assets with excluded=True are absent from the current-portfolio export."""
+async def test_export_keeps_excluded_asset(db_session: AsyncSession) -> None:
+    """Assets with excluded=True still appear in the current-portfolio export.
+
+    AUD-447: exclusion decides what counts towards the portfolio's value, and
+    the owner asked for it to change nothing outside the dashboard and the
+    Assets list. Dropping the rows here made the export lose holdings the
+    wallets demonstrably have — the full-history export never did that.
+    """
     wallet_id = await _insert_wallet(db_session, "0x" + "a" * 40)
 
     included_id = await _insert_asset(
@@ -369,7 +377,7 @@ async def test_export_excluded_asset_omitted(db_session: AsyncSession) -> None:
     symbols = [h["asset_symbol"] for h in data.get("holdings", [])]
 
     assert "INCL" in symbols, "Non-excluded asset must appear in the portfolio export"
-    assert "EXCL" not in symbols, "Excluded asset must not appear in the portfolio export"
+    assert "EXCL" in symbols, "Excluded asset must still appear in the portfolio export"
 
 
 # ---------------------------------------------------------------------------

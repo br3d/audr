@@ -360,7 +360,14 @@ async def _get_active_wallets(
 
 
 async def _get_tracked_token_addresses(session: AsyncSession) -> list[str]:
-    rows = await session.execute(sa.text("SELECT token_address FROM asset WHERE excluded = false"))
+    """Return every asset's token address, excluded ones included (AUD-447).
+
+    Exclusion only removes an asset from the portfolio's value. Dropping it
+    from the indexer instead punched a hole in the Events and Allowances
+    views — and the hole would survive a later re-include, since the blocks
+    skipped while excluded sit behind the checkpoint and are never re-read.
+    """
+    rows = await session.execute(sa.text("SELECT token_address FROM asset"))
     return [str(row[0]) for row in rows.fetchall()]
 
 
