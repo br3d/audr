@@ -211,6 +211,18 @@ async def get_portfolio(
     quality_str = str(snap_row[2])
 
     # 2. Query valuation lines joined with asset and wallet info.
+    #
+    # Exclusion is applied here, at read time, against the asset's *current*
+    # `excluded` flag rather than relying on the snapshot having been rebuilt
+    # (AUD-447). publish_valuation_snapshot already omits excluded assets, so
+    # for a freshly published snapshot this filter is a no-op — but a snapshot
+    # published before the owner hit Exclude still carries the line, and
+    # waiting for the next valuation run meant the dashboard total, the
+    # allocation table and the percentages all kept counting an asset the
+    # owner had just dropped. Every figure below (priced_subtotal, total_usd,
+    # allocation percentages, quality) is derived from these rows, so
+    # filtering them is enough to make Exclude take effect on the next
+    # refetch.
     wallet_filter = "AND vl.wallet_id = :wallet_id" if wallet_id else ""
     lines_result = await db.execute(
         sa.text(
@@ -236,6 +248,7 @@ async def get_portfolio(
                 WHERE bo2.id = vl.observation_id
             ) bo ON true
             WHERE vl.snapshot_id = :snap_id
+              AND NOT COALESCE(a.excluded, false)
               {wallet_filter}
             ORDER BY vl.value_usd DESC NULLS LAST
             """  # noqa: S608 -- wallet_filter is a fixed ":param" fragment; the value is bound, never interpolated

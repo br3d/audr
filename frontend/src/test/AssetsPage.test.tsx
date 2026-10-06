@@ -24,11 +24,12 @@ vi.mock('../api/client', () => {
 })
 
 import AssetsPage from '../pages/AssetsPage'
-import { fetchAssets, addManualAsset } from '../api/client'
+import { fetchAssets, addManualAsset, patchAsset } from '../api/client'
 import type { AssetItem, AssetsResponse } from '../api/client'
 
 const mockFetchAssets = vi.mocked(fetchAssets)
 const mockAddManualAsset = vi.mocked(addManualAsset)
+const mockPatchAsset = vi.mocked(patchAsset)
 
 // Use the native setter so React's synthetic onChange fires in jsdom.
 function nativeSetValue(input: HTMLInputElement, value: string) {
@@ -68,7 +69,13 @@ const ASSET_USDC: AssetItem = {
 }
 
 function makeAssetsResponse(items: AssetItem[] = [ASSET_ETH, ASSET_USDC]): AssetsResponse {
-  return { items, next_cursor: null, request_id: 'r1', generated_at: '2026-01-01T00:00:00Z' }
+  return {
+    items,
+    next_cursor: null,
+    excluded_count: items.filter((a) => a.excluded).length,
+    request_id: 'r1',
+    generated_at: '2026-01-01T00:00:00Z',
+  }
 }
 
 function mountPage() {
@@ -82,6 +89,21 @@ function mountPage() {
     )
   })
   return { container, root }
+}
+
+// Same mount, but hands back the QueryClient so a test can watch which caches
+// an action invalidates.
+function mountPageWithClient() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  act(() => {
+    root.render(
+      React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)),
+    )
+  })
+  return { container, root, qc }
 }
 
 describe('AssetsPage — search and exclusion filter persistence in the URL (AUD-353)', () => {
@@ -170,7 +192,7 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
 
     await vi.waitFor(() =>
       expect(mockFetchAssets).toHaveBeenCalledWith({
-        excluded: undefined,
+        excluded: false,
         held: true,
         cursor: undefined,
       }),
@@ -193,7 +215,7 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
     expect(window.location.hash).toBe('#/assets?all=1')
     await vi.waitFor(() =>
       expect(mockFetchAssets).toHaveBeenCalledWith({
-        excluded: undefined,
+        excluded: false,
         held: undefined,
         cursor: undefined,
       }),
@@ -236,10 +258,68 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
     await vi.waitFor(() => expect(window.location.hash).toBe('#/assets?all=1'))
     await vi.waitFor(() =>
       expect(mockFetchAssets).toHaveBeenCalledWith({
-        excluded: undefined,
+        excluded: false,
         held: undefined,
         cursor: undefined,
       }),
     )
+  })
+})
+
+describe('AssetsPage — excluding removes the row from the list (AUD-447)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/')
+  })
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount()
+    })
+    document.body.removeChild(container)
+    vi.clearAllMocks()
+  })
+
+  it('labels the toggle from the server-side count, which the default page cannot contain', async () => {
+    // The default view asks for excluded=false, so the hidden rows are simply
+    // not in `items` — counting them there always yielded 0.
+    mockFetchAssets.mockResolvedValue({
+      ...makeAssetsResponse([ASSET_ETH]),
+      excluded_count: 3,
+    })
+    ;({ container, root } = mountPage())
+
+    await vi.waitFor(() => expect(container.textContent).toContain('Show excluded'))
+    expect(container.textContent).toContain('(3 hidden)')
+  })
+
+  it('refetches the portfolio and the chart after an asset is excluded', async () => {
+    mockFetchAssets.mockResolvedValue(makeAssetsResponse([ASSET_ETH]))
+    mockPatchAsset.mockResolvedValue({ ...ASSET_ETH, excluded: true })
+    const { container: c, root: r, qc } = mountPageWithClient()
+    container = c
+    root = r
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+
+    await vi.waitFor(() =>
+      expect(
+        Array.from(container.querySelectorAll('button')).find((b) =>
+          b.getAttribute('aria-label')?.startsWith('Exclude '),
+        ),
+      ).toBeTruthy(),
+    )
+    const excludeButton = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.getAttribute('aria-label')?.startsWith('Exclude '),
+    ) as HTMLButtonElement
+    await act(async () => {
+      excludeButton.click()
+    })
+
+    await vi.waitFor(() => expect(mockPatchAsset).toHaveBeenCalledWith(ASSET_ETH.id, { excluded: true }))
+    const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(['portfolio']))
+    expect(keys).toContain(JSON.stringify(['history']))
   })
 })

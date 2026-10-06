@@ -89,6 +89,11 @@ class AssetItemOut(BaseModel):
 class AssetsResponseOut(BaseModel):
     items: list[AssetItemOut]
     next_cursor: str | None
+    # How many assets the `excluded` filter is capable of hiding, under the
+    # same `held` scope as `items` (AUD-447). The default list view hides
+    # excluded assets, so the "Show excluded" toggle needs a count that does
+    # not depend on them being present in the current page.
+    excluded_count: int
     request_id: str
     generated_at: str
 
@@ -247,10 +252,30 @@ async def list_assets(
         rows = rows[:limit]
         next_cursor = str(rows[-1]["id"])
 
+    # Excluded assets within the same `held` scope, independent of the
+    # `excluded` filter and of pagination, so the UI can label its toggle
+    # ("3 hidden") from a page that deliberately contains none of them.
+    count_conditions = ["a.excluded"]
+    count_params: dict = {}
+    if held is not None:
+        count_conditions.append(f"{_HELD_EXISTS_SQL} = :held")
+        count_params["held"] = held
+    excluded_count_result = await db.execute(
+        sa.text(
+            f"""
+            SELECT COUNT(*) FROM asset a
+            WHERE {" AND ".join(count_conditions)}
+            """  # noqa: S608 -- count_conditions is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
+        ),
+        count_params,
+    )
+    excluded_count = int(excluded_count_result.scalar() or 0)
+
     now = datetime.now(tz=UTC)
     return AssetsResponseOut(
         items=[_row_to_asset_item(r) for r in rows],
         next_cursor=next_cursor,
+        excluded_count=excluded_count,
         request_id=str(uuid.uuid4()),
         generated_at=now.isoformat(),
     )

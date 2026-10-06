@@ -31,7 +31,13 @@ const mockFetchAssets = vi.mocked(fetchAssets)
 const mockPatchAsset = vi.mocked(patchAsset)
 
 function makeAssetsResponse(items: AssetItem[] = []): AssetsResponse {
-  return { items, next_cursor: null, request_id: 'r1', generated_at: '2026-01-01T00:00:00Z' }
+  return {
+    items,
+    next_cursor: null,
+    excluded_count: items.filter((a) => a.excluded).length,
+    request_id: 'r1',
+    generated_at: '2026-01-01T00:00:00Z',
+  }
 }
 
 function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root; qc: QueryClient } {
