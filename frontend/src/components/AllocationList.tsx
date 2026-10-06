@@ -177,6 +177,9 @@ function ExcludedAssetsStrip() {
       await patchAsset(assetId, { excluded: false })
       void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
       void queryClient.invalidateQueries({ queryKey: ['assets'] })
+      // The chart above is a separate query; without this the headline total
+      // and the graph disagree until something else refetches (AUD-447).
+      void queryClient.invalidateQueries({ queryKey: ['history'] })
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
@@ -254,6 +257,9 @@ export default function AllocationList({ items }: Props) {
       setPendingExcludedIds((prev) => new Set(prev).add(assetId))
       void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
       void queryClient.invalidateQueries({ queryKey: ['assets'] })
+      // The chart above is a separate query; without this the headline total
+      // and the graph disagree until something else refetches (AUD-447).
+      void queryClient.invalidateQueries({ queryKey: ['history'] })
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,

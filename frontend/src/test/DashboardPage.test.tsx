@@ -39,7 +39,13 @@ const mockFetchHistory = vi.mocked(fetchHistory)
 const mockFetchEvents = vi.mocked(fetchEvents)
 const mockFetchAssets = vi.mocked(fetchAssets)
 
-const EMPTY_ASSETS = { items: [], next_cursor: null, request_id: 'req-1', generated_at: '2026-01-01T00:00:00Z' }
+const EMPTY_ASSETS = {
+  items: [],
+  next_cursor: null,
+  excluded_count: 0,
+  request_id: 'req-1',
+  generated_at: '2026-01-01T00:00:00Z',
+}
 
 function makeQuality(overrides: Partial<PortfolioResponse['quality']> = {}): PortfolioResponse['quality'] {
   return {

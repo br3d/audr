@@ -294,7 +294,12 @@ export default function AssetsPage() {
     queryKey: ['assets', showExcluded, showAllCatalog],
     queryFn: ({ pageParam }) =>
       fetchAssets({
-        excluded: showExcluded ? true : undefined,
+        // Excluding an asset removes it from this list (AUD-447): the default
+        // view is the assets that count towards the portfolio, and the
+        // toggle below is how an excluded one is found again and included
+        // back. Passing `undefined` here used to leave the row in place with
+        // a badge, which contradicted the toggle's own "(N hidden)" label.
+        excluded: showExcluded ? true : false,
         held: heldFilter,
         cursor: pageParam as string | undefined,
       }),
@@ -304,6 +309,10 @@ export default function AssetsPage() {
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ['assets'] })
+    // Excluding here changes the portfolio total and the dashboard chart
+    // (AUD-447) — drop their caches so the dashboard is not stale on return.
+    void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+    void queryClient.invalidateQueries({ queryKey: ['history'] })
   }
 
   // A just-added manual contract has no balance observation yet, so it is not
@@ -330,7 +339,8 @@ export default function AssetsPage() {
 
   const assets = data?.pages.flatMap((p) => p.items) ?? []
   const conflictCount = assets.filter((a) => a.has_metadata_conflict).length
-  const excludedCount = assets.filter((a) => a.excluded).length
+  // Server-side count: the default page contains no excluded rows to count.
+  const excludedCount = data?.pages[0]?.excluded_count ?? 0
 
   const filtered = search.trim()
     ? assets.filter((a) => {

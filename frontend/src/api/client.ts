@@ -233,6 +233,9 @@ export interface AssetItem {
 export interface AssetsResponse {
   items: AssetItem[]
   next_cursor: string | null
+  // Excluded assets under the same `held` scope, regardless of the `excluded`
+  // filter — the default view hides them, so this is what labels the toggle.
+  excluded_count: number
   request_id: string
   generated_at: string
 }
