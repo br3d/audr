@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -500,7 +501,7 @@ async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
                     {"key": f"aud394-shared-{doomed_id}"},
                 )
             ).scalar_one()
-            for wid in (doomed_id, keeper_id):
+            for wid, value in ((doomed_id, "195000.0"), (keeper_id, "400.0")):
                 observation_id = (
                     await session.execute(
                         text(
@@ -514,16 +515,28 @@ async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
                 await session.execute(
                     text(
                         "INSERT INTO valuation_line (snapshot_id, wallet_id,"
-                        " asset_id, observation_id, raw_amount, block_number)"
-                        " VALUES (:sid, :wid, :aid, :oid, 1, 1)"
+                        " asset_id, observation_id, raw_amount, block_number,"
+                        " price_usd, value_usd)"
+                        " VALUES (:sid, :wid, :aid, :oid, 1, 1, 1, :value)"
                     ),
                     {
                         "sid": snapshot_id,
                         "wid": wid,
                         "aid": asset_id,
                         "oid": observation_id,
+                        "value": value,
                     },
                 )
+            # The aggregate both wallets' lines added up to, as published.
+            await session.execute(
+                text(
+                    "INSERT INTO history_point (snapshot_id, snapshotted_at,"
+                    " total_value_usd, quality, included_wallet_count,"
+                    " included_asset_count, has_gap, is_canonical)"
+                    " VALUES (:sid, now(), 195400.0, 'complete', 2, 1, false, true)"
+                ),
+                {"sid": snapshot_id},
+            )
 
     r = await http_client.delete(f"{_WALLETS_URL}/{doomed_id}", headers={"x-csrf-token": csrf})
     assert r.status_code == 200, r.text
@@ -535,6 +548,23 @@ async def test_delete_wallet_keeps_snapshots_shared_with_other_wallets(
             {"sid": snapshot_id},
         )
         assert [str(w) for w in surviving.scalars()] == [keeper_id]
+
+        # The surviving point must total the surviving lines, not the deleted
+        # wallet's value as well — otherwise the chart keeps charting an address
+        # the owner removed, and GET /history's exclusion re-cut subtracts from a
+        # number the remaining lines were never part of (AUD-454).
+        point = (
+            await session.execute(
+                text(
+                    "SELECT total_value_usd, included_wallet_count"
+                    " FROM history_point WHERE snapshot_id = :sid"
+                ),
+                {"sid": snapshot_id},
+            )
+        ).first()
+        assert point is not None
+        assert point[0] == Decimal("400.0")
+        assert point[1] == 1
 
 
 @pytest.mark.integration
