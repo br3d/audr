@@ -397,8 +397,16 @@ async def test_publish_snapshot_provider_confirmed_gap_is_quality_gaps(
 
 
 @pytest.mark.integration
-async def test_publish_snapshot_excluded_asset_omitted(db_session: AsyncSession) -> None:
-    """Excluded assets are not included in the snapshot."""
+async def test_publish_snapshot_records_excluded_asset_but_does_not_count_it(
+    db_session: AsyncSession,
+) -> None:
+    """Excluded assets still get a line; they just do not shape quality (AUD-448).
+
+    The snapshot records what the wallets held, so a read-time filter has
+    something to filter and un-excluding an asset can restore its value
+    without waiting for a re-scan. Quality stays "complete" even though the
+    excluded asset has no price, because it contributes to no total.
+    """
     wallet_id = await _insert_wallet(db_session, "0x" + "7" * 40)
     included_id = await _insert_asset(db_session, token_address="0x" + "8" * 40, excluded=False)
     excluded_id = await _insert_asset(db_session, token_address="0x" + "9" * 40, excluded=True)
@@ -409,15 +417,18 @@ async def test_publish_snapshot_excluded_asset_omitted(db_session: AsyncSession)
 
     result = await publish_valuation_snapshot(db_session)
 
-    # Only the non-excluded asset appears
-    assert result.line_count == 1
+    assert result.line_count == 2
     line_check = await db_session.execute(
         sa.text("SELECT asset_id FROM valuation_line WHERE snapshot_id = :snap"),
         {"snap": str(result.snapshot_id)},
     )
     asset_ids = [str(row[0]) for row in line_check]
     assert str(included_id) in asset_ids
-    assert str(excluded_id) not in asset_ids
+    assert str(excluded_id) in asset_ids
+
+    # The unpriced excluded asset neither downgrades quality nor counts as priced.
+    assert result.quality == "complete"
+    assert result.priced_count == 1
 
 
 @pytest.mark.integration

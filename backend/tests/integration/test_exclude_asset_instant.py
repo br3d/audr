@@ -10,6 +10,13 @@ time against the asset's current flag.
 Second half of the same report: the excluded asset also has to leave the Assets
 list (it is recoverable through the "Show excluded" filter), and the hidden
 count has to survive a page that deliberately contains none of those rows.
+
+AUD-448 finished the job. Exclusion is now purely a read-time concern:
+snapshots record every held line, GET /portfolio returns the excluded ones
+flagged `included: false` with their value intact, and GET /history re-cuts
+every past point against the current exclusion set. That is what lets the
+client redraw on the click itself, in both directions — putting an asset back
+needs no re-scan to recover a number that was never thrown away.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ def _make_override(factory: async_sessionmaker[AsyncSession]):
 
 
 _CLEAN_ORDER = (
+    "history_point",
     "valuation_line",
     "valuation_snapshot",
     "balance_observation",
@@ -218,10 +226,20 @@ async def test_exclude_drops_the_asset_from_the_portfolio_without_a_new_snapshot
     assert after["snapshot_id"] == snap_id
     assert Decimal(after["total_usd"]) == Decimal(100)
     assert Decimal(after["priced_subtotal_usd"]) == Decimal(100)
-    assert [a["symbol"] for a in after["allocations"]] == ["KEEP"]
+    # The excluded asset is still returned, flagged and at a 0% share, so the
+    # client can put it back without a round trip or a re-scan (AUD-448).
+    by_symbol = {a["symbol"]: a for a in after["allocations"]}
+    assert set(by_symbol) == {"KEEP", "DROP"}
+    assert by_symbol["DROP"]["included"] is False
+    assert Decimal(by_symbol["DROP"]["percentage"]) == Decimal(0)
+    assert Decimal(by_symbol["DROP"]["value_usd"]) == Decimal(300)
+
     # The remaining asset is now the whole portfolio, not a quarter of it.
-    assert Decimal(after["allocations"][0]["percentage"]) == Decimal(100)
-    assert [h["asset_id"] for h in after["holdings"]] == [keep_id]
+    assert by_symbol["KEEP"]["included"] is True
+    assert Decimal(by_symbol["KEEP"]["percentage"]) == Decimal(100)
+
+    included_holdings = [h["asset_id"] for h in after["holdings"] if h["included"]]
+    assert included_holdings == [keep_id]
 
     # ...and including it again restores the total, from that same snapshot.
     r = await http_client.patch(
@@ -232,6 +250,78 @@ async def test_exclude_drops_the_asset_from_the_portfolio_without_a_new_snapshot
     assert r.status_code == 200
     restored = (await http_client.get(_PORTFOLIO_URL)).json()
     assert Decimal(restored["total_usd"]) == Decimal(400)
+
+
+async def _seed_history_point(
+    factory: async_sessionmaker[AsyncSession], *, snapshot_id: str, total_value_usd: str
+) -> None:
+    """A history_point carrying the snapshot's *gross* total, as the worker writes it."""
+    async with factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO history_point"
+                    " (id, snapshot_id, snapshotted_at, total_value_usd, quality,"
+                    "  included_wallet_count, included_asset_count, has_gap, is_canonical)"
+                    " SELECT :id, :snap, vs.snapshotted_at, :total, 'complete', 1, 2, false, true"
+                    " FROM valuation_snapshot vs WHERE vs.id = :snap"
+                ),
+                {"id": str(uuid.uuid4()), "snap": snapshot_id, "total": total_value_usd},
+            )
+
+
+@pytest.mark.integration
+async def test_exclude_redraws_the_history_chart_on_the_next_read(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The chart must follow the current exclusion set, not the snapshot's (AUD-448).
+
+    Without this the curve and the headline total describe the same instant
+    differently, and the step in the line records when the owner pressed a
+    button rather than anything the portfolio did.
+    """
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    keep_id = await _seed_asset(db_session_factory, token_address="0x" + "1" * 40, symbol="KEEP")
+    drop_id = await _seed_asset(db_session_factory, token_address="0x" + "2" * 40, symbol="DROP")
+    snap_id = await _seed_snapshot(
+        db_session_factory,
+        holdings=[
+            {"wallet_id": wallet_id, "asset_id": keep_id, "price_usd": "100", "value_usd": "100"},
+            {"wallet_id": wallet_id, "asset_id": drop_id, "price_usd": "300", "value_usd": "300"},
+        ],
+    )
+    await _seed_history_point(db_session_factory, snapshot_id=snap_id, total_value_usd="400")
+
+    before = (await http_client.get("/api/v1/history?period=all")).json()
+    assert [Decimal(i["total_value_usd"]) for i in before["items"]] == [Decimal(400)]
+
+    r = await http_client.patch(
+        f"{_ASSETS_URL}/{drop_id}",
+        json={"excluded": True},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+
+    after = (await http_client.get("/api/v1/history?period=all")).json()
+    # The past point is re-cut too: the excluded asset was never the owner's.
+    assert [Decimal(i["total_value_usd"]) for i in after["items"]] == [Decimal(100)]
+    assert after["items"][0]["included_asset_count"] == 1
+
+    # The chart agrees with the headline total at the same instant.
+    portfolio = (await http_client.get(_PORTFOLIO_URL)).json()
+    assert Decimal(portfolio["total_usd"]) == Decimal(100)
+
+    # Including it again restores the curve — nothing was destroyed.
+    r = await http_client.patch(
+        f"{_ASSETS_URL}/{drop_id}",
+        json={"excluded": False},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200
+    restored = (await http_client.get("/api/v1/history?period=all")).json()
+    assert [Decimal(i["total_value_usd"]) for i in restored["items"]] == [Decimal(400)]
 
 
 @pytest.mark.integration

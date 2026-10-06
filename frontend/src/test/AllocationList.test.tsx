@@ -30,6 +30,9 @@ import type { AllocationItem, AssetItem, AssetsResponse } from '../api/client'
 const mockFetchAssets = vi.mocked(fetchAssets)
 const mockPatchAsset = vi.mocked(patchAsset)
 
+/** Most cases render the table, not the toggle; the owner of the toggle is DashboardPage. */
+const noopToggle = async (): Promise<void> => {}
+
 function makeAssetsResponse(items: AssetItem[] = []): AssetsResponse {
   return {
     items,
@@ -113,7 +116,7 @@ describe('AllocationList', () => {
 
   describe('empty state', () => {
     it('renders an explanatory note when items array is empty', async () => {
-      const { container, root } = render(<AllocationList items={[]} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[]} />)
       const note = container.querySelector('[role="note"]')
       expect(note).toBeTruthy()
       expect(note!.textContent).toMatch(/no allocation/i)
@@ -121,7 +124,7 @@ describe('AllocationList', () => {
     })
 
     it('does not render a table when items array is empty', async () => {
-      const { container, root } = render(<AllocationList items={[]} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[]} />)
       expect(container.querySelector('table')).toBeNull()
       await unmount(container, root)
     })
@@ -129,7 +132,7 @@ describe('AllocationList', () => {
 
   describe('data rows', () => {
     it('renders one row per item', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.querySelectorAll('tbody tr').length).toBe(2)
       await unmount(container, root)
     })
@@ -138,27 +141,27 @@ describe('AllocationList', () => {
       // Backend aggregates per asset_id across wallets; the frontend must not
       // re-split that back into one row per wallet.
       const twoWallets = [makeItem({ asset_id: 'eth', symbol: 'ETH', wallet_count: 2 })]
-      const { container, root } = render(<AllocationList items={twoWallets} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={twoWallets} />)
       expect(container.querySelectorAll('tbody tr').length).toBe(1)
       await unmount(container, root)
     })
 
     it('displays the symbol in each row', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.textContent).toContain('ETH')
       expect(container.textContent).toContain('USDC')
       await unmount(container, root)
     })
 
     it('displays formatted USD values using MoneyValue', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.textContent).toContain('$3,456.78')
       expect(container.textContent).toContain('$1,122.00')
       await unmount(container, root)
     })
 
     it('displays percentage values with a % suffix', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.textContent).toContain('75.50%')
       expect(container.textContent).toContain('24.50%')
       await unmount(container, root)
@@ -166,14 +169,14 @@ describe('AllocationList', () => {
 
     it('sorts rows by descending share regardless of input order', async () => {
       const unsorted: AllocationItem[] = [ITEMS[1], ITEMS[0]]
-      const { container, root } = render(<AllocationList items={unsorted} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={unsorted} />)
       const first = container.querySelector('tbody tr')!
       expect(first.textContent).toContain('ETH')
       await unmount(container, root)
     })
 
     it('sizes the share bar from the percentage', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       const fill = container.querySelector('.allocation-bar-fill') as HTMLElement
       expect(fill.style.width).toBe('75.5%')
       await unmount(container, root)
@@ -183,7 +186,7 @@ describe('AllocationList', () => {
   describe('amount column', () => {
     it('renders the quantity monospaced', async () => {
       const { container, root } = render(
-        <AllocationList items={[makeItem({ quantity: '1.5' })]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: '1.5' })]} />,
       )
       const cell = container.querySelector('.allocation-quantity')!
       expect(cell.textContent).toBe('1.5')
@@ -193,7 +196,7 @@ describe('AllocationList', () => {
 
     it('shows "unknown" when quantity is null', async () => {
       const { container, root } = render(
-        <AllocationList items={[makeItem({ quantity: null })]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: null })]} />,
       )
       expect(container.querySelector('.allocation-quantity')!.textContent).toBe('unknown')
       await unmount(container, root)
@@ -211,14 +214,14 @@ describe('AllocationList', () => {
     })
 
     it('shows the amount plus a muted "unpriced" label instead of a value', async () => {
-      const { container, root } = render(<AllocationList items={[unpriced]} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[unpriced]} />)
       expect(container.querySelector('.allocation-quantity')!.textContent).toBe('5.0')
       expect(container.querySelector('.allocation-value')!.textContent).toBe('unpriced')
       await unmount(container, root)
     })
 
     it('does not render a share bar or percentage for an unpriced row', async () => {
-      const { container, root } = render(<AllocationList items={[unpriced]} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[unpriced]} />)
       expect(container.querySelector('.allocation-bar')).toBeNull()
       expect(container.querySelector('.allocation-pct')).toBeNull()
       await unmount(container, root)
@@ -226,7 +229,7 @@ describe('AllocationList', () => {
 
     it('sorts unpriced rows after every priced row', async () => {
       const { container, root } = render(
-        <AllocationList items={[unpriced, ...ITEMS]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[unpriced, ...ITEMS]} />,
       )
       const rows = container.querySelectorAll('tbody tr')
       expect(rows[rows.length - 1].textContent).toContain('XYZ')
@@ -249,7 +252,7 @@ describe('AllocationList', () => {
       ['pending', 'Pending'],
     ] as const)('renders the %s badge as "%s"', async (status, label) => {
       const { container, root } = render(
-        <AllocationList items={[makeItem({ read_status: status })]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ read_status: status })]} />,
       )
       expect(container.querySelector(`[aria-label="Read status: ${status}"]`)?.textContent).toBe(
         label,
@@ -258,29 +261,62 @@ describe('AllocationList', () => {
     })
   })
 
-  describe('excluded badge', () => {
-    it('shows an "excluded" badge when included is false', async () => {
+  describe('excluded assets', () => {
+    // The table is the portfolio as it currently counts. An excluded asset is
+    // not a row with a badge on it — it has left the table for the strip
+    // below, which is also the way back (AUD-448).
+    it('keeps an excluded item out of the table', async () => {
       const { container, root } = render(
-        <AllocationList items={[makeItem({ included: false })]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ included: false })]} />,
       )
-      expect(container.querySelector('[aria-label="Excluded from total"]')?.textContent).toBe(
-        'excluded',
-      )
+      expect(container.querySelector('table')).toBeNull()
       await unmount(container, root)
     })
 
-    it('does not show an excluded badge when included is true', async () => {
+    it('offers an excluded item in the strip, where it can be included again', async () => {
+      const onToggleExclude = vi.fn().mockResolvedValue(undefined)
       const { container, root } = render(
-        <AllocationList items={[makeItem({ included: true })]} />,
+        <AllocationList
+          onToggleExclude={onToggleExclude}
+          items={[
+            makeItem({ symbol: 'ETH', included: true }),
+            makeItem({ symbol: 'OMG', asset_id: 'a-omg', included: false }),
+          ]}
+        />,
       )
-      expect(container.querySelector('[aria-label="Excluded from total"]')).toBeNull()
+      const spoiler = container.querySelector('.allocation-excluded-strip .allocation-spoiler')
+      expect(spoiler?.textContent).toContain('Excluded (1)')
+
+      await act(async () => {
+        ;(spoiler as HTMLButtonElement).click()
+      })
+      const include = container.querySelector('[aria-label="Include OMG"]') as HTMLButtonElement
+      expect(include).toBeTruthy()
+
+      await act(async () => {
+        include.click()
+      })
+      expect(onToggleExclude).toHaveBeenCalledWith('a-omg', false)
+      await unmount(container, root)
+    })
+
+    it('asks its owner to exclude, rather than patching the asset itself', async () => {
+      const onToggleExclude = vi.fn().mockResolvedValue(undefined)
+      const { container, root } = render(
+        <AllocationList onToggleExclude={onToggleExclude} items={[makeItem({ symbol: 'ETH' })]} />,
+      )
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement).click()
+      })
+      expect(onToggleExclude).toHaveBeenCalledWith('eth', true)
+      expect(mockPatchAsset).not.toHaveBeenCalled()
       await unmount(container, root)
     })
   })
 
   describe('search box', () => {
     it('filters rows by symbol, case-insensitively', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       const input = container.querySelector('input[aria-label="Filter allocations"]') as HTMLInputElement
       // Use native setter so React's synthetic onChange fires in jsdom.
       const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -295,7 +331,7 @@ describe('AllocationList', () => {
     })
 
     it('shows a "filtered of total" count', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.textContent).toContain('2 of 2')
       await unmount(container, root)
     })
@@ -303,7 +339,7 @@ describe('AllocationList', () => {
 
   describe('asset emblem', () => {
     it('renders a monogram emblem for every row when no logo is available', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       const emblems = container.querySelectorAll('.asset-emblem-monogram')
       expect(emblems.length).toBe(2)
       expect(emblems[0].textContent).toBe('ETH')
@@ -314,7 +350,7 @@ describe('AllocationList', () => {
       const withLogo: AllocationItem[] = [
         { ...ITEMS[0], logo_url: 'https://example.test/eth.png' },
       ]
-      const { container, root } = render(<AllocationList items={withLogo} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={withLogo} />)
       const img = container.querySelector('img.asset-emblem') as HTMLImageElement
       expect(img).toBeTruthy()
       expect(img.getAttribute('src')).toBe('https://example.test/eth.png')
@@ -322,7 +358,7 @@ describe('AllocationList', () => {
     })
 
     it('hides emblems from assistive technology (symbol text carries the name)', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       const emblem = container.querySelector('.asset-emblem')!
       expect(emblem.getAttribute('aria-hidden')).toBe('true')
       await unmount(container, root)
@@ -338,7 +374,7 @@ describe('AllocationList', () => {
 
   describe('small-share spoiler', () => {
     it('collapses the dust tail behind a toggle', async () => {
-      const { container, root } = render(<AllocationList items={dustyPortfolio(10)} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
       const toggle = container.querySelector('.allocation-spoiler') as HTMLButtonElement
       expect(toggle).toBeTruthy()
       expect(toggle.getAttribute('aria-expanded')).toBe('false')
@@ -349,7 +385,7 @@ describe('AllocationList', () => {
     })
 
     it('summarises the hidden value and share on the collapsed toggle', async () => {
-      const { container, root } = render(<AllocationList items={dustyPortfolio(10)} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
       const toggle = container.querySelector('.allocation-spoiler')!
       // 7 hidden dust rows at $10.00 / 0.10% each.
       expect(toggle.textContent).toContain('$70.00')
@@ -358,7 +394,7 @@ describe('AllocationList', () => {
     })
 
     it('reveals the hidden rows when the toggle is activated', async () => {
-      const { container, root } = render(<AllocationList items={dustyPortfolio(10)} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
       const toggle = container.querySelector('.allocation-spoiler') as HTMLButtonElement
       await act(async () => { toggle.click() })
       expect(container.querySelectorAll('tbody tr').length).toBe(12)
@@ -368,7 +404,7 @@ describe('AllocationList', () => {
     })
 
     it('does not render a spoiler when only a couple of rows would be hidden', async () => {
-      const { container, root } = render(<AllocationList items={dustyPortfolio(4)} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(4)} />)
       expect(container.querySelector('.allocation-spoiler')).toBeNull()
       expect(container.querySelectorAll('tbody tr').length).toBe(6)
       await unmount(container, root)
@@ -397,7 +433,7 @@ describe('AllocationList', () => {
         ...dustyPortfolio(10),
         makeItem({ asset_id: 'xyz', symbol: 'XYZ', value_usd: null, percentage: '0' }),
       ]
-      const { container, root } = render(<AllocationList items={items} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={items} />)
       const toggle = container.querySelector('.allocation-spoiler')!
       expect(toggle.textContent).toContain('8 smaller assets')
       await unmount(container, root)
@@ -406,19 +442,19 @@ describe('AllocationList', () => {
 
   describe('accessibility', () => {
     it('table has accessible aria-label', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.querySelector('table')!.getAttribute('aria-label')).toBeTruthy()
       await unmount(container, root)
     })
 
     it('column headers use scope="col"', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.querySelectorAll('th[scope="col"]').length).toBeGreaterThanOrEqual(4)
       await unmount(container, root)
     })
 
     it('percentage cells have aria-label with "percent" text', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.querySelectorAll('span[aria-label*="percent"]').length).toBe(2)
       await unmount(container, root)
     })
@@ -426,38 +462,24 @@ describe('AllocationList', () => {
 
   describe('inline exclude (AUD-434)', () => {
     it('renders an Exclude button in each row', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       expect(container.querySelector('[aria-label="Exclude ETH"]')).toBeTruthy()
       expect(container.querySelector('[aria-label="Exclude USDC"]')).toBeTruthy()
       await unmount(container, root)
     })
 
-    it('clicking Exclude calls patchAsset with excluded: true for that asset', async () => {
-      mockPatchAsset.mockResolvedValue({} as AssetItem)
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+    it('clicking Exclude hands the toggle to its owner', async () => {
+      const onToggleExclude = vi.fn().mockResolvedValue(undefined)
+      const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
       await act(async () => { button.click() })
-      expect(mockPatchAsset).toHaveBeenCalledWith('eth', { excluded: true })
-      await unmount(container, root)
-    })
-
-    it('optimistically badges and dims the row instead of removing it', async () => {
-      mockPatchAsset.mockResolvedValue({} as AssetItem)
-      const { container, root } = render(<AllocationList items={ITEMS} />)
-      const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
-      await act(async () => { button.click() })
-      const rows = container.querySelectorAll('tbody tr')
-      expect(rows.length).toBe(2)
-      expect(rows[0].className).toContain('allocation-row-pending')
-      expect(rows[0].querySelector('[aria-label="Excluded from total"]')).toBeTruthy()
-      // Honest about the total: no claim that it has already been recalculated.
-      expect(rows[0].textContent).toContain('Applies next snapshot')
+      expect(onToggleExclude).toHaveBeenCalledWith('eth', true)
       await unmount(container, root)
     })
 
     it('shows an inline error and keeps the button when the request fails', async () => {
-      mockPatchAsset.mockRejectedValue(new Error('network down'))
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const onToggleExclude = vi.fn().mockRejectedValue(new Error('network down'))
+      const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
       await act(async () => { button.click() })
       expect(container.querySelector('[aria-label="Exclude ETH"]')).toBeTruthy()
@@ -489,7 +511,7 @@ describe('AllocationList', () => {
     }
 
     it('does not render a strip when there are no excluded assets', async () => {
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       await flush()
       expect(container.querySelector('.allocation-excluded-strip')).toBeNull()
       await unmount(container, root)
@@ -497,7 +519,7 @@ describe('AllocationList', () => {
 
     it('renders a collapsed "Excluded (N)" toggle when excluded assets exist', async () => {
       mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       await flush()
       const strip = container.querySelector('.allocation-excluded-strip')!
       expect(strip.textContent).toContain('Excluded (1)')
@@ -508,7 +530,7 @@ describe('AllocationList', () => {
 
     it('expands to show an Include button per excluded asset', async () => {
       mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       await flush()
       const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
       await act(async () => { toggle.click() })
@@ -516,16 +538,16 @@ describe('AllocationList', () => {
       await unmount(container, root)
     })
 
-    it('clicking Include calls patchAsset with excluded: false for that asset', async () => {
+    it('clicking Include hands the toggle to its owner', async () => {
       mockFetchAssets.mockResolvedValue(makeAssetsResponse([EXCLUDED_ASSET]))
-      mockPatchAsset.mockResolvedValue({} as AssetItem)
-      const { container, root } = render(<AllocationList items={ITEMS} />)
+      const onToggleExclude = vi.fn().mockResolvedValue(undefined)
+      const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       await flush()
       const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
       await act(async () => { toggle.click() })
       const includeButton = container.querySelector('[aria-label="Include DAI"]') as HTMLButtonElement
       await act(async () => { includeButton.click() })
-      expect(mockPatchAsset).toHaveBeenCalledWith('a-dai', { excluded: false })
+      expect(onToggleExclude).toHaveBeenCalledWith('a-dai', false)
       await unmount(container, root)
     })
   })

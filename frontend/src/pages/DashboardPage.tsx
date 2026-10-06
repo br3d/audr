@@ -1,9 +1,11 @@
-import { useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Decimal } from 'decimal.js'
-import { fetchPortfolio, fetchHistory, fetchEvents, ApiError } from '../api/client'
+import { fetchPortfolio, fetchHistory, fetchEvents, patchAsset, ApiError } from '../api/client'
 import type { HistoryPeriod, PortfolioQuality, HistoryPoint } from '../api/client'
 import type { MainPage } from '../components/Layout'
+import { applyExclusionOverrides, pruneSettledOverrides } from '../portfolio/exclusions'
+import type { ExcludeOverrides } from '../portfolio/exclusions'
 import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
 import HistoryChart from '../components/HistoryChart'
@@ -105,11 +107,50 @@ interface Props {
 }
 
 export default function DashboardPage({ setPage }: Props) {
-  const { data, error, isLoading } = useQuery({
+  const queryClient = useQueryClient()
+  const { data: serverData, error, isLoading } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => fetchPortfolio(),
     refetchInterval: 30_000,
   })
+
+  // Exclusion toggles the owner has made but the server has not echoed back
+  // yet. Holding them here rather than inside AllocationList is what keeps the
+  // Portfolio Value card and the allocation table on one answer (AUD-448):
+  // both render from the re-cut payload below, so a click moves the total, the
+  // percentages and the share bars in the same frame.
+  const [excludeOverrides, setExcludeOverrides] = useState<ExcludeOverrides>({})
+
+  useEffect(() => {
+    if (!serverData) return
+    setExcludeOverrides((prev) => pruneSettledOverrides(serverData, prev))
+  }, [serverData])
+
+  const data = useMemo(
+    () => (serverData ? applyExclusionOverrides(serverData, excludeOverrides) : undefined),
+    [serverData, excludeOverrides],
+  )
+
+  async function handleToggleExclude(assetId: string, excluded: boolean): Promise<void> {
+    setExcludeOverrides((prev) => ({ ...prev, [assetId]: excluded }))
+    try {
+      await patchAsset(assetId, { excluded })
+    } catch (err) {
+      // Nothing was persisted — drop the override so the row snaps back to the
+      // server's answer instead of lying until the next refetch.
+      setExcludeOverrides((prev) => {
+        const next = { ...prev }
+        delete next[assetId]
+        return next
+      })
+      throw err
+    }
+    void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+    void queryClient.invalidateQueries({ queryKey: ['assets'] })
+    // The chart is a separate query and the backend re-cuts its points against
+    // the current exclusion set, so this is what redraws the line (AUD-448).
+    void queryClient.invalidateQueries({ queryKey: ['history'] })
+  }
 
   const [historyPeriod, setHistoryPeriod] = useState<HistoryPeriod>('30d')
 
@@ -149,7 +190,10 @@ export default function DashboardPage({ setPage }: Props) {
 
   const hasHoldings = data.holdings.length > 0
   const allExcluded = hasHoldings && data.holdings.every((h) => !h.included)
-  const pricedAllocations = data.allocations.filter((a) => a.value_usd !== null)
+  // Excluded assets are in `allocations` now (AUD-448), so the "Priced Assets"
+  // count and the news feed have to say `included` explicitly — an asset the
+  // owner dropped is not one of their priced holdings and owes them no news.
+  const pricedAllocations = data.allocations.filter((a) => a.included && a.value_usd !== null)
   const hasPricedAllocations = pricedAllocations.length > 0
   const isComplete = data.total_usd !== null
   const totalValue = data.total_usd ?? data.priced_subtotal_usd
@@ -304,7 +348,7 @@ export default function DashboardPage({ setPage }: Props) {
               <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
             </div>
           </div>
-          <AllocationList items={data.allocations} />
+          <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
         </section>
       ) : (
         hasHoldings && (

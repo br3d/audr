@@ -1,14 +1,24 @@
 import { useState } from 'react'
 import { Decimal } from 'decimal.js'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchAssets, patchAsset, ApiError } from '../api/client'
+import { useQuery } from '@tanstack/react-query'
+import { fetchAssets, ApiError } from '../api/client'
 import type { AllocationItem, ReadStatus } from '../api/client'
 import AssetEmblem from './AssetEmblem'
 import MoneyValue from './MoneyValue'
 import { IconSearch } from './Icons'
 
 interface Props {
+  /**
+   * Every asset in the latest snapshot, excluded ones flagged
+   * `included: false` — already re-cut against any pending local toggle, so
+   * rendering straight from this is what makes a click redraw instantly.
+   */
   items: AllocationItem[]
+  /**
+   * Persist a toggle. The caller has already applied it locally, so this
+   * only has to reach the server; rejecting (throwing) rolls the row back.
+   */
+  onToggleExclude: (assetId: string, excluded: boolean) => Promise<void>
 }
 
 /** Shares at or above this percentage are always considered significant. */
@@ -70,13 +80,11 @@ function readBadge(status: ReadStatus) {
 
 function AllocationRow({
   item,
-  pendingExclude,
   excluding,
   error,
   onExclude,
 }: {
   item: AllocationItem
-  pendingExclude: boolean
   excluding: boolean
   error: string | null
   onExclude: () => void
@@ -84,19 +92,13 @@ function AllocationRow({
   const isUnpriced = item.value_usd === null
   // parseFloat is acceptable here: it only sizes the decorative share bar.
   const barWidth = Math.max(parseFloat(item.percentage), 1.5)
-  const showExcludedBadge = !item.included || pendingExclude
 
   return (
-    <tr className={pendingExclude ? 'allocation-row-pending' : undefined}>
+    <tr>
       <td>
         <div className="allocation-asset">
           <AssetEmblem symbol={item.symbol} logoUrl={item.logo_url} />
           <span className="allocation-symbol">{item.symbol}</span>
-          {showExcludedBadge && (
-            <span className="badge badge-neutral" aria-label="Excluded from total">
-              excluded
-            </span>
-          )}
           <span aria-label={`Read status: ${item.read_status}`}>{readBadge(item.read_status)}</span>
         </div>
       </td>
@@ -125,19 +127,15 @@ function AllocationRow({
         )}
       </td>
       <td className="allocation-actions">
-        {pendingExclude ? (
-          <span className="text-muted allocation-pending-note">Applies next snapshot</span>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={onExclude}
-            disabled={excluding}
-            aria-label={`Exclude ${item.symbol}`}
-          >
-            {excluding ? 'Excluding…' : 'Exclude'}
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onExclude}
+          disabled={excluding}
+          aria-label={`Exclude ${item.symbol}`}
+        >
+          Exclude
+        </button>
         {error !== null && (
           <p role="alert" className="text-danger allocation-row-error">
             {error}
@@ -150,21 +148,41 @@ function AllocationRow({
 
 /**
  * Collapsed strip of currently-excluded assets, with an Include button to undo —
- * the only way back once a row has been excluded from the allocation table above,
- * since an excluded asset drops out of the allocations response entirely.
+ * the only way back once a row has left the allocation table above.
+ *
+ * The rows come from the allocations themselves, which carry the excluded
+ * assets flagged rather than dropping them (AUD-448); that is what lets Include
+ * put a row back with its value already known, instead of blanking the table
+ * until a refetch. The `fetchAssets` query is a safety net for an excluded
+ * asset the latest snapshot has no line for — one excluded before snapshots
+ * started recording excluded holdings, or held in a wallet that has since
+ * stopped. Without it such an asset would have no way back at all.
  */
-function ExcludedAssetsStrip() {
+function ExcludedAssetsStrip({
+  items,
+  onInclude,
+}: {
+  items: AllocationItem[]
+  onInclude: (assetId: string) => Promise<void>
+}) {
   const [expanded, setExpanded] = useState(false)
   const [includingIds, setIncludingIds] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
-  const queryClient = useQueryClient()
 
   const { data } = useQuery({
     queryKey: ['assets', 'excluded-strip'],
     queryFn: () => fetchAssets({ excluded: true, held: true }),
   })
 
-  const excludedAssets = data?.items ?? []
+  const fromAllocations = items.filter((item) => !item.included)
+  const known = new Set(fromAllocations.map((item) => item.asset_id))
+  const orphans = (data?.items ?? [])
+    .filter((asset) => !known.has(asset.id))
+    .map((asset) => ({ asset_id: asset.id, symbol: asset.symbol }))
+  const excludedAssets = [
+    ...fromAllocations.map((item) => ({ asset_id: item.asset_id, symbol: item.symbol })),
+    ...orphans,
+  ]
 
   async function handleInclude(assetId: string) {
     setIncludingIds((prev) => new Set(prev).add(assetId))
@@ -174,12 +192,7 @@ function ExcludedAssetsStrip() {
       return next
     })
     try {
-      await patchAsset(assetId, { excluded: false })
-      void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      void queryClient.invalidateQueries({ queryKey: ['assets'] })
-      // The chart above is a separate query; without this the headline total
-      // and the graph disagree until something else refetches (AUD-447).
-      void queryClient.invalidateQueries({ queryKey: ['history'] })
+      await onInclude(assetId)
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
@@ -213,20 +226,20 @@ function ExcludedAssetsStrip() {
       {expanded && (
         <ul className="allocation-excluded-list" role="list" aria-label="Excluded assets">
           {excludedAssets.map((asset) => (
-            <li key={asset.id} className="allocation-excluded-row">
+            <li key={asset.asset_id} className="allocation-excluded-row">
               <span className="allocation-excluded-symbol">{asset.symbol}</span>
               <button
                 type="button"
                 className="btn btn-sm btn-ghost"
-                onClick={() => void handleInclude(asset.id)}
-                disabled={includingIds.has(asset.id)}
+                onClick={() => void handleInclude(asset.asset_id)}
+                disabled={includingIds.has(asset.asset_id)}
                 aria-label={`Include ${asset.symbol}`}
               >
-                {includingIds.has(asset.id) ? 'Including…' : 'Include'}
+                Include
               </button>
-              {rowErrors[asset.id] !== undefined && (
+              {rowErrors[asset.asset_id] !== undefined && (
                 <p role="alert" className="text-danger allocation-row-error">
-                  {rowErrors[asset.id]}
+                  {rowErrors[asset.asset_id]}
                 </p>
               )}
             </li>
@@ -237,13 +250,11 @@ function ExcludedAssetsStrip() {
   )
 }
 
-export default function AllocationList({ items }: Props) {
+export default function AllocationList({ items, onToggleExclude }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [search, setSearch] = useState('')
-  const [pendingExcludedIds, setPendingExcludedIds] = useState<Set<string>>(new Set())
   const [excludingIds, setExcludingIds] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
-  const queryClient = useQueryClient()
 
   async function handleExclude(assetId: string) {
     setExcludingIds((prev) => new Set(prev).add(assetId))
@@ -253,13 +264,7 @@ export default function AllocationList({ items }: Props) {
       return next
     })
     try {
-      await patchAsset(assetId, { excluded: true })
-      setPendingExcludedIds((prev) => new Set(prev).add(assetId))
-      void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-      void queryClient.invalidateQueries({ queryKey: ['assets'] })
-      // The chart above is a separate query; without this the headline total
-      // and the graph disagree until something else refetches (AUD-447).
-      void queryClient.invalidateQueries({ queryKey: ['history'] })
+      await onToggleExclude(assetId, true)
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
@@ -274,18 +279,22 @@ export default function AllocationList({ items }: Props) {
     }
   }
 
-  if (items.length === 0) {
+  // The table is the portfolio as it currently counts; excluded assets live in
+  // the strip below, which is also where they are put back from.
+  const included = items.filter((item) => item.included)
+
+  if (included.length === 0) {
     return (
       <div className="allocation-list">
         <p role="note">No allocation data available.</p>
-        <ExcludedAssetsStrip />
+        <ExcludedAssetsStrip items={items} onInclude={(id) => onToggleExclude(id, false)} />
       </div>
     )
   }
 
   const filtered = search.trim()
-    ? items.filter((i) => i.symbol.toLowerCase().includes(search.trim().toLowerCase()))
-    : items
+    ? included.filter((i) => i.symbol.toLowerCase().includes(search.trim().toLowerCase()))
+    : included
 
   const { visible, hidden } = splitAllocations(filtered)
   const rows = expanded ? [...visible, ...hidden] : visible
@@ -305,7 +314,7 @@ export default function AllocationList({ items }: Props) {
           />
         </div>
         <span className="muted-text">
-          {filtered.length} of {items.length}
+          {filtered.length} of {included.length}
         </span>
       </div>
 
@@ -325,7 +334,6 @@ export default function AllocationList({ items }: Props) {
               <AllocationRow
                 key={item.asset_id}
                 item={item}
-                pendingExclude={pendingExcludedIds.has(item.asset_id)}
                 excluding={excludingIds.has(item.asset_id)}
                 error={rowErrors[item.asset_id] ?? null}
                 onExclude={() => void handleExclude(item.asset_id)}
@@ -356,7 +364,7 @@ export default function AllocationList({ items }: Props) {
         </button>
       )}
 
-      <ExcludedAssetsStrip />
+      <ExcludedAssetsStrip items={items} onInclude={(id) => onToggleExclude(id, false)} />
     </div>
   )
 }

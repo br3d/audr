@@ -210,6 +210,9 @@ async def query_history(
 
     entries = [_row_to_entry(r) for r in raw]
 
+    # Re-cut every point against the *current* exclusion set (AUD-448).
+    entries = await _apply_exclusions(session, entries)
+
     # Inject gap markers between entries whose timestamps are far apart.
     gap_threshold = _compute_gap_threshold(entries)
     with_gaps = _inject_gaps(entries, gap_threshold)
@@ -280,6 +283,77 @@ async def get_snapshot_detail(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+async def _apply_exclusions(
+    session: AsyncSession,
+    entries: list[HistoryEntry],
+) -> list[HistoryEntry]:
+    """Re-cut each point's total against the assets excluded *right now*.
+
+    history_point stores the gross total of its snapshot's lines. Excluding
+    an asset must redraw the chart immediately rather than bend it only from
+    the next snapshot onwards (AUD-448) — otherwise the curve and the
+    headline total, which GET /portfolio already cuts at read time, disagree
+    about the same instant, and the step in the line records when the owner
+    pressed a button rather than anything the portfolio did.
+
+    Points whose total is already unknown stay unknown. The subtraction is
+    floored at zero: a point can only lose the value its own snapshot
+    recorded for the excluded asset, so it cannot go negative, but rounding
+    across historical prices should not be able to push it there either.
+
+    Snapshots published before AUD-448 may predate the line for an asset
+    excluded at the time; they simply have nothing to subtract, which is
+    correct — their stored total never counted it.
+    """
+    if not entries:
+        return entries
+
+    result = await session.execute(
+        sa.text(
+            """
+            SELECT
+                vl.snapshot_id::text,
+                COALESCE(SUM(vl.value_usd), 0)::text   AS excluded_value,
+                COUNT(DISTINCT vl.asset_id)            AS excluded_assets
+            FROM valuation_line vl
+            JOIN asset a ON a.id = vl.asset_id
+            WHERE vl.snapshot_id IN :snapshot_ids
+              AND COALESCE(a.excluded, false)
+            GROUP BY vl.snapshot_id
+            """
+        ).bindparams(sa.bindparam("snapshot_ids", expanding=True)),
+        {"snapshot_ids": [e.snapshot_id for e in entries]},
+    )
+    adjustments = {row[0]: (Decimal(row[1]), int(row[2])) for row in result}
+    if not adjustments:
+        return entries
+
+    adjusted: list[HistoryEntry] = []
+    for entry in entries:
+        adjustment = adjustments.get(str(entry.snapshot_id))
+        if adjustment is None:
+            adjusted.append(entry)
+            continue
+        excluded_value, excluded_assets = adjustment
+        total = entry.total_value_usd
+        if total is not None:
+            total = max(Decimal(0), total - excluded_value)
+        adjusted.append(
+            HistoryEntry(
+                snapshot_id=entry.snapshot_id,
+                snapshotted_at=entry.snapshotted_at,
+                total_value_usd=total,
+                quality=entry.quality,
+                included_wallet_count=entry.included_wallet_count,
+                included_asset_count=max(0, entry.included_asset_count - excluded_assets),
+                has_gap=entry.has_gap,
+                is_canonical=entry.is_canonical,
+                is_gap_marker=entry.is_gap_marker,
+            )
+        )
+    return adjusted
 
 
 def _period_start(period: Period) -> datetime | None:
