@@ -14,15 +14,58 @@ import ScanStatus from '../components/ScanStatus'
 
 const RECENT_EVENTS_LIMIT = 7
 
-// Folio's reference design shows four range segments (day/month/3 months/year),
-// but the history API only serves these periods today — 3-month and 1-year
-// windows need backend support (tracked separately) before they can be added.
+// AUD-455: the standalone History page was removed, so this switcher carries
+// the full set of windows the history API serves (3M and 1Y since AUD-376).
 const RANGE_OPTIONS: { value: HistoryPeriod; label: string }[] = [
   { value: '24h', label: '1D' },
   { value: '7d', label: '1W' },
   { value: '30d', label: '1M' },
+  { value: '90d', label: '3M' },
+  { value: '1y', label: '1Y' },
   { value: 'all', label: 'All' },
 ]
+
+// AUD-455: moved over from the removed History page — the chart draws gap
+// markers and quality shading, but what those mean only reads as an
+// explanation in words next to it.
+function HistoryQualityNotices({ points }: { points: HistoryPoint[] }) {
+  const hasGaps = points.some((p) => p.is_gap_marker)
+  const hasStale = points.some((p) => p.quality === 'stale')
+  const hasIncomplete = points.some((p) => p.quality === 'partial' || p.quality === 'gaps')
+  const hasInvalidated = points.some((p) => !p.is_canonical)
+
+  if (!hasGaps && !hasStale && !hasIncomplete && !hasInvalidated) return null
+
+  return (
+    <div className="notice-list mb-16">
+      {hasGaps && (
+        <p role="note" className="notice-item">
+          This range contains gaps — periods where balance or price data was not
+          recorded. The chart shows gap markers.
+        </p>
+      )}
+      {hasStale && (
+        <p role="note" className="notice-item">
+          Some points are marked <strong>stale</strong> — the underlying data had not
+          been refreshed within the normal interval.
+        </p>
+      )}
+      {hasIncomplete && (
+        <p role="note" className="notice-item">
+          Some points are marked <strong>incomplete</strong> — not all holdings had
+          usable balances and prices at that snapshot.
+        </p>
+      )}
+      {hasInvalidated && (
+        <p role="note" className="notice-item">
+          Some points are marked <strong>invalidated</strong> — they were recalculated
+          after a blockchain reorganization or a block that failed verification, and
+          their value is no longer considered current.
+        </p>
+      )}
+    </div>
+  )
+}
 
 function formatHuman(iso: string): string {
   const d = new Date(iso)
@@ -334,6 +377,7 @@ export default function DashboardPage({ setPage }: Props) {
                 ))}
               </div>
             </div>
+            <HistoryQualityNotices points={historyQuery.data.items} />
             <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
           </section>
         )}

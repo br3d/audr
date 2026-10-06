@@ -19,7 +19,7 @@ import {
 
 describe('pageFromHash / hashForPage with a query part', () => {
   it('parses the page slug and ignores a trailing query string', () => {
-    expect(pageFromHash('#/history?period=30d')).toBe('history')
+    expect(pageFromHash('#/events?period=30d')).toBe('events')
     expect(pageFromHash('#/wallets')).toBe('wallets')
   })
 
@@ -39,9 +39,9 @@ describe('pageFromHash / hashForPage with a query part', () => {
   })
 
   it('builds a hash with or without a query string', () => {
-    expect(hashForPage('history')).toBe('#/history')
-    expect(hashForPage('history', 'period=30d')).toBe('#/history?period=30d')
-    expect(hashForPage('history', '')).toBe('#/history')
+    expect(hashForPage('events')).toBe('#/events')
+    expect(hashForPage('events', 'period=30d')).toBe('#/events?period=30d')
+    expect(hashForPage('events', '')).toBe('#/events')
   })
 })
 
@@ -124,7 +124,7 @@ describe('parseQuery / serializeQuery', () => {
 // ---- useHashQueryState: restoration after reload + back/forward (AC1, AC2, AC4) ----
 
 function Harness() {
-  const [state, update] = useHashQueryState('history', SCHEMA)
+  const [state, update] = useHashQueryState('events', SCHEMA)
   return React.createElement(
     'div',
     null,
@@ -168,7 +168,7 @@ describe('useHashQueryState', () => {
   }
 
   it('starts from defaults when the hash has no query', () => {
-    window.history.replaceState(null, '', '#/history')
+    window.history.replaceState(null, '', '#/events')
     act(() => root.render(React.createElement(Harness)))
     expect(text('period')).toBe('7d')
     expect(text('q')).toBe('')
@@ -177,7 +177,7 @@ describe('useHashQueryState', () => {
   })
 
   it('restores state from an existing hash query, as a reload would (AC1)', () => {
-    window.history.replaceState(null, '', '#/history?period=30d&q=eth&on=1&n=5')
+    window.history.replaceState(null, '', '#/events?period=30d&q=eth&on=1&n=5')
     act(() => root.render(React.createElement(Harness)))
     expect(text('period')).toBe('30d')
     expect(text('q')).toBe('eth')
@@ -186,14 +186,14 @@ describe('useHashQueryState', () => {
   })
 
   it('normalises an unknown/broken value in the URL to the default without crashing (AC3)', () => {
-    window.history.replaceState(null, '', '#/history?period=not-a-real-period&n=abc')
+    window.history.replaceState(null, '', '#/events?period=not-a-real-period&n=abc')
     act(() => root.render(React.createElement(Harness)))
     expect(text('period')).toBe('7d')
     expect(text('n')).toBe('0')
   })
 
   it('writes updates into the hash, omitting fields at their default value', () => {
-    window.history.replaceState(null, '', '#/history')
+    window.history.replaceState(null, '', '#/events')
     act(() => root.render(React.createElement(Harness)))
 
     const setQAndN = Array.from(container.querySelectorAll('button')).find(
@@ -201,23 +201,23 @@ describe('useHashQueryState', () => {
     )!
     act(() => setQAndN.click())
 
-    expect(window.location.hash).toBe('#/history?q=eth&n=5')
+    expect(window.location.hash).toBe('#/events?q=eth&n=5')
     expect(text('q')).toBe('eth')
     expect(text('n')).toBe('5')
   })
 
   it('follows hashchange events, as browser back/forward would (AC2)', () => {
-    window.history.replaceState(null, '', '#/history')
+    window.history.replaceState(null, '', '#/events')
     act(() => root.render(React.createElement(Harness)))
 
     act(() => {
-      window.history.replaceState(null, '', '#/history?period=30d')
+      window.history.replaceState(null, '', '#/events?period=30d')
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
     expect(text('period')).toBe('30d')
 
     act(() => {
-      window.history.replaceState(null, '', '#/history')
+      window.history.replaceState(null, '', '#/events')
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     })
     expect(text('period')).toBe('7d')
