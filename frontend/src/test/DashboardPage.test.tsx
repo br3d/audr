@@ -762,7 +762,7 @@ describe('DashboardPage', () => {
       return buttons
     }
 
-    it('renders four range segments defaulting to 1M', async () => {
+    it('renders all six range segments defaulting to 1M', async () => {
       mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
@@ -770,7 +770,14 @@ describe('DashboardPage', () => {
         priced_subtotal_usd: '4000.00',
       })
       const buttons = await waitForRangeButtons(container)
-      expect(buttons.map((b) => b.textContent)).toEqual(['1D', '1W', '1M', 'All'])
+      expect(buttons.map((b) => b.textContent)).toEqual([
+        '1D',
+        '1W',
+        '1M',
+        '3M',
+        '1Y',
+        'All',
+      ])
       const active = buttons.find((b) => b.getAttribute('aria-pressed') === 'true')
       expect(active?.textContent).toBe('1M')
       expect(mockFetchHistory).toHaveBeenCalledWith('30d')
@@ -792,6 +799,65 @@ describe('DashboardPage', () => {
       })
       expect(mockFetchHistory).toHaveBeenCalledWith('24h')
       expect(dayButton?.getAttribute('aria-pressed')).toBe('true')
+      await unmount(container, root)
+    })
+
+    // AUD-455: 3M/1Y arrived with the History page's removal; the backend has
+    // served both windows since AUD-376.
+    it('requests the 1-year window when 1Y is selected', async () => {
+      mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+      })
+      const buttons = await waitForRangeButtons(container)
+      const yearButton = buttons.find((b) => b.textContent === '1Y')
+      expect(yearButton).toBeTruthy()
+      await act(async () => {
+        yearButton?.click()
+      })
+      expect(mockFetchHistory).toHaveBeenCalledWith('1y')
+      expect(yearButton?.getAttribute('aria-pressed')).toBe('true')
+      await unmount(container, root)
+    })
+
+    it('shows no data-quality notices when every point is clean', async () => {
+      mockFetchHistory.mockResolvedValue(HISTORY_WITH_ENTRIES)
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+      })
+      await waitForRangeButtons(container)
+      expect(container.querySelectorAll('.notice-item')).toHaveLength(0)
+      await unmount(container, root)
+    })
+
+    it('explains gap, stale, incomplete and invalidated points', async () => {
+      mockFetchHistory.mockResolvedValue({
+        ...HISTORY_WITH_ENTRIES,
+        items: [
+          { ...HISTORY_WITH_ENTRIES.items[0], snapshot_id: 'g', is_gap_marker: true },
+          { ...HISTORY_WITH_ENTRIES.items[0], snapshot_id: 's', quality: 'stale' as const },
+          { ...HISTORY_WITH_ENTRIES.items[0], snapshot_id: 'p', quality: 'partial' as const },
+          { ...HISTORY_WITH_ENTRIES.items[0], snapshot_id: 'i', is_canonical: false },
+        ],
+      })
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+      })
+      await waitForRangeButtons(container)
+      const notices = Array.from(container.querySelectorAll('.notice-item')).map(
+        (n) => n.textContent ?? '',
+      )
+      expect(notices).toHaveLength(4)
+      expect(notices.some((t) => t.includes('gaps'))).toBe(true)
+      expect(notices.some((t) => t.includes('stale'))).toBe(true)
+      expect(notices.some((t) => t.includes('incomplete'))).toBe(true)
+      expect(notices.some((t) => t.includes('invalidated'))).toBe(true)
       await unmount(container, root)
     })
   })

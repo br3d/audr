@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import {
   IconGrid,
   IconWallet,
-  IconBarChart,
   IconClock,
   IconActivity,
   IconZap,
@@ -38,7 +37,6 @@ export const MAIN_PAGES = [
   'assets',
   'events',
   'connections',
-  'history',
   'schedules',
   'status',
   'account',
@@ -60,7 +58,6 @@ const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<
   // manual contracts), not a portfolio view. It stays routable at #/assets and
   // is reached from the Dashboard links, but it no longer takes a nav slot.
   { page: 'events', label: 'Events', Icon: IconZap },
-  { page: 'history', label: 'History', Icon: IconBarChart },
   { page: 'schedules', label: 'Schedules', Icon: IconClock },
   { page: 'status', label: 'Status', Icon: IconActivity },
   { page: 'connections', label: 'Connections', Icon: IconPlug },
@@ -74,7 +71,6 @@ const PAGE_TITLES: Record<MainPage, string> = {
   assets: 'Assets',
   events: 'Events',
   connections: 'Connections',
-  history: 'History',
   schedules: 'Schedules',
   status: 'Status',
   account: 'Account & Data',

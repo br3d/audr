@@ -3,7 +3,7 @@
  * (AUD-353).
  *
  * The active tab lives in `location.hash` (e.g. `#/wallets`), and the query
- * part of the hash (e.g. `#/history?period=30d`) carries the view state a
+ * part of the hash (e.g. `#/events?limit=50`) carries the view state a
  * screen's owner sets by hand — selected period, table filters, sort order,
  * view toggles. Keeping both in the URL means a reload or a back/forward
  * navigation restores exactly what the owner was looking at, and the screen
@@ -159,7 +159,7 @@ export function serializeQuery<S extends QuerySchema>(state: QueryState<S>, sche
 
 /**
  * Keep a screen's view state (period, filters, sort, toggles) in the query
- * part of its hash entry, e.g. `#/history?period=30d`.
+ * part of its hash entry, e.g. `#/events?limit=50`.
  *
  * `schema` must be a stable (module-level) object — it is not tracked as a
  * dependency. Updates use `history.replaceState` rather than pushing a new
