@@ -185,7 +185,7 @@ registered worker once, then `recheck_canonicality()` and
 | `balance_scan` | schedule (fallback 3600 s) | Reads native and ERC-20 balances for every monitored pair. |
 | `discovery` | schedule (fallback 86400 s) | Chunked, resumable ERC-20 candidate discovery against the catalog. |
 | `quote_refresh` | schedule (fallback 3600 s) | Prices **held assets only**; enqueues a `valuation` run on success. |
-| `event_indexer` | schedule (fallback 300 s) | Incremental `eth_getLogs` Transfer and Approval indexing per wallet, bounded by a per-run chunk budget. |
+| `event_indexer` | schedule (fallback 300 s) | Incremental `eth_getLogs` Transfer and Approval indexing per wallet, bounded by a per-run chunk budget. First sight of a wallet starts `EVENT_INDEXER_BACKFILL_BLOCKS` behind the tip. Transfer logs are filtered to the tracked `asset` set (an inbound Transfer is spammable by anyone); Approval logs are not (an Approval with our wallet as owner is one we signed, and the riskiest ones are on tokens the catalog never heard of). |
 | `news_refresh` | schedule (fallback 900 s) | CoinGecko news matched to held assets. Returns early without a key. |
 | `asset_icon_refresh` | schedule (fallback 900 s) | Fills the `asset_icon` cache for held assets, with negative caching. |
 | `valuation` | on demand | Publishes a valuation snapshot and materialises a history point. |
@@ -358,6 +358,7 @@ CLI path.
 | `RPC_RATE_LIMIT_PER_SECOND` | `10.0` | Worker-wide shared RPC token bucket. Conservative for a free Infura tier. |
 | `RPC_RATE_LIMIT_BURST` | `5` | |
 | `EVENT_INDEXER_MAX_CHUNKS_PER_RUN` | `50` | Caps `eth_getLogs` chunks per run; the remainder resumes from the checkpoint. |
+| `EVENT_INDEXER_BACKFILL_BLOCKS` | `100000` | How far behind the tip a wallet starts the first time the indexer sees it (~16 days). `0` restores index-from-now-on. |
 | `CMC_RATE_LIMIT_PER_SECOND` | `0.5` | Keyless CoinMarketCap quota is tight and unpublished. |
 | `CMC_RATE_LIMIT_BURST` | `1` | |
 | `ASSET_ICONS_REMOTE_FETCH` | `true` | Set `false` to stop all outbound icon fetches; the UI then shows monograms only. |

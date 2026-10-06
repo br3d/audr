@@ -75,10 +75,12 @@ def test_rpc_rate_limit_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RPC_RATE_LIMIT_PER_SECOND", raising=False)
     monkeypatch.delenv("RPC_RATE_LIMIT_BURST", raising=False)
     monkeypatch.delenv("EVENT_INDEXER_MAX_CHUNKS_PER_RUN", raising=False)
+    monkeypatch.delenv("EVENT_INDEXER_BACKFILL_BLOCKS", raising=False)
     settings = Settings()
     assert settings.rpc_rate_limit_per_second == 10.0
     assert settings.rpc_rate_limit_burst == 5
     assert settings.event_indexer_max_chunks_per_run == 50
+    assert settings.event_indexer_backfill_blocks == 100_000
 
 
 @pytest.mark.unit
@@ -88,10 +90,12 @@ def test_rpc_rate_limit_overridable_from_env(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("RPC_RATE_LIMIT_PER_SECOND", "3.5")
     monkeypatch.setenv("RPC_RATE_LIMIT_BURST", "2")
     monkeypatch.setenv("EVENT_INDEXER_MAX_CHUNKS_PER_RUN", "7")
+    monkeypatch.setenv("EVENT_INDEXER_BACKFILL_BLOCKS", "0")
     settings = Settings()
     assert settings.rpc_rate_limit_per_second == 3.5
     assert settings.rpc_rate_limit_burst == 2
     assert settings.event_indexer_max_chunks_per_run == 7
+    assert settings.event_indexer_backfill_blocks == 0
 
 
 @pytest.mark.unit

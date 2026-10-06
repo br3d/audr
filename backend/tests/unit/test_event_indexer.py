@@ -134,6 +134,31 @@ class TestInsertEventApprovalClassification:
         assert n == 0
         session.execute.assert_not_called()
 
+    async def test_erc721_approval_is_skipped(self) -> None:
+        """ERC-721 shares the Approval signature but indexes tokenId, so it
+        arrives with four topics and empty data. Since the approval log filter
+        is not restricted to the tracked ERC-20 catalog (AUD-445), an NFT
+        approval must not be recorded as a zero-value token allowance."""
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        operator = "0x" + "22" * 20
+        log = _make_log(
+            topics=[
+                APPROVAL_TOPIC,
+                _pad_address_topic(wallet_address),
+                _pad_address_topic(operator),
+                "0x" + f"{7:064x}",  # tokenId, indexed
+            ],
+            data="0x",
+        )
+
+        n = await _insert_event(
+            session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address
+        )
+
+        assert n == 0
+        session.execute.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
