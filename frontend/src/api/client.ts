@@ -475,10 +475,13 @@ export interface ScheduleConfig {
   next_due_at?: string | null
 }
 
+// Keyed by schedule kind. The three below are always present; the backend may
+// also return other kinds (event_indexer, news_refresh, …), so keep it open.
 export interface SchedulesConfig {
   balances?: ScheduleConfig
   discovery?: ScheduleConfig
   quotes?: ScheduleConfig
+  [kind: string]: ScheduleConfig | undefined
 }
 
 export interface SettingsResponse {

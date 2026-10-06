@@ -192,10 +192,10 @@ export default function SchedulesPage() {
       // back would fail the whole save over a schedule this page doesn't manage.
       const schedules = Object.fromEntries(
         Object.entries(current.schedules ?? {})
-          .filter(([, config]) => config.interval_seconds > 0)
+          .filter(([, config]) => (config?.interval_seconds ?? 0) > 0)
           .map(([kind, config]) => [
             kind,
-            { enabled: config.enabled, interval_seconds: config.interval_seconds },
+            { enabled: config!.enabled, interval_seconds: config!.interval_seconds },
           ]),
       )
       await patchSettings({ revision: data.revision, schedules })

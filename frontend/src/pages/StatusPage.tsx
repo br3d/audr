@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchStatus, fetchJobs, cancelJob, triggerJob, ApiError } from '../api/client'
-import type { StatusResponse, JobRun } from '../api/client'
+import type { StatusResponse, JobRun, ScheduleConfig } from '../api/client'
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
@@ -13,6 +13,32 @@ function formatTimestamp(ts: string | null): string {
     second: '2-digit',
     hour12: false,
   })
+}
+
+const SCHEDULE_LABELS: Record<string, string> = {
+  balances: 'Balance scan',
+  balance_scan: 'Balance scan',
+  discovery: 'Discovery',
+  quotes: 'Quotes',
+  quote_refresh: 'Quotes',
+  valuation: 'Valuation',
+  event_indexer: 'Event indexer',
+  news_refresh: 'News refresh',
+}
+
+function scheduleLabel(kind: string): string {
+  return SCHEDULE_LABELS[kind] ?? kind.replace(/_/g, ' ')
+}
+
+/** Render a schedule's next run: a timestamp, "Due now" if overdue, else why not. */
+function formatNextRun(config: ScheduleConfig | undefined): string {
+  if (!config) return '—'
+  if (!config.enabled) return 'Disabled'
+  if (!config.next_due_at) return 'Paused'
+  const due = new Date(config.next_due_at)
+  if (Number.isNaN(due.getTime())) return '—'
+  if (due.getTime() <= Date.now()) return 'Due now'
+  return formatTimestamp(config.next_due_at)
 }
 
 function jobStatusBadge(status: JobRun['status']) {
@@ -167,24 +193,12 @@ function SystemStatus({ status }: { status: StatusResponse }) {
         <div className="card">
           <div className="section-heading mb-12">Next scheduled runs</div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <div className="row-between">
-              <span className="text-secondary">Balance scan</span>
-              <span className="td-muted">
-                {formatTimestamp(status.schedules.balances?.next_due_at ?? null)}
-              </span>
-            </div>
-            <div className="row-between">
-              <span className="text-secondary">Discovery</span>
-              <span className="td-muted">
-                {formatTimestamp(status.schedules.discovery?.next_due_at ?? null)}
-              </span>
-            </div>
-            <div className="row-between">
-              <span className="text-secondary">Quotes</span>
-              <span className="td-muted">
-                {formatTimestamp(status.schedules.quotes?.next_due_at ?? null)}
-              </span>
-            </div>
+            {Object.entries(status.schedules).map(([kind, config]) => (
+              <div className="row-between" key={kind}>
+                <span className="text-secondary">{scheduleLabel(kind)}</span>
+                <span className="td-muted">{formatNextRun(config)}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

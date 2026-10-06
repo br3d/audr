@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import sqlalchemy as sa
@@ -232,17 +232,53 @@ def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
     )
 
 
+def _next_due_at(
+    *,
+    enabled: bool,
+    paused_at: datetime | None,
+    freshness_s: int | None,
+    last_run_at: datetime | None,
+    next_run_at: datetime | None,
+) -> str | None:
+    """Return the ISO timestamp of the next scheduled run, or None.
+
+    ``schedule.next_run_at`` is never written by the dispatcher — ``is_due()``
+    derives readiness from ``last_run_at + freshness_s`` instead (AUD-456), so
+    reading the column alone always yielded NULL and the Status page showed a
+    blank "Next scheduled runs" card. Mirror the dispatcher's arithmetic here,
+    preferring an explicit ``next_run_at`` if one is ever persisted.
+    """
+    if not enabled or paused_at is not None:
+        return None
+    if next_run_at is not None:
+        return next_run_at.isoformat()
+    if freshness_s is None:
+        # No freshness window — is_due() fires on the next dispatcher tick.
+        return datetime.now(UTC).isoformat()
+    if last_run_at is None:
+        return datetime.now(UTC).isoformat()
+    return (last_run_at + timedelta(seconds=freshness_s)).isoformat()
+
+
 # ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
 # there is no narrower static type for an ad-hoc `sa.text()` result.
 def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401 — row is a positional SQLAlchemy Row, indexed by column position; no narrower static type for an ad-hoc sa.text() result
     """Return (frontend_kind, ScheduleConfig) from a schedule table row."""
     kind_db: str = row[1]
     enabled: bool = row[2]
+    paused_at: datetime | None = row[4]
     freshness_s: int | None = row[5]
+    last_run_at: datetime | None = row[7]
     next_run_at: datetime | None = row[8]
 
     kind_fe = _DB_TO_FE.get(kind_db, kind_db)
-    next_due = next_run_at.isoformat() if next_run_at else None
+    next_due = _next_due_at(
+        enabled=enabled,
+        paused_at=paused_at,
+        freshness_s=freshness_s,
+        last_run_at=last_run_at,
+        next_run_at=next_run_at,
+    )
 
     return kind_fe, ScheduleConfig(
         enabled=enabled,
