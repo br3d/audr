@@ -505,7 +505,7 @@ jobs:
               echo "[stand] /health/ready       : ${ready:-<no response>}"
               echo "[stand] Recovery: docs/deploy-runbook.md, 'Stand down after a failed deploy'."
               echo "[stand] ############################################################"
-              # Push the alert out of the run log and onto a phone (AUD-444).
+              # Push the alert out of the run log and onto the board (AUD-444).
               # Everything above only reaches someone already looking at this
               # run, which in AUD-443 was nobody for two hours.
               #
@@ -515,11 +515,16 @@ jobs:
               #
               # notify.sh exits 0 both when no channel is configured and when
               # delivery fails, so this cannot replace the diagnosis above with
-              # an alerting error of its own. It reads the token from
-              # $DEPLOY_DIR/secrets/telegram.env — the same file the host
-              # watchdog uses — so nothing secret appears in this public
-              # workflow, and there is no Gitea secret to rotate separately.
-              AUDR_REMOTE_DIR="$DEPLOY_DIR" bash scripts/notify.sh "$(printf '%s\n' \
+              # an alerting error of its own. It reads its credentials from
+              # $DEPLOY_DIR/secrets/ — the same files the host watchdog uses —
+              # so nothing secret appears in this public workflow, and there is
+              # no Gitea secret to rotate separately.
+              #
+              # --key deploy-failed is deliberately NOT the watchdog's
+              # stand-down key. Consecutive failed deploys belong in one board
+              # issue, but they must not be folded into an unrelated
+              # spontaneous outage: the two have different first questions.
+              AUDR_REMOTE_DIR="$DEPLOY_DIR" bash scripts/notify.sh --key deploy-failed -- "$(printf '%s\n' \
                 "🔴 audr stand DOWN after a failed deploy" \
                 "" \
                 "Deploy of ${GITHUB_SHA:0:12} failed and the stand is NOT serving." \
@@ -533,6 +538,28 @@ jobs:
           # Unconditional, both paths: this is the state a responder needs first
           # and it is cheap. Never let it fail the step.
           cd "$DEPLOY_DIR" 2>/dev/null && docker compose ps || true
+          exit 0
+
+      # The other half of the failure path above. Without this, the `critical`
+      # board issue a failed deploy opens outlives the problem: the fix lands,
+      # the stand serves, and the issue sits there until a human notices it is
+      # stale. An alert channel that needs manual cleanup gets muted, which is
+      # the failure mode AUD-444 exists to avoid.
+      #
+      # --resolve against a key with nothing open is a no-op that exits 0, so
+      # this is silent after the overwhelming majority of deploys (the ones not
+      # preceded by a failure) and costs one state-file stat.
+      - name: Clear deploy-failure alert (success path)
+        if: success()
+        run: |
+          set -uo pipefail
+          AUDR_REMOTE_DIR="$DEPLOY_DIR" bash scripts/notify.sh --key deploy-failed --resolve -- "$(printf '%s\n' \
+            "✅ audr deploy RECOVERED" \
+            "" \
+            "Deploy of ${GITHUB_SHA:0:12} succeeded and the stand is serving." \
+            "run           : #${GITHUB_RUN_NUMBER:-?} of ${GITHUB_REPOSITORY:-audr} (${GITHUB_REF_NAME:-?})" \
+            "" \
+            "Closing the alert opened by the earlier failed deploy. No action needed.")" || true
           exit 0
 
       # Every deploy mints a new per-sha image on this runner, and left

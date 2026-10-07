@@ -29,6 +29,8 @@ select = ["E", "F", "I", "UP", "B", "S"]
 # Operational scripts legitimately shell out and print; they are run by hand by
 # an operator, not exposed to untrusted input.
 "scripts/*.py" = ["S603", "S607"]
-# Dependency-free test script (see its own docstring) -- assert is the test
-# mechanism, not a security check on untrusted input.
+# Dependency-free test scripts (see their own docstrings) -- assert is the test
+# mechanism, not a security check on untrusted input, and the fixed /tmp paths
+# are assertion literals that are never created on disk.
 "scripts/test_registry_prune.py" = ["S101"]
+"scripts/test_notify_board.py" = ["S101", "S108"]

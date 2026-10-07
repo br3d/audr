@@ -36,6 +36,10 @@ REMIND_EVERY="${AUDR_REMIND_EVERY:-60}"
 STATE_DIR="${AUDR_WATCHDOG_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/audr-watchdog}"
 STATE_FILE="$STATE_DIR/consecutive-failures"
 NOTIFY="$REPO_DIR/scripts/notify.sh"
+# Names the condition for notify.sh's dedupe. Distinct from the deploy
+# workflow's key so a failed deploy and a spontaneous outage stay separate
+# threads — they have different first questions.
+ALERT_KEY="${AUDR_ALERT_KEY:-stand-down}"
 
 mkdir -p "$STATE_DIR" || { echo "[watchdog] cannot create $STATE_DIR" >&2; exit 1; }
 
@@ -53,7 +57,10 @@ case "$ready" in
     # down is the other half of that, and without it the only way to know is to
     # go and look — the exact habit this whole ticket is trying to remove.
     if [ "$fails" -ge "$FAIL_THRESHOLD" ]; then
-      "$NOTIFY" "$(printf '%s\n' \
+      # --resolve closes the board issue this outage opened, so a recovered
+      # stand does not leave a `critical` issue behind for someone to triage
+      # and discover is already fine.
+      "$NOTIFY" --key "$ALERT_KEY" --resolve -- "$(printf '%s\n' \
         "✅ audr stand RECOVERED" \
         "" \
         "/health/ready is returning ok again at ${stamp}." \
@@ -109,7 +116,11 @@ api="$(state_of audr-api-1)"
 db="$(state_of audr-db-1)"
 ps="$(cd "${AUDR_REMOTE_DIR:-$HOME/audr}" 2>/dev/null && docker compose ps --format '{{.Service}}: {{.State}}' 2>/dev/null | head -20 || true)"
 
-"$NOTIFY" "$(printf '%s\n' \
+# --key ties every message about this outage to one board issue: the first
+# crossing opens it, the hourly reminders comment on it, and recovery above
+# closes it. Without that the reminder cadence would mean a new `critical`
+# issue every hour the stand stays down.
+"$NOTIFY" --key "$ALERT_KEY" -- "$(printf '%s\n' \
   "🔴 audr stand DOWN" \
   "" \
   "/health/ready has failed ${fails} consecutive probes (~${fails} min) as of ${stamp}." \

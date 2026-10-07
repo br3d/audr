@@ -5,7 +5,8 @@
 #   scripts/install-watchdog.sh --check     report what is installed; no changes
 #
 # What it puts on the host:
-#   <install dir>/scripts/{stand-watchdog.sh,notify.sh}   verbatim repo copies
+#   <install dir>/scripts/{stand-watchdog.sh,notify.sh,notify-board.py}
+#                                                         verbatim repo copies
 #   /etc/systemd/system/audr-watchdog.service             from the .in template
 #   /etc/systemd/system/audr-watchdog.timer
 #
@@ -47,9 +48,13 @@ if [ "$mode" = check ]; then
     echo "== last run =="
     systemctl status audr-watchdog.service --no-pager -n 10 2>/dev/null | tail -14 || echo "not installed"
     echo "== credentials =="
-    for f in ~/audr/secrets/telegram.env; do
-      if [ -f "$f" ]; then echo "$f present ($(stat -c %a "$f"))"; else echo "$f ABSENT — alerts will log only"; fi
+    # Either file on its own is a complete channel; both absent is the only
+    # state in which a detected outage reaches nobody.
+    present=0
+    for f in ~/audr/secrets/paperclip.env ~/audr/secrets/telegram.env; do
+      if [ -f "$f" ]; then echo "$f present ($(stat -c %a "$f"))"; present=1; else echo "$f absent"; fi
     done
+    [ "$present" = 1 ] || echo "NO CHANNEL CONFIGURED — alerts will be logged on this host and delivered to nobody"
   '
   exit 0
 fi
@@ -62,8 +67,9 @@ echo "==> installing watchdog scripts to $HOST:$abs_install/scripts"
 "${SSH[@]}" "mkdir -p '$abs_install/scripts'"
 scp -q -i "$KEY" -o StrictHostKeyChecking=no \
   "$REPO_DIR/scripts/stand-watchdog.sh" "$REPO_DIR/scripts/notify.sh" \
+  "$REPO_DIR/scripts/notify-board.py" \
   "$HOST:$abs_install/scripts/"
-"${SSH[@]}" "chmod 755 '$abs_install/scripts/stand-watchdog.sh' '$abs_install/scripts/notify.sh'"
+"${SSH[@]}" "chmod 755 '$abs_install/scripts/stand-watchdog.sh' '$abs_install/scripts/notify.sh' '$abs_install/scripts/notify-board.py'"
 
 echo "==> rendering and installing systemd units (sudo on the host)"
 service="$(sed -e "s|@INSTALL_DIR@|$abs_install|g" -e "s|@REMOTE_DIR@|$REMOTE_DIR|g" \
@@ -84,22 +90,34 @@ echo
 echo "==> installed. Timer:"
 "${SSH[@]}" 'systemctl list-timers audr-watchdog.timer --no-pager | head -3'
 echo
-"${SSH[@]}" "test -f '$REMOTE_DIR/secrets/telegram.env'" \
-  && echo "==> Telegram credentials present — alerts will be delivered." \
+"${SSH[@]}" "test -f '$REMOTE_DIR/secrets/paperclip.env' -o -f '$REMOTE_DIR/secrets/telegram.env'" \
+  && echo "==> Alert credentials present — alerts will be delivered." \
   || cat <<EOF
-==> NOTE: $REMOTE_DIR/secrets/telegram.env is absent, so the watchdog is
-    running and will log alerts but not deliver them. To activate the channel:
+==> NOTE: neither $REMOTE_DIR/secrets/paperclip.env nor telegram.env exists, so
+    the watchdog is running and will log alerts but deliver them to nobody.
 
-      1. Create a bot with @BotFather, keep the token.
-      2. Send it a message; read the chat id from
-         https://api.telegram.org/bot<TOKEN>/getUpdates
-      3. On the deploy host:
+    The channel chosen on AUD-444 is the board: a failing stand opens a
+    \`critical\` Paperclip issue, which wakes its assignee rather than waiting
+    for someone to be watching a chat. To activate it:
+
+      1. Have a board user mint an agent API key with scope
+         {"kind":"task_bridge"} — scoped to the audr project, and with
+         allowedAssigneeAgentIds limited to the agent that should be woken.
+         Agents cannot mint their own keys, so this step needs a human.
+      2. On the deploy host:
            umask 077
-           cat > $REMOTE_DIR/secrets/telegram.env <<'CREDS'
-           TELEGRAM_BOT_TOKEN=...
-           TELEGRAM_CHAT_ID=...
+           cat > $REMOTE_DIR/secrets/paperclip.env <<'CREDS'
+           PAPERCLIP_API_URL=https://<paperclip-host>
+           PAPERCLIP_API_KEY=<the task_bridge key>
+           PAPERCLIP_COMPANY_ID=<company uuid>
+           AUDR_ALERT_ASSIGNEE_AGENT_ID=<agent uuid to wake>
+           AUDR_ALERT_PROJECT_ID=<project uuid>
            CREDS
-      4. Verify:  $abs_install/scripts/notify.sh --strict "audr alerting test"
+      3. Verify:  $abs_install/scripts/notify.sh --strict "audr alerting test"
+                  (opens a real issue — close it afterwards)
+
+    Telegram remains supported as a second, independent sink; drop
+    TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID into secrets/telegram.env for it.
 
     No redeploy and no code change is needed — both the watchdog and the deploy
     workflow pick the file up on their next run.
