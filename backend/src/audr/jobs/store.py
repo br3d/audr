@@ -400,13 +400,36 @@ async def fail_job(
             UPDATE job_run
             SET status = 'failed',
                 error = :error,
-                checkpoint = :checkpoint,
+                checkpoint = CAST(:checkpoint AS jsonb),
                 retry_count = retry_count + 1,
                 completed_at = now()
             WHERE id = :id AND status = 'in_progress'
             """
         ),
-        {"id": run_id, "error": error, "checkpoint": checkpoint},
+        {
+            "id": run_id,
+            "error": error,
+            "checkpoint": json.dumps(checkpoint) if checkpoint is not None else None,
+        },
+    )
+    await session.flush()
+
+
+async def set_checkpoint(
+    session: AsyncSession, *, run_id: uuid.UUID, checkpoint: dict[str, Any]
+) -> None:
+    """Persist *checkpoint* on *run_id*, independent of its terminal status.
+
+    Unlike :func:`fail_job`'s checkpoint (scoped to failed runs, for retry
+    resumption), this lets a run that still completes successfully record
+    diagnostic counts — e.g. balance_scan's attempted/failed read tally
+    (AUD-463) — so an operator can tell a degraded-but-tolerable run from a
+    fully clean one instead of both landing as indistinguishable `completed`
+    rows.
+    """
+    await session.execute(
+        sa.text("UPDATE job_run SET checkpoint = CAST(:checkpoint AS jsonb) WHERE id = :id"),
+        {"id": run_id, "checkpoint": json.dumps(checkpoint)},
     )
     await session.flush()
 
