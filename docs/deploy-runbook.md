@@ -160,7 +160,7 @@ never meant to run is how a bad deploy becomes a bad database.
 ## Alerting: how you find out the stand is down
 
 AUD-443's two hours were not deploy time, they were nobody-noticing time. Two
-independent paths now push that fact out of a log and onto a phone, and they
+independent paths now push that fact out of a log and onto the board, and they
 cover deliberately different failure shapes:
 
 | | fires when | threshold | lives in |
@@ -172,45 +172,106 @@ The watchdog is the one that matters most, because the CI step structurally
 cannot see an outage that no deploy caused — an OOM kill, a reboot, Postgres
 dying on its own produce no CI run at all. It probes every 60s, alerts on the
 fifth consecutive failure, repeats hourly while still down, and sends one
-`✅ RECOVERED` message when `/health/ready` returns ok again so the responder
-knows to stand down.
+`✅ RECOVERED` message when `/health/ready` returns ok again — which also closes
+the board issue, so the responder is told to stand down rather than left to
+discover it.
 
 It does not fire on the first failed probe on purpose: a single miss is
 routinely just a container restarting mid-deploy, and paging on it teaches the
 one person on call to mute the channel, which costs more than the five minutes
 it saves. Target human response is 15 minutes.
 
-**Channel: Telegram.** Chosen because the stand is on a LAN address — Telegram
-needs one outbound HTTPS POST and nothing listening, whereas healthchecks.io or
-any hosted prober needs ingress to `192.168.1.228` plus a firewall change just
-to receive a heartbeat.
+### Channel: a `critical` board issue
+
+Chosen on AUD-444 over Telegram, email and a hosted uptime prober. The deciding
+property is that a board issue **wakes its assignee**: noticing becomes a
+timer's job instead of someone's attention, which is the exact thing that was
+missing for two hours. A chat message shares the failure mode it is meant to
+fix — it only helps if a human happens to be looking.
+
+A hosted prober (healthchecks.io, Uptime Kuma) was ruled out on topology: the
+stand is on a LAN address, so an external prober needs ingress to
+`192.168.1.228` plus a firewall change just to receive a heartbeat.
+
+Telegram remains implemented as a second, independent sink, because it needs no
+ingress either — one outbound HTTPS POST and nothing listening. Both sinks are
+optional and both are attempted; either alone is a complete configuration.
+
+| sink | file | what it produces |
+|---|---|---|
+| board | `scripts/notify-board.py` | a `critical` issue, assigned, that wakes the assignee |
+| telegram | `scripts/notify.sh` | one chat message |
+
+**One issue per outage, not one per alert.** The watchdog repeats hourly while
+the stand is still down, so the board sink takes a `--key` naming the ongoing
+condition: the first alert opens the issue, repeats comment on it, and recovery
+closes it. Without that, a long outage would produce a `critical` issue every
+hour and the board would be noisier than the silence it replaced. The watchdog
+uses `stand-down`; the CI failure path uses `deploy-failed`, deliberately
+separate so a failed deploy is not folded into an unrelated outage. The recorded
+issue is re-checked before reuse, so an alert never lands in a thread someone
+has already closed.
+
+A successful deploy resolves `deploy-failed` on its way out, so a fixed deploy
+clears its own alert. An alert channel that needs manual cleanup gets muted.
 
 ### Credentials
 
-Both paths call `scripts/notify.sh`, which reads `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID` from the environment or from `~/audr/secrets/telegram.env` on
-the deploy host. One file, one copy to rotate, and nothing in this repository —
-it is public. `secrets/` is gitignored.
+Both paths call `scripts/notify.sh`, which reads each sink's credentials from the
+environment or from the deploy host's `~/audr/secrets/`. Nothing is in this
+repository — it is public, and `secrets/` is gitignored.
+
+| file | keys |
+|---|---|
+| `paperclip.env` | `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`, optional `AUDR_ALERT_ASSIGNEE_AGENT_ID` / `AUDR_ALERT_PROJECT_ID` / `AUDR_ALERT_PRIORITY` |
+| `telegram.env` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+
+`notify-board.py` parses `paperclip.env` rather than sourcing it, and takes only
+the keys above — the file holds an API key, and sourcing it would execute
+whatever else ended up in there.
 
 **`notify.sh` with no credentials logs the message and exits 0.** That is
 deliberate: every caller is already on a failure path, and an alerting helper
 that turns "the stand is down" into "the alerting helper also broke" is worse
 than none. The consequence is that the code paths all run on a fresh clone, and
-that activating the channel is purely dropping the file in place — no code
-change, no redeploy:
+that activating a channel is purely dropping its file in place — no code change,
+no redeploy:
 
 ```bash
-# 1. @BotFather -> /newbot, keep the token.
-# 2. Send the bot any message, then read the chat id from
-#    https://api.telegram.org/bot<TOKEN>/getUpdates  ->  result[].message.chat.id
-# 3. On the deploy host:
+# 1. A BOARD USER mints the key: agent API key, scope {"kind":"task_bridge"},
+#    scoped to the audr project with allowedAssigneeAgentIds limited to the
+#    agent that should be woken. Agents cannot mint their own keys — the API
+#    answers 403 "Board access required" — so this step needs a human, once.
+#    Prefer task_bridge over a standard key: it can file and update issues and
+#    nothing else, which is all a host-side alerter should be able to do.
+# 2. On the deploy host:
+umask 077
+cat > ~/audr/secrets/paperclip.env <<'CREDS'
+PAPERCLIP_API_URL=https://<paperclip-host>
+PAPERCLIP_API_KEY=<task_bridge key>
+PAPERCLIP_COMPANY_ID=<company uuid>
+AUDR_ALERT_ASSIGNEE_AGENT_ID=<agent uuid to wake>
+AUDR_ALERT_PROJECT_ID=<project uuid>
+CREDS
+# 3. Prove delivery. --strict makes an unconfigured/undelivered send exit 1.
+#    This opens a REAL critical issue — close it afterwards.
+~/.local/share/audr-watchdog/scripts/notify.sh --strict "audr alerting test"
+```
+
+Do not put a run-scoped agent token in that file. The `PAPERCLIP_API_KEY` an
+agent gets at runtime is a JWT with a `run_id` claim and a 48-hour expiry; it
+would work for one afternoon and then fail silently on the one day it mattered.
+
+Telegram, if you also want it:
+
+```bash
+# @BotFather -> /newbot; send the bot a message; read the chat id from
+# https://api.telegram.org/bot<TOKEN>/getUpdates  ->  result[].message.chat.id
 umask 077
 cat > ~/audr/secrets/telegram.env <<'CREDS'
 TELEGRAM_BOT_TOKEN=123456:AA...
 TELEGRAM_CHAT_ID=987654321
 CREDS
-# 4. Prove delivery. --strict makes an unconfigured/undelivered send exit 1.
-~/.local/share/audr-watchdog/scripts/notify.sh --strict "audr alerting test"
 ```
 
 ### Installing and inspecting the watchdog
@@ -220,20 +281,27 @@ scripts/install-watchdog.sh            # install or update, then show status
 scripts/install-watchdog.sh --check    # what is installed, and whether creds exist
 ```
 
-The installer copies the two scripts to `~/.local/share/audr-watchdog/scripts/`
+The installer copies the three scripts to `~/.local/share/audr-watchdog/scripts/`
 and renders the unit from `ci/host-units/audr-watchdog.service.in`. The copy is
 the point: the only git checkout on that host belongs to the CI runner, which
 rewrites it every deploy and resets it on a failed one, so a watchdog pointed at
 it would lose its code exactly when it is needed.
 
-**Editing `scripts/stand-watchdog.sh` or `scripts/notify.sh` does not reach the
-host until `install-watchdog.sh` runs again.** This is the opposite of the
-workflows, which ship with the commit since AUD-443 — remember the difference.
+**Editing `scripts/stand-watchdog.sh`, `scripts/notify.sh` or
+`scripts/notify-board.py` does not reach the host until `install-watchdog.sh`
+runs again.** This is the opposite of the workflows, which ship with the commit
+since AUD-443 — remember the difference. (The CI failure path runs from the
+runner's checkout, so it does get the new code with the commit; only the
+watchdog's copies need the installer.)
 
 ```bash
 systemctl list-timers audr-watchdog.timer      # next/last probe
 sudo systemctl start audr-watchdog.service     # probe right now
 cat ~/.local/state/audr-watchdog/consecutive-failures   # 0 when healthy
+ls ~/.local/state/audr-notify/                 # issue-<key>: open alert issues
+
+# Unit tests for the board sink's dedupe/lifecycle logic (no network):
+python3 scripts/test_notify_board.py
 
 # Probe history and alert decisions. `sudo` is required: the unit runs as
 # codex but logs to the system journal, and plain `journalctl -u` as codex
