@@ -18,6 +18,23 @@ They are deliberately not tracked at `.gitea/workflows/` because the mirror push
 every non-`main` branch verbatim, and Gitea would then replay the suite for every
 stale branch it syncs (see `ci/gitea-overlay/README.md`).
 
+**The mirror unit looks broken for up to 15 minutes after every reboot, and the
+drop-in that fixes it is not shipped by the commit.** `audr-mirror.timer` is
+`Persistent=true`, so on boot systemd replays the missed window immediately —
+before DNS answers, even though the unit has `After=network-online.target`
+(which only means an address is configured, not that resolution works). The
+oneshot dies on `Could not resolve hostname github.com` and, having no
+`Restart=`, sits in `failed` until the next tick. The sync itself recovers on its
+own; what does not is `systemctl --failed`, which then cannot tell this apart
+from a mirror that is genuinely broken — a revoked deploy key, or Gitea down.
+`ci/host-units/audr-mirror-dns-race.conf` waits for resolution and retries
+instead, and reaches the host only via
+
+    scripts/install-mirror-dropin.sh          # --check to report, no changes
+
+Run `--check` first if `audr-mirror.service` is `failed` shortly after a reboot:
+if it reports the drop-in absent, that failure is the boot race, not an incident.
+
 The host overlay directory (`~/.config/audr-mirror/overlay/.gitea/workflows/`) is
 now only a **fallback** for files the commit does not carry; it cannot override
 one that it does. `scripts/sync-ci-overlay.sh --check` still diffs the two and
