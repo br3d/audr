@@ -21,9 +21,16 @@ from audr.jobs.asset_icons import handle_asset_icon_refresh
 from audr.jobs.canonicality import recheck_canonicality
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
-from audr.jobs.policy import get_shared_rpc_rate_limiter
+from audr.jobs.policy import RetryPolicy, get_shared_rpc_rate_limiter
 from audr.jobs.quotes import handle_quote_refresh
-from audr.jobs.store import JobKind, enqueue_job, get_job_params, upsert_worker_status
+from audr.jobs.store import (
+    JobKind,
+    enqueue_job,
+    fail_job,
+    get_job_params,
+    set_checkpoint,
+    upsert_worker_status,
+)
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
 from audr.operations.cleanup import cleanup_expired_auth_rows
@@ -45,6 +52,21 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 5.0
 _ETH_MAINNET_CHAIN_ID = 1
+
+# AUD-463: a balance read that fails is retried a couple of times with
+# backoff before counting against the run. The -32603 bursts seen in
+# production recovered across consecutive hourly runs under the same token
+# load (300 -> 22 -> 14 failed reads) — the signature of provider-side
+# throttling, not of individual dead token contracts — so a short in-run
+# retry recovers most of them instead of losing the whole hour's read.
+_BALANCE_SCAN_RETRY_POLICY = RetryPolicy(max_attempts=2, base_delay_s=2.0, max_delay_s=20.0)
+
+# AUD-463: per-token tolerance stays — one bad token must never fail the
+# whole scan — but a run that loses more than this fraction of its attempted
+# reads (after retries) must not land indistinguishable from a clean
+# completion. Chosen comfortably above the ~3-5% noise observed in healthy
+# runs and well below the ~74% loss of the run that triggered this ticket.
+_BALANCE_SCAN_DEGRADED_FAILURE_RATIO = 0.2
 
 
 async def _scoped_wallet_id(session: AsyncSession, *, run_id: uuid.UUID) -> uuid.UUID | None:
@@ -215,43 +237,71 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
             logger.exception("block_time fetch failed block=%d run_id=%s", block_number, run_id)
             block_time = None
 
-        for wallet in active:
-            addr = wallet.address
+        attempted = 0
+        # (wallet_address, token_address) pending a retry; token_address is
+        # None for the native ETH read.
+        failures: list[tuple[str, str | None]] = []
 
+        async def _read_and_record(addr: str, token_addr: str | None) -> bool:
             try:
-                eth_balance = await rpc.get_eth_balance(addr)
-                await record_balance(
-                    session,
-                    wallet_address=addr,
-                    token_address=NATIVE_ETH_ADDRESS,
-                    raw_amount=eth_balance,
-                    block_number=block_number,
-                    block_time=block_time,
-                )
+                if token_addr is None:
+                    raw_amount = await rpc.get_eth_balance(addr)
+                    resolved_token = NATIVE_ETH_ADDRESS
+                else:
+                    raw_amount = await rpc.get_erc20_balance(
+                        token_address=token_addr,
+                        wallet_address=addr,
+                    )
+                    resolved_token = token_addr
             except Exception:
-                logger.exception("eth balance failed wallet=%s run_id=%s", addr, run_id)
-
-            for token_addr in monitored.get(addr, []):
-                try:
-                    amount = await rpc.get_erc20_balance(
-                        token_address=token_addr,
-                        wallet_address=addr,
-                    )
-                    await record_balance(
-                        session,
-                        wallet_address=addr,
-                        token_address=token_addr,
-                        raw_amount=amount,
-                        block_number=block_number,
-                        block_time=block_time,
-                    )
-                except Exception:
+                if token_addr is None:
+                    logger.exception("eth balance failed wallet=%s run_id=%s", addr, run_id)
+                else:
                     logger.exception(
                         "erc20 balance failed wallet=%s token=%s run_id=%s",
                         addr,
                         token_addr,
                         run_id,
                     )
+                return False
+            await record_balance(
+                session,
+                wallet_address=addr,
+                token_address=resolved_token,
+                raw_amount=raw_amount,
+                block_number=block_number,
+                block_time=block_time,
+            )
+            return True
+
+        for wallet in active:
+            addr = wallet.address
+
+            attempted += 1
+            if not await _read_and_record(addr, None):
+                failures.append((addr, None))
+
+            for token_addr in monitored.get(addr, []):
+                attempted += 1
+                if not await _read_and_record(addr, token_addr):
+                    failures.append((addr, token_addr))
+
+        # AUD-463: give the failed subset a few backed-off retries before
+        # writing them off for the hour — see _BALANCE_SCAN_RETRY_POLICY.
+        # Per-token tolerance stays: a read still failing after retries does
+        # not raise, it just stays counted as failed.
+        retry_attempt = 0
+        while failures and _BALANCE_SCAN_RETRY_POLICY.is_retryable(retry_attempt):
+            await asyncio.sleep(_BALANCE_SCAN_RETRY_POLICY.delay_for(retry_attempt))
+            retry_attempt += 1
+            still_failing = [
+                (addr, token_addr)
+                for addr, token_addr in failures
+                if not await _read_and_record(addr, token_addr)
+            ]
+            failures = still_failing
+
+    failed = len(failures)
 
     # Republish the portfolio off the balances we just read (AUD-446). The
     # dashboard renders the latest valuation_snapshot, not balance_observation,
@@ -261,7 +311,34 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
     # handle_valuation no-ops with a log line when there are no prices yet.
     await enqueue_job(session, kind=JobKind.VALUATION)
 
-    logger.info("balance_scan run_id=%s block=%d", run_id, block_number)
+    logger.info(
+        "balance_scan run_id=%s block=%d attempted=%d failed=%d",
+        run_id,
+        block_number,
+        attempted,
+        failed,
+    )
+
+    checkpoint = {"attempted": attempted, "failed": failed}
+    ratio = failed / attempted if attempted else 0.0
+    if attempted and ratio > _BALANCE_SCAN_DEGRADED_FAILURE_RATIO:
+        # AUD-463: one bad token must never fail the whole scan, but losing
+        # most of a run's reads to provider throttling is not a "completed"
+        # run — flip it to `failed` so the existing retry-backoff budget
+        # (jobs/store.claim_job) picks it back up, instead of this looking
+        # identical to a fully clean hour.
+        await fail_job(
+            session,
+            run_id=run_id,
+            error=(
+                f"{failed}/{attempted} balance reads failed after retries ({ratio:.0%}) "
+                f"— see 'eth/erc20 balance failed' log lines for run_id={run_id}"
+            ),
+            checkpoint=checkpoint,
+        )
+    else:
+        await set_checkpoint(session, run_id=run_id, checkpoint=checkpoint)
+
     await session.commit()
 
 
