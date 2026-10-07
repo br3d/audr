@@ -93,6 +93,23 @@ Consequence for documentation: user-facing files under `docs/` must not link int
 directories, because the reader of the repository has no such files. Restate the relevant
 content instead. Internal references in this document are fine.
 
+## Never echo a secret value
+
+Anything you type or print gets recorded somewhere you did not choose: shell history,
+`ps`, CI logs, an issue comment, an agent transcript. So when you need to say *which*
+key you hold, print a fingerprint rather than the value:
+
+```bash
+printf '%s' "$SECRET_KEY" | sha256sum | head -c 12
+```
+
+Twelve hex characters confirm two parties hold the same key, or that a rotation changed
+it, and reveal nothing. `audr.operations.init_key` already follows this rule. Pass secrets
+in files rather than as arguments, and shred any rollback copy in the same session.
+
+The full rule, its corollaries, and what to do when a value does leak are in
+[security-at-rest.md](security-at-rest.md#3-handling-key-material-never-echo-a-secret-value).
+
 ## When to escalate the merge instead of self-merging
 
 Push the branch, mark the issue `in_review`, and ask **infraLead** to review and merge when:
