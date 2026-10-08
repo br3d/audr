@@ -230,12 +230,12 @@ repository — it is public, and `secrets/` is gitignored.
 the keys above — the file holds an API key, and sourcing it would execute
 whatever else ended up in there.
 
-**`notify.sh` with no credentials logs the message and exits 0.** That is
-deliberate: every caller is already on a failure path, and an alerting helper
-that turns "the stand is down" into "the alerting helper also broke" is worse
-than none. The consequence is that the code paths all run on a fresh clone, and
-that activating a channel is purely dropping its file in place — no code change,
-no redeploy:
+**`notify.sh` with no credentials spools the message and exits 0** (see "Alerts
+the host could not send" below — it is not lost). Exiting 0 is deliberate: every
+caller is already on a failure path, and an alerting helper that turns "the
+stand is down" into "the alerting helper also broke" is worse than none. The
+consequence is that the code paths all run on a fresh clone, and that activating
+a channel is purely dropping its file in place — no code change, no redeploy:
 
 ```bash
 # 1. A BOARD USER mints the key: agent API key, scope {"kind":"task_bridge"},
@@ -274,6 +274,48 @@ TELEGRAM_CHAT_ID=987654321
 CREDS
 ```
 
+### Alerts the host could not send
+
+Until `paperclip.env` is in place the deploy host can detect an outage but not
+report one, and that gap cannot be closed from the host: minting a long-lived
+`task_bridge` key needs a human board user, and the only token an agent could
+copy there expires in 48 hours. So an alert no sink accepted is appended to a
+spool file instead of being left in the journal to rotate away:
+
+```bash
+cat ~/.local/state/audr-notify/undelivered.jsonl   # one JSON record per alert
+```
+
+The spool is capped at the newest 200 records (`AUDR_SPOOL_MAX_LINES`), oldest
+dropped first — during an outage the latest alert is the one a responder needs.
+
+**Draining it is an agent's job, not the host's.** An agent run already carries
+a board credential for the length of the run, so the replay happens there:
+
+```bash
+python3 scripts/drain-alert-spool.py --dry-run   # what would be sent
+python3 scripts/drain-alert-spool.py             # send it, then clear the spool
+```
+
+This buys delivery at agent-heartbeat latency rather than within the ~5-minute
+probe window. That is strictly worse than a credential on the host and much
+better than nothing, and it needs nobody's permission to turn on. Once
+`paperclip.env` lands the spool simply stops filling and the drain finds nothing
+— there is no step to undo.
+
+Two behaviours worth knowing before you read a replayed alert:
+
+- **Repeats collapse.** The watchdog re-alerts hourly while the stand is down,
+  so a spool drained a day later can hold a dozen records for one condition.
+  Each `--key` is collapsed to its newest alert plus a trailing recovery if one
+  came after it, so a finished outage reads as one issue opened and closed.
+- **Replays are labelled.** Every drained alert is prefixed with when it was
+  spooled and when it was delivered, because an unlabelled "🔴 audr stand DOWN"
+  sends somebody to the host for an incident that ended yesterday.
+
+`--strict` sends are never spooled: that flag is a human connectivity probe, and
+its test text would otherwise be replayed later as a real alert.
+
 ### Installing and inspecting the watchdog
 
 ```bash
@@ -299,9 +341,12 @@ systemctl list-timers audr-watchdog.timer      # next/last probe
 sudo systemctl start audr-watchdog.service     # probe right now
 cat ~/.local/state/audr-watchdog/consecutive-failures   # 0 when healthy
 ls ~/.local/state/audr-notify/                 # issue-<key>: open alert issues
+                                               # undelivered.jsonl: spooled alerts
 
 # Unit tests for the board sink's dedupe/lifecycle logic (no network):
 python3 scripts/test_notify_board.py
+# ...and for the spool drain's collapse logic (no SSH, no board):
+python3 scripts/test_drain_alert_spool.py
 
 # Probe history and alert decisions. `sudo` is required: the unit runs as
 # codex but logs to the system journal, and plain `journalctl -u` as codex
