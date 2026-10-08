@@ -136,12 +136,90 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
   rm -f /tmp/audr-notify.$$
 fi
 
+# --------------------------------------------------------------------- spool
+# An alert that no sink accepted is the one case where exiting 0 quietly is
+# itself the failure AUD-443 was about: the text goes to the journal, the
+# journal rotates, and the outage ends up recorded nowhere. So park it on disk
+# on the way out.
+#
+# WHY A SPOOL RATHER THAN JUST INSTALLING THE CREDENTIAL. The board sink needs a
+# long-lived `task_bridge` key, and only a human board user can mint one — the
+# API answers 403 to an agent. The token an agent could copy here instead is a
+# JWT that expires in 48 hours, so it would fail silently on the one day it
+# mattered (see docs/deploy-runbook.md). The spool closes that gap from the
+# other end: delivery still happens, just at agent-heartbeat latency instead of
+# within the probe window, because scripts/drain-alert-spool.py replays this
+# file from inside an agent run where a board credential already exists.
+# Dropping `paperclip.env` in place later makes the spool go quiet on its own —
+# there is nothing to undo.
+SPOOL_DIR="${AUDR_NOTIFY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/audr-notify}"
+SPOOL_FILE="$SPOOL_DIR/undelivered.jsonl"
+# Bounded, because a stand left down for a week must not fill / with alert text.
+SPOOL_MAX_LINES="${AUDR_SPOOL_MAX_LINES:-200}"
+
+spool_alert() {
+  reason="$1"
+  command -v python3 >/dev/null 2>&1 || {
+    echo "[notify] no python3 — undelivered alert not spooled" >&2
+    return 1
+  }
+  mkdir -p "$SPOOL_DIR" 2>/dev/null || {
+    echo "[notify] cannot create $SPOOL_DIR — undelivered alert not spooled" >&2
+    return 1
+  }
+  # python3 does the JSON encoding rather than shell: alert bodies carry
+  # newlines, quotes and emoji, and hand-rolled quoting around those is how a
+  # spool file stops being parseable at exactly the wrong moment.
+  AUDR_SPOOL_FILE="$SPOOL_FILE" \
+  AUDR_SPOOL_MAX="$SPOOL_MAX_LINES" \
+  AUDR_SPOOL_REASON="$reason" \
+  AUDR_SPOOL_KEY="$alert_key" \
+  AUDR_SPOOL_RESOLVE="$resolve" \
+  AUDR_SPOOL_MESSAGE="$message" \
+  python3 -c '
+import json, os, time
+
+path = os.environ["AUDR_SPOOL_FILE"]
+record = {
+    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "key": os.environ.get("AUDR_SPOOL_KEY", ""),
+    "resolve": os.environ.get("AUDR_SPOOL_RESOLVE") == "1",
+    "reason": os.environ.get("AUDR_SPOOL_REASON", ""),
+    "message": os.environ.get("AUDR_SPOOL_MESSAGE", ""),
+}
+with open(path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+# Trim oldest-first. Dropping the oldest beats refusing the newest: during an
+# outage the latest alert is the one a responder needs, and the hourly
+# reminders in between are near-duplicates of each other.
+try:
+    cap = max(1, int(os.environ.get("AUDR_SPOOL_MAX") or 200))
+except ValueError:
+    cap = 200
+with open(path, encoding="utf-8") as fh:
+    lines = fh.readlines()
+if len(lines) > cap:
+    tmp = path + ".trim"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.writelines(lines[-cap:])
+    os.replace(tmp, path)
+' || {
+    echo "[notify] failed to spool the undelivered alert" >&2
+    return 1
+  }
+  echo "[notify] spooled to $SPOOL_FILE (reason=$reason) — scripts/drain-alert-spool.py delivers it"
+}
+
 # ------------------------------------------------------------------- summary
 if [ -z "$board_state" ] && [ -z "$telegram_state" ]; then
   echo "[notify] no channel configured (see secrets/paperclip.env, secrets/telegram.env)"
   echo "[notify] message NOT sent:"
   printf '%s\n' "$message" | sed 's/^/[notify]   /'
+  # Not under --strict: that flag is a human connectivity probe, and spooling
+  # its test text would have the drain replay it later as a real board alert.
   [ "$strict" = 1 ] && exit 1
+  spool_alert unconfigured
   exit 0
 fi
 
@@ -149,6 +227,7 @@ if [ "$board_state" != ok ] && [ "$telegram_state" != ok ]; then
   echo "[notify] GAVE UP — no configured channel accepted the alert. Message follows:" >&2
   printf '%s\n' "$message" | sed 's/^/[notify]   /' >&2
   [ "$strict" = 1 ] && exit 1
+  spool_alert undelivered
   exit 0
 fi
 

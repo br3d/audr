@@ -34,3 +34,4 @@ select = ["E", "F", "I", "UP", "B", "S"]
 # are assertion literals that are never created on disk.
 "scripts/test_registry_prune.py" = ["S101"]
 "scripts/test_notify_board.py" = ["S101", "S108"]
+"scripts/test_drain_alert_spool.py" = ["S101"]
