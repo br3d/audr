@@ -253,16 +253,20 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                         wallet_address=addr,
                     )
                     resolved_token = token_addr
-            except Exception:
-                if token_addr is None:
-                    logger.exception("eth balance failed wallet=%s run_id=%s", addr, run_id)
-                else:
-                    logger.exception(
-                        "erc20 balance failed wallet=%s token=%s run_id=%s",
-                        addr,
-                        token_addr,
-                        run_id,
-                    )
+            except Exception as exc:
+                # A read that the retry loop below recovers is not an operator
+                # problem, so it stays a one-line warning with no traceback —
+                # see the ERROR emitted after the retry budget runs out. The
+                # stand showed why this matters: 66 of these for a run that
+                # ended `failed=0`, which made grepping the old 'balance
+                # failed' ERROR lines actively misleading.
+                logger.warning(
+                    "balance read failed (will retry) wallet=%s token=%s run_id=%s: %s",
+                    addr,
+                    token_addr or "eth",
+                    run_id,
+                    exc,
+                )
                 return False
             await record_balance(
                 session,
@@ -300,6 +304,18 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                 if not await _read_and_record(addr, token_addr)
             ]
             failures = still_failing
+
+        # Only now is a read genuinely lost for the hour. One ERROR per lost
+        # read, so `grep -c 'balance read lost'` counts exactly what the
+        # checkpoint's `failed` reports and nothing that recovered.
+        for addr, token_addr in failures:
+            logger.error(
+                "balance read lost after %d retries wallet=%s token=%s run_id=%s",
+                retry_attempt,
+                addr,
+                token_addr or "eth",
+                run_id,
+            )
 
     failed = len(failures)
 
