@@ -10,6 +10,7 @@ retry_count=0, error=NULL` whether 0 or 300 of 408 token reads failed.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -322,4 +323,41 @@ async def test_failed_reads_are_retried_with_backoff_before_being_counted(
     assert run.status == JobRunStatus.COMPLETED
     assert run.checkpoint == {"attempted": 2, "failed": 0}, (
         "a failure that recovered on retry must not be counted against the run"
+    )
+
+
+@pytest.mark.integration
+async def test_recovered_reads_do_not_log_at_error_level(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    scripted_rpc_reader: _ScriptedRpcReader,
+    test_secret_key: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A read that the retry loop recovers must not leave an ERROR line behind.
+
+    The stand produced 66 ERROR-level 'erc20 balance failed' lines with
+    tracebacks for a run that finished `attempted=408 failed=0`, which made the
+    ticket's own repro command (`grep -c 'erc20 balance failed'`) report a
+    disaster for a clean hour. ERROR is reserved for reads actually lost.
+    """
+    async with db_session_factory() as session:
+        wallet = await add_wallet(session, address=_WALLET_A, label="A")
+        await session.commit()
+
+    await _add_monitored_pair(
+        db_session_factory, wallet_id=wallet.id, token_address=_TOKEN_RECOVERS
+    )
+    scripted_rpc_reader.scripts[_TOKEN_RECOVERS] = [RuntimeError("-32603: Internal error"), None]
+
+    async with db_session_factory() as session:
+        run_id = await enqueue_job(session, kind=JobKind.BALANCE_SCAN)
+        await session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="audr.jobs.__main__"):
+        await _run_balance_scan(db_session_factory, run_id=run_id)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, f"a recovered read must not log at ERROR, got: {[r.message for r in errors]}"
+    assert any("will retry" in r.getMessage() for r in caplog.records), (
+        "the transient failure should still be visible as a warning"
     )
