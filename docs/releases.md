@@ -48,6 +48,14 @@ runtime — the runtime image contains neither the repo root nor an installed
 `scripts/release.sh` rewrites all four together. `backend/tests/unit/test_version.py`
 fails the build if they ever disagree, so drift cannot reach `main`.
 
+It moves two more files in the same commit, which are carriers of a different
+kind — nothing validates them against `VERSION`:
+
+| File | Why it moves |
+|---|---|
+| `compose.yaml` | `x-backend-image` names the published image literally, so a checkout of `v1.4.2` pulls `audr-backend:1.4.2` (AUD-439). **This one names an image that does not exist yet** — see [Publishing is two steps](#publishing-is-two-steps-and-main-is-broken-between-them). |
+| `frontend/package-lock.json` | Mirrors `package.json`'s version in two places; `npm ci` aborts if they disagree, and the Dockerfile's frontend stage runs `npm ci`. |
+
 ## Cutting a release
 
 ```bash
@@ -61,6 +69,25 @@ you add `--push`, because **pushing the tag is what deploys**:
 `ci/gitea-overlay/workflows/deploy.yaml` triggers on `v*`.
 
 Undo before pushing: `git tag -d vX.Y.Z && git reset --hard HEAD~1`.
+
+### Publishing is two steps, and `main` is broken between them
+
+Pushing the tag is **not** the whole release. Do not start unless you can
+finish both steps in one sitting:
+
+1. `./scripts/release.sh patch --push`
+2. **GitHub → Actions → release → Run workflow**, ref `vX.Y.Z`
+
+Step 1's release commit points `compose.yaml` at
+`ghcr.io/br3d/audr-backend:X.Y.Z`. Step 2 is what puts that tag in the
+registry — `release.yml` is `workflow_dispatch` only, and it publishes the bare
+`:X.Y.Z` tag only when the commit it builds *is* the `vX.Y.Z` tag (any other
+ref gets `X.Y.Z-g<sha12>`, which a clone of `main` will not pull). So in the
+window between the two steps, a fresh clone of `main` fails
+`docker compose up -d` with `manifest unknown`.
+
+Our own deploy host is unaffected either way: it builds its own image and
+resolves it through the private registry, not GHCR.
 
 ## Image tags in the registry
 
