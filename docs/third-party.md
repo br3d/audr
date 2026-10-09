@@ -80,7 +80,8 @@ audr itself ships, do not move.
 The `runtime` stage installs no OS packages at all, which is what keeps that
 true. In particular it ships no `curl`: the container health check in
 `compose.yaml` calls the interpreter already present in the image
-(`python -m audr.operations.healthcheck`, stdlib `urllib`). An apt layer would
+(stdlib `urllib`, via `audr.operations.healthcheck` or the equivalent inlined in
+`compose.yaml` — see [containers.md](containers.md)). An apt layer would
 resolve to whatever the Debian archive served at build time, and pinning an
 exact Debian version means pinning the whole apt snapshot. Since `curl` is
 neither installed nor redistributed, its

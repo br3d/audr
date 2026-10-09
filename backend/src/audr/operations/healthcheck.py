@@ -6,7 +6,14 @@ This exists so `compose.yaml` can say
 
 instead of embedding a seven-line Python program in YAML. The rules it has to
 honour are not obvious, so they live here rather than in a comment an operator
-has to read before they can read the service definition:
+has to read before they can read the service definition.
+
+`compose.yaml` does not call it yet: that file pins a published tag, and the
+published `0.1.1` was cut the day before this module landed, so the check died
+with `ModuleNotFoundError` and a clean clone reported `api` as `unhealthy`. It
+inlines an equivalent in the meantime and reverts to the command above once a
+tag carrying this module is published (AUD-442). Keep the two in step. The
+rules:
 
 * **stdlib only, no `curl`.** `curl` is not in the runtime image and installing
   it would add an unpinned apt layer for one HTTP request the interpreter

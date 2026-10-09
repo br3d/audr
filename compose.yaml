@@ -71,8 +71,40 @@ services:
     # only the host side moves, the container always listens on 8000.
     ports:
       - "${AUDR_HTTP_PORT:-80}:8000"
+    # Inlined, and only until the next publish — then this goes back to
+    # `test: ["CMD", "python", "-m", "audr.operations.healthcheck"]` (AUD-442).
+    # That module is the tested reference implementation of the logic below
+    # (backend/src/audr/operations/healthcheck.py, backend/tests/unit/
+    # test_healthcheck.py) and is the better form: a command in the image, not a
+    # Python program embedded in YAML. It cannot be used *here* yet, because
+    # this file pins a published tag and a published tag lags main — 0.1.1 was
+    # cut 2026-10-04, the module landed 2026-10-05, so the image above raises
+    # ModuleNotFoundError and a clean clone showed `api` as `unhealthy` on
+    # `docker compose up -d`. Nothing was actually broken (the port is published
+    # regardless and no service gates on api's health), but it is the first
+    # thing a new user sees. Keep this equivalent to the module: stdlib only, no
+    # `curl` (none in the runtime image), `/health/live` not `/health/ready`
+    # (readiness touches the DB and the master key, which a restart cannot fix),
+    # one printed line instead of a raised traceback (~2KB, and Docker keeps
+    # only 5 health-log entries, so one failure buries the history), and port
+    # 8000 because only the host side of the published port is configurable.
     healthcheck:
-      test: ["CMD", "python", "-m", "audr.operations.healthcheck"]
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          try:
+              status = urllib.request.urlopen(
+                  "http://localhost:8000/health/live", timeout=4
+              ).status
+          except Exception as exc:
+              print(exc)
+              sys.exit(1)
+          if status != 200:
+              print(f"/health/live returned HTTP {status}")
+          sys.exit(0 if status == 200 else 1)
       interval: 10s
       timeout: 5s
       retries: 5

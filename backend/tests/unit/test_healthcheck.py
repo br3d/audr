@@ -1,9 +1,13 @@
 """The container health check command (AUD-439).
 
-`compose.yaml` runs `python -m audr.operations.healthcheck` every 10 seconds, so
-its contract is narrow but load-bearing: exit 0 only on a 200, and never let an
-exception escape — a traceback would flood `.State.Health.Log`, which Docker
-caps at 5 entries.
+A container health check runs this every 10 seconds, so its contract is narrow
+but load-bearing: exit 0 only on a 200, and never let an exception escape — a
+traceback would flood `.State.Health.Log`, which Docker caps at 5 entries.
+
+`compose.yaml` currently inlines an equivalent instead of calling the module,
+because it pins a published tag that predates it (AUD-442). This stays the
+tested reference implementation, and that file reverts to `python -m` once a tag
+carrying the module ships — until then, changes here must be mirrored there.
 """
 
 from __future__ import annotations

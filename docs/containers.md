@@ -27,6 +27,14 @@ inside the image rather than a Python program embedded in YAML. Why it probes
 `/health/live` and not `/health/ready`, why it catches its own exceptions, and
 why it is not `curl` are documented in that module's docstring.
 
+`compose.yaml` is the one exception today: it inlines an equivalent of that
+module rather than calling it. Because it pins a *published* tag, and the
+published `0.1.1` predates the module, calling it there raised
+`ModuleNotFoundError` and showed `api` as `unhealthy` on a clean clone. It
+reverts to `python -m` once a tag carrying the module is published (AUD-442).
+`compose.dev.yaml` and `compose.deploy.yaml` inherit the check but build from
+source, so they were never affected.
+
 ## What `compose.yaml` defines
 
 Four services, but only **three of them are containers that keep running**.
