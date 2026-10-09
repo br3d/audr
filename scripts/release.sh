@@ -18,6 +18,17 @@
 #
 # Pushing is opt-in because a pushed tag deploys. Everything before that step is
 # local and reversible with `git tag -d` + `git reset --hard HEAD~1`.
+#
+# Pushing is NOT the last step, and this script cannot perform the one that is.
+# The release commit rewrites compose.yaml's `x-backend-image` to
+# ghcr.io/br3d/audr-backend:<version>, which does not exist in the registry
+# until someone runs GitHub -> Actions -> release -> Run workflow against the
+# new tag — that workflow is `workflow_dispatch`-only by design (AUD-409), and
+# it publishes the bare `:<version>` tag only for the `v<version>` commit.
+# Between the push and that dispatch, a fresh clone of main fails
+# `docker compose up -d` with `manifest unknown`. Our own deploy host is
+# unaffected: compose.deploy.yaml overrides the anchor with the private
+# registry. See docs/releases.md "Cutting a release".
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +36,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${ROOT}/scripts/lib/version.sh"
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 BUMP=""
@@ -215,13 +226,30 @@ if [ "${PUSH}" -eq 1 ]; then
   echo "==> pushing main and ${TAG} (this triggers the guarded deploy)"
   git -C "${ROOT}" push origin main
   git -C "${ROOT}" push origin "${TAG}"
-  echo "==> released ${TAG}"
+  cat <<EOF
+==> pushed ${TAG} — the release is NOT finished yet
+
+REQUIRED NEXT STEP: GitHub -> Actions -> release -> Run workflow, ref ${TAG}
+
+The release commit you just pushed points compose.yaml at
+ghcr.io/br3d/audr-backend:${NEXT}, and that tag does not exist in the registry
+until the run above publishes it (release.yml is workflow_dispatch only, and it
+publishes the bare :${NEXT} tag only for the ${TAG} commit itself). Until then
+a fresh clone of main fails \`docker compose up -d\` with \`manifest unknown\`.
+
+Our own deploy host is unaffected — it builds its own image.
+EOF
 else
   cat <<EOF
 
-Nothing has been pushed. To publish the release (and trigger the deploy):
+Nothing has been pushed. Publishing a release is two steps, and main is broken
+for fresh clones between them — do not start unless you can finish:
 
-  git push origin main && git push origin ${TAG}
+  1. git push origin main && git push origin ${TAG}   (this triggers the deploy)
+  2. GitHub -> Actions -> release -> Run workflow, ref ${TAG}
+
+Step 1 points compose.yaml at ghcr.io/br3d/audr-backend:${NEXT}; step 2 is what
+puts that tag in the registry. See docs/releases.md.
 
 To undo locally:
 
