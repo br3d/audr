@@ -12,8 +12,11 @@ has to read before they can read the service definition.
 published `0.1.1` was cut the day before this module landed, so the check died
 with `ModuleNotFoundError` and a clean clone reported `api` as `unhealthy`. It
 inlines an equivalent in the meantime and reverts to the command above once a
-tag carrying this module is published (AUD-442). Keep the two in step. The
-rules:
+tag carrying this module is published (AUD-442) — `scripts/release.sh` does that
+revert in the release commit, so it does not depend on anyone remembering. Keep
+the two in step until then; `backend/tests/unit/test_healthcheck.py` checks both
+that the inline copy still obeys the rules below and that the revert is still
+wired up. The rules:
 
 * **stdlib only, no `curl`.** `curl` is not in the runtime image and installing
   it would add an unpinned apt layer for one HTTP request the interpreter

@@ -145,6 +145,42 @@ sub_once(
     f"x-backend-image: &backend_image ghcr.io/br3d/audr-backend:{nxt}",
 )
 
+# compose.yaml's api healthcheck is inlined only because the pinned tag predates
+# `audr.operations.healthcheck` (AUD-442): 0.1.1 was cut 2026-10-04, the module
+# landed 2026-10-05. Cutting a release is exactly the moment that stops being
+# true — the tag this script is writing carries the module — so the revert
+# happens here rather than in somebody's memory. The anchor is the first line of
+# the comment block compose.yaml uses to mark the inline form as temporary;
+# backend/tests/unit/test_healthcheck.py asserts the two files still agree on it.
+INLINE_HEALTHCHECK_ANCHOR = "# Inlined, and only until the next publish"
+MODULE_HEALTHCHECK = '      test: ["CMD", "python", "-m", "audr.operations.healthcheck"]\n'
+INLINE_HEALTHCHECK = re.compile(
+    r"(?:^    " + re.escape(INLINE_HEALTHCHECK_ANCHOR) + r"[^\n]*\n)"
+    r"(?:^    #[^\n]*\n)*"
+    r"^    healthcheck:\n"
+    r"^      test:\n"
+    r"(?:^(?: {8}[^\n]*)?\n)+"
+    r"(?=^      interval:)",
+    re.M,
+)
+
+compose = root / "compose.yaml"
+compose_text = compose.read_text()
+restored, n = INLINE_HEALTHCHECK.subn(
+    "    healthcheck:\n" + MODULE_HEALTHCHECK, compose_text, count=1
+)
+if n == 1:
+    compose.write_text(restored)
+    print("==> compose.yaml: api healthcheck restored to `python -m audr.operations.healthcheck`")
+elif "audr.operations.healthcheck" not in compose_text:
+    sys.exit(
+        "FATAL: compose.yaml's api healthcheck is neither the module form "
+        '(test: ["CMD", "python", "-m", "audr.operations.healthcheck"]) nor the '
+        f"inline block marked {INLINE_HEALTHCHECK_ANCHOR!r} that this script reverts. "
+        "Someone edited it into a third shape — reconcile it with "
+        "backend/src/audr/operations/healthcheck.py before cutting a release."
+    )
+
 # [project] version — the first `version = "..."` in pyproject is the project's;
 # dependency pins use `==` inside the dependencies list, never this spelling.
 sub_once(

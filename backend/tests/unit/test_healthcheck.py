@@ -13,6 +13,7 @@ carrying the module ships — until then, changes here must be mirrored there.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -63,3 +64,90 @@ def test_probes_liveness_not_readiness() -> None:
     """Readiness touches the DB; an unhealthy container gets restarted, which
     cannot fix a database outage."""
     assert healthcheck.URL == "http://localhost:8000/health/live"
+
+
+# --- compose.yaml / release.sh coupling (AUD-442) -------------------------
+#
+# The inline copy in compose.yaml is temporary by construction, and the thing
+# that ends it is `scripts/release.sh`, which rewrites the block when it cuts a
+# tag that carries this module. Both files are anchored on one comment line, so
+# rewording that comment would silently turn the revert into a no-op and ship
+# the inline copy forever. These three tests are what notices.
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+INLINE_ANCHOR = "# Inlined, and only until the next publish"
+MODULE_FORM = 'test: ["CMD", "python", "-m", "audr.operations.healthcheck"]'
+
+
+def _compose() -> str:
+    return (REPO_ROOT / "compose.yaml").read_text()
+
+
+def _release() -> str:
+    return (REPO_ROOT / "scripts/release.sh").read_text()
+
+
+def _api_healthcheck_test() -> str:
+    """The `test:` value of the api service's healthcheck, comments removed.
+
+    Every assertion below has to read YAML rather than prose: the comment block
+    above the inline copy quotes both the module invocation and `/health/ready`
+    while explaining why it uses neither, so a plain `in compose` check sees the
+    opposite of the truth. Comments are stripped here once instead.
+    """
+    compose = _compose()
+    start = compose.index("    healthcheck:", compose.index("\n  api:"))
+    end = compose.index("      interval:", start)
+    return "\n".join(
+        line for line in compose[start:end].splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def test_compose_healthcheck_is_one_of_the_two_accepted_forms() -> None:
+    block = _api_healthcheck_test()
+    inline = "python" in block and "-c" in block
+    module = MODULE_FORM in block
+    assert inline != module, (
+        "compose.yaml's api healthcheck must be either the module form "
+        f"({MODULE_FORM}) or an inline `python -c` probe — found "
+        f"inline={inline}, module={module}. scripts/release.sh only knows how "
+        f"to convert the second into the first.\n{block}"
+    )
+
+
+def test_release_script_restores_the_module_form() -> None:
+    """The next release must drop the inline copy without anyone remembering to."""
+    release = _release()
+    if MODULE_FORM in _api_healthcheck_test():
+        assert "audr.operations.healthcheck" in release, (
+            "compose.yaml already calls the module, but scripts/release.sh "
+            "dropped the guard that fails the release if that line goes missing."
+        )
+        return
+    assert INLINE_ANCHOR in _compose(), (
+        "compose.yaml inlines the probe but no longer marks it with "
+        f"{INLINE_ANCHOR!r} — that comment is the anchor scripts/release.sh "
+        "matches on, so the release-time revert would silently become a no-op."
+    )
+    assert INLINE_ANCHOR in release, (
+        "compose.yaml marks its api healthcheck as temporary but "
+        f"scripts/release.sh no longer anchors on {INLINE_ANCHOR!r}, so cutting "
+        "a release would leave the inline copy in place against a tag that "
+        "does carry the module."
+    )
+    assert MODULE_FORM in release, (
+        "scripts/release.sh anchors on the inline block but does not write "
+        f"{MODULE_FORM} in its place."
+    )
+
+
+def test_inline_copy_obeys_the_modules_rules() -> None:
+    """While the inline copy exists it must stay equivalent to this module."""
+    block = _api_healthcheck_test()
+    if MODULE_FORM in block:
+        pytest.skip("compose.yaml calls the module directly; nothing to mirror")
+    assert healthcheck.URL in block, f"inline probe must hit {healthcheck.URL}"
+    assert "/health/ready" not in block, "readiness would restart the container for a DB outage"
+    assert "curl" not in block, "curl is not in the runtime image (docs/third-party.md 1.3)"
+    assert "urllib.request" in block, "stdlib only"
+    assert "print(" in block, "print one line; a traceback floods .State.Health.Log"

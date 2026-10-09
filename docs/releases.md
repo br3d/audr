@@ -56,6 +56,20 @@ kind — nothing validates them against `VERSION`:
 | `compose.yaml` | `x-backend-image` names the published image literally, so a checkout of `v1.4.2` pulls `audr-backend:1.4.2` (AUD-439). **This one names an image that does not exist yet** — see [Publishing is two steps](#publishing-is-two-steps-and-main-is-broken-between-them). |
 | `frontend/package-lock.json` | Mirrors `package.json`'s version in two places; `npm ci` aborts if they disagree, and the Dockerfile's frontend stage runs `npm ci`. |
 
+One more edit lands in the release commit, and it is a one-off that will stop
+happening: `compose.yaml`'s `api` healthcheck currently inlines a copy of
+`audr.operations.healthcheck` because the tag it pins (`0.1.1`) predates that
+module, so calling it would report a clean clone's `api` as `unhealthy`
+(AUD-442). Cutting a release is the moment that stops being true, so
+`release.sh` replaces the inline block with
+`test: ["CMD", "python", "-m", "audr.operations.healthcheck"]` as part of the
+same commit. It aborts if the healthcheck is in neither shape, and
+`backend/tests/unit/test_healthcheck.py` fails the build if the two files stop
+agreeing on the comment the rewrite anchors on — otherwise the revert would
+quietly become a no-op and the inline copy would outlive its reason. Once a
+release has gone out, this row disappears: the swap is idempotent and the
+following release finds nothing to do.
+
 ## Cutting a release
 
 ```bash

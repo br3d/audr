@@ -89,6 +89,13 @@ services:
       - ./VERSION:/workspace/VERSION:ro
       - ./frontend/package.json:/workspace/frontend/package.json:ro
       - ./compose.yaml:/workspace/compose.yaml:ro
+      # AUD-442: tests/unit/test_healthcheck.py asserts compose.yaml and the
+      # release script still agree on the anchor that lets a release cut revert
+      # the temporarily-inlined api healthcheck to
+      # `python -m audr.operations.healthcheck`. Without the mount that guard
+      # could only skip, and the inline copy would outlive the pinned tag that
+      # made it necessary.
+      - ./scripts/release.sh:/workspace/scripts/release.sh:ro
     profiles:
       - backend
 
