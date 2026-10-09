@@ -73,6 +73,10 @@ services:
       - "${AUDR_HTTP_PORT:-80}:8000"
     # Inlined, and only until the next publish — then this goes back to
     # `test: ["CMD", "python", "-m", "audr.operations.healthcheck"]` (AUD-442).
+    # That revert is automatic — scripts/release.sh rewrites this block in the
+    # release commit, matching on the first line of this comment, and
+    # backend/tests/unit/test_healthcheck.py fails the build if the two files
+    # stop agreeing on it. Reword that line and the revert becomes a no-op.
     # That module is the tested reference implementation of the logic below
     # (backend/src/audr/operations/healthcheck.py, backend/tests/unit/
     # test_healthcheck.py) and is the better form: a command in the image, not a
