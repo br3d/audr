@@ -86,8 +86,9 @@ ref gets `X.Y.Z-g<sha12>`, which a clone of `main` will not pull). So in the
 window between the two steps, a fresh clone of `main` fails
 `docker compose up -d` with `manifest unknown`.
 
-Our own deploy host is unaffected either way: it builds its own image and
-resolves it through the private registry, not GHCR.
+Our own deploy host is unaffected either way: `compose.deploy.yaml` overrides
+the `x-backend-image` anchor with
+`${AUDR_REGISTRY}/audr-backend:${BACKEND_TAG}`, so it never reads GHCR.
 
 ## Image tags in the registry
 

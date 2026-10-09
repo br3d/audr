@@ -237,7 +237,8 @@ until the run above publishes it (release.yml is workflow_dispatch only, and it
 publishes the bare :${NEXT} tag only for the ${TAG} commit itself). Until then
 a fresh clone of main fails \`docker compose up -d\` with \`manifest unknown\`.
 
-Our own deploy host is unaffected — it builds its own image.
+Our own deploy host is unaffected: compose.deploy.yaml overrides the anchor
+with \${AUDR_REGISTRY}/audr-backend:\${BACKEND_TAG}, so it never reads GHCR.
 EOF
 else
   cat <<EOF
