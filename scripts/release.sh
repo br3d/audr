@@ -8,7 +8,7 @@
 #
 # What it does, in order:
 #   1. refuses to run unless the tree is clean and HEAD is on main
-#   2. rewrites the version in all five files that carry it
+#   2. rewrites the version in all six files that carry it
 #   3. commits that as "Release vX.Y.Z"
 #   4. creates the annotated tag vX.Y.Z
 #   5. with --push: pushes main and the tag, which is what triggers the guarded

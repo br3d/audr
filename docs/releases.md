@@ -63,7 +63,7 @@ kind — nothing validates them against `VERSION`:
 ./scripts/release.sh --show         # print the current version
 ```
 
-It refuses to run on a dirty tree or off `main`, rewrites the four files,
+It refuses to run on a dirty tree or off `main`, rewrites all six files above,
 commits `Release vX.Y.Z` and creates the annotated tag. Nothing is pushed until
 you add `--push`, because **pushing the tag is what deploys**:
 `ci/gitea-overlay/workflows/deploy.yaml` triggers on `v*`.
