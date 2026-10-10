@@ -373,3 +373,133 @@ Two further traps:
   there into every dump taken afterwards. Files need a rewrite; the database
   needs an `UPDATE`. Rotate the credential first, then scrub copies — clearing
   copies while the value is still live buys nothing.
+
+---
+
+# Verification: `pg_tde` spike (AUD-389 item 4)
+
+**Date**: 2026-10-10
+**Branch**: docs/aud389-pg-tde-spike
+**Author**: infraLead
+
+Timeboxed spike of Percona's `pg_tde` as an alternative/addition to the adopted
+LUKS/ZFS baseline. The conclusion and the reasoning live in
+[security-at-rest-design.md](security-at-rest-design.md#spike-results-item-4-2026-10-10);
+this is the record of what was actually run, so the spike does not have to be
+redone to check a claim.
+
+## Setup
+
+Throwaway containers, no audr code and no audr database involved. Image
+`percona/percona-distribution-postgresql:17`, digest
+`sha256:b5e66df1a76d7309241e03d1bc741b53d2d867f27e21389e0512c81d05024969`,
+reporting `postgres (PostgreSQL) 17.11 - Percona Server for PostgreSQL 17.11.1`,
+with `pg_tde.so` and extension scripts up to `pg_tde--2.1--2.2.sql` present in
+the image. Data directory and keyring each on their own named Docker volume;
+both volumes and the image were removed afterwards.
+
+```bash
+docker run -d --name tde -e POSTGRES_PASSWORD=... -e POSTGRES_DB=audr \
+  -v tde_data:/data/db -v tde_kr:/keyring \
+  percona/percona-distribution-postgresql:17 \
+  -c shared_preload_libraries=pg_tde
+# the keyring volume must be owned by `postgres` and mode 700, or provider
+# creation fails with "Failed to open keyring file ...: Permission denied"
+```
+
+## Steps and results
+
+### 1. Encrypted heap vs plain heap, on the same data
+
+Two tables in one database, same column types, same length of marker value, one
+`USING tde_heap` and one default `heap`; `CHECKPOINT` to force the pages out.
+
+| What | Result |
+|---|---|
+| `grep SENTINELENC <datadir>/base/16384/16433` (tde_heap) | 0 matches |
+| `grep SENTINELPLAIN <datadir>/base/16384/16440` (heap) | 1 match |
+
+The plain table is the **positive control**, and it is what makes this a valid
+test rather than the mistake recorded in
+[Why `grep` over Postgres files and dumps is not evidence](#why-grep-over-postgres-files-and-dumps-is-not-evidence):
+the markers are short values stored inline, not TOASTed, so a plaintext hit is
+expected — and it does hit, in the same byte-scan, for the unencrypted table.
+A clean scan of only the encrypted file would have proved nothing.
+
+### 2. WAL
+
+`pg_dump` of the TDE database is plaintext SQL (2 marker hits) — as designed;
+dumps are covered by the encrypted-backup work in item 2, not by TDE.
+
+WAL is **not** encrypted by table access method. With `pg_tde.wal_encrypt` off,
+the marker written into a `tde_heap` table appears in
+`pg_wal/000000010000000000000001`. With it on, 0 WAL files contain it.
+
+Enabling it on a fresh cluster is a two-phase boot:
+
+```
+FATAL:  principal key not configured
+HINT:  Use pg_tde_set_server_key_using_global_key_provider() to configure one.
+```
+
+The server key is set by a SQL function, so the server has to be up first.
+Working order: boot with `wal_encrypt` off → `CREATE EXTENSION pg_tde` →
+`pg_tde_add_global_key_provider_file` + `pg_tde_create_key_using_global_key_provider`
++ `pg_tde_set_server_key_using_global_key_provider` → restart with
+`-c pg_tde.wal_encrypt=on`. Verified: after the restart `SHOW
+pg_tde.wal_encrypt` is `on`, writes succeed, and no WAL file carries the
+plaintext.
+
+### 3. No application change, and reversible
+
+- `ALTER DATABASE restored SET default_table_access_method = tde_heap`, then
+  restoring a **plain** `pg_dump` into it: the restored table comes back as
+  `tde_heap` (checked via `pg_class.relam` → `pg_am.amname`). This is the PG16 →
+  PG17 migration path, and it reuses `scripts/backup.sh` / `scripts/restore.sh`
+  rather than needing `pg_upgrade` across two different distributions.
+- `ALTER TABLE w SET ACCESS METHOD heap` converts an encrypted table back;
+  `relam` reads `heap` afterwards. Rollback is per table.
+
+### 4. Keyfile loss
+
+`mv /keyring/db.key /keyring/db.key.bak` and restart: the **server starts
+normally** (`State.Running = true`) and the failure only shows at read time —
+
+```
+ERROR:  key "db_key" not found in key provider "d_kr"
+```
+
+Moving the 292-byte keyfile back and restarting restored the row intact. So the
+keyring is a backup-and-custody obligation on the same footing as
+`secrets/master_key.hex`, and its loss presents as a healthy database that
+cannot read itself.
+
+### 5. Overhead
+
+`pgbench -i -s 10`, then 4 clients / 2 threads, on the same container, WAL
+encryption on for both databases (so this isolates the `tde_heap` page cost):
+
+| Workload | `heap` | `tde_heap` | Delta |
+|---|---|---|---|
+| default write mix, 20s | 1084 tps (3.69 ms avg) | 991 tps (4.04 ms avg) | **-8.6%** |
+| `-S` read-only, 15s | 13543 tps | 13748 tps | within noise |
+
+The read-only figure is not evidence of free reads in general — scale factor 10
+fits in shared buffers, so decryption is mostly skipped on buffer hits. It does
+say that TDE is not a read-path problem at audr's data size.
+
+## Cleanup
+
+Containers (`docker rm -f`), both named volumes (`docker volume rm`) and the
+Percona image (`docker rmi`) were removed. Nothing in the audr stack, the
+staging host or the repository's compose files was touched — no compose overlay
+was added, deliberately, since adding one would imply an adoption that did not
+happen.
+
+## Conclusion
+
+`pg_tde` is usable and the integration is smaller than feared (no schema or
+query changes, dump/restore migration, per-table rollback). It is **not
+adopted**: with a local keyfile it adds nothing over LUKS against whole-machine
+theft, and the version that does add something needs Vault/KMIP. See the design
+doc for the full argument and the conditions that would reopen it.

@@ -2,9 +2,10 @@
 # dataset). Optional overlay — compose.yaml alone stores the database in a
 # plain Docker named volume under Docker's data root.
 #
-# This is the recommended at-rest baseline for audr: wallet addresses, holdings
-# and the whole valuation history are plaintext at the column level, so the
-# volume is the layer that protects them. See docs/security-at-rest.md.
+# This is the recommended at-rest baseline for audr: holdings and the whole
+# valuation history are plaintext at the column level (wallet addresses and
+# labels are not, as of AUD-488/AUD-490), so the volume is the layer that
+# protects them. See docs/security-at-rest.md.
 #
 # Usage — in the audr directory's .env:
 #
