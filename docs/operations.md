@@ -170,19 +170,19 @@ The application uses a two-layer encryption scheme:
 1. **SECRET_KEY** (env var, set from `secrets/master_key.hex`): the key-encryption-key (KEK). Stored only outside the database.
 2. **Master key**: a 32-byte AES-256 key generated on first boot, stored in the `key_state` table as a blob encrypted by the KEK.
 
-The master key is used to encrypt provider credentials (RPC URLs, API keys) stored in the `settings` table, and, as of AUD-488, `wallet.label`.
+The master key is used to encrypt provider credentials (RPC URLs, API keys) stored in the `settings` table, and, as of AUD-488, `wallet.label`, and, as of AUD-490, `wallet.address` (looked up via a separate deterministic HMAC blind index, `wallet.address_bidx`, derived from the master key but not reversible back to it).
 
-This scheme covers credentials and wallet labels only — wallet addresses, holdings, and the valuation history are plaintext in Postgres. For the full at-rest picture, the threat model, and the recommended volume encryption for the `db_data` volume, see [security-at-rest.md](security-at-rest.md).
+This scheme covers credentials, wallet labels, and wallet addresses — holdings and the valuation history are still plaintext in Postgres. For the full at-rest picture, the threat model, and the recommended volume encryption for the `db_data` volume, see [security-at-rest.md](security-at-rest.md).
 
 **If SECRET_KEY is lost (global, at startup):**
 
 - The application will refuse to start (startup validation fails): `migrate`'s `init_key` step cannot unwrap `key_state.wrapped_key`, so it exits non-zero and `api`/`worker` never come up.
-- The master key cannot be unwrapped; all encrypted settings and wallet labels are unreadable.
-- Wallet addresses and balance history (unencrypted) are unaffected.
+- The master key cannot be unwrapped; all encrypted settings, wallet labels, and wallet addresses are unreadable.
+- **AUD-490 widened the blast radius here.** Before AUD-490 only labels and credentials were lost — the wallet list itself still rendered, with addresses and holdings intact, because `wallet.address` was plaintext. Since `wallet.address` is now behind the same master key, a lost `SECRET_KEY` makes the wallet list itself unreadable: there is no way to show, export, or scan balances for an address nobody can decrypt. Balance and valuation history rows (plaintext, keyed by `wallet_id`) are not deleted, but with no way to recover which row belongs to which address, they are effectively orphaned until the key is restored. This is why `secrets/master_key.hex` backup discipline (below) matters strictly more after AUD-490 than it did when only labels were at stake.
 
-**If a single row's envelope is unreadable (per-row, at runtime):** this is a different failure from the one above — the key itself is fine (the app is running, so `init_key` already validated it at boot), but one wallet's `label_ciphertext` does not decrypt, e.g. a corrupted row, or a label somehow carrying another wallet's AAD. Provider credentials still fail loudly here (`GET /integrations` raises `InvalidEnvelopeError`, surfaced as a 500) — there is exactly one credential per kind, so there is nothing to degrade to.
+**If a single row's envelope is unreadable (per-row, at runtime):** this is a different failure from the one above — the key itself is fine (the app is running, so `init_key` already validated it at boot), but one wallet's `label_ciphertext` or `address_ciphertext` does not decrypt, e.g. a corrupted row, or a value somehow carrying another wallet's AAD (the label and address envelopes use distinct AAD prefixes — `wallet:label:` vs `wallet:address:` — so an envelope moved between the two columns fails to authenticate rather than silently decrypting as the wrong field). Provider credentials still fail loudly here (`GET /integrations` raises `InvalidEnvelopeError`, surfaced as a 500) — there is exactly one credential per kind, so there is nothing to degrade to.
 
-Wallet labels chose differently. `GET /wallets` lists every tracked wallet in one response; a label is also display-only (nothing filters, sorts, or keys off it), so letting one bad row fail the whole list is a worse outcome than it failing loudly would be for a credential. `audr.wallets.service.decrypt_label` catches the decrypt failure and returns the placeholder string `"[unreadable]"` for that wallet's label instead of raising — the rest of the list, and every other field on that same wallet, are unaffected. The same degrade-not-raise rule also covers the master key itself failing to unwrap on a *read* (belt-and-suspenders for the global case above, which should never reach a request handler in practice since `init_key` already fails the deploy first). Writing a label (`POST /wallets`, `PATCH /wallets/{id}`) always calls `get_master_key` directly and lets both errors propagate — a label cannot be *written* without a usable key, so creating or renaming a wallet still fails loudly if the key is gone. Setting a fresh label on an affected wallet clears the placeholder.
+Labels and addresses chose differently from each other. `GET /wallets` lists every tracked wallet in one response; a label is display-only (nothing filters, sorts, or keys off it), so letting one bad row fail the whole list is a worse outcome than it failing loudly would be for a credential — `audr.wallets.service.decrypt_label` catches the decrypt failure and returns the placeholder string `"[unreadable]"` for that wallet's label instead of raising, and the rest of the list, and every other field on that same wallet, are unaffected. `decrypt_address` makes the opposite choice: an address identifies the wallet, drives balance scanning, and has no sensible placeholder, so a corrupted `address_ciphertext` row raises and surfaces as a 500 for the whole list rather than silently showing `"[unreadable]"` next to a holdings table nobody could act on anyway. The master key itself failing to unwrap on a *read* also propagates now (there is no separate "degrade for the global case" path the way labels had one) — this should never reach a request handler in practice since `init_key` already fails the deploy first. Writing a label or address (`POST /wallets`, `PATCH /wallets/{id}`) always calls `get_master_key` directly and lets both errors propagate — neither can be *written* without a usable key, so creating or renaming a wallet still fails loudly if the key is gone. Setting a fresh label on an affected wallet clears its placeholder; there is no equivalent for a corrupted address row, since the address is the row's identity, not an editable field.
 
 **Recovery when SECRET_KEY is lost:**
 
@@ -233,10 +233,11 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 
 ## Encrypting the database volume
 
-Wallet addresses, holdings and the whole valuation history are plaintext at the
-column level, so **the volume is the layer that protects them**. Putting it on
-LUKS or a ZFS native-encrypted dataset is audr's recommended at-rest baseline;
-what that does and does not protect against is in
+Holdings and the whole valuation history are plaintext at the column level
+(wallet addresses and labels are not, as of AUD-488/AUD-490), so **the volume
+is the layer that protects them**. Putting it on LUKS or a ZFS
+native-encrypted dataset is audr's recommended at-rest baseline; what that
+does and does not protect against is in
 [security-at-rest.md](security-at-rest.md#2-what-to-do-about-it).
 
 `compose.encrypted-volume.yaml` is the overlay that points `db_data` at a

@@ -26,15 +26,24 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.jobs.quotes import handle_quote_refresh
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
-        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
-        {"id": str(wallet_id), "addr": address.lower()},
+        text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wallet_id
 

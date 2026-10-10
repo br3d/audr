@@ -19,6 +19,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.assets.models import CatalogEntry, CatalogVersion
+from audr.operations.init_key import get_master_key
+from audr.wallets.service import compute_address_bidx
 
 
 @dataclass
@@ -101,9 +103,11 @@ async def persist_discovery_candidates(
         return 0
 
     addr = wallet_address.lower()
+    key = await get_master_key(session)
+    bidx = compute_address_bidx(addr, key)
     wallet_result = await session.execute(
-        sa.text("SELECT id FROM wallet WHERE address = :addr"),
-        {"addr": addr},
+        sa.text("SELECT id FROM wallet WHERE address_bidx = :bidx"),
+        {"bidx": bidx},
     )
     wallet_row = wallet_result.first()
     if wallet_row is None:
@@ -211,15 +215,6 @@ async def _get_catalog_entries(session: AsyncSession) -> list[CatalogEntry]:
         sa.select(CatalogEntry).where(CatalogEntry.version_id == version.id)
     )
     return list(entries_result.scalars())
-
-
-async def _wallet_id_for_address(session: AsyncSession, address: str) -> uuid.UUID | None:
-    result = await session.execute(
-        sa.text("SELECT id FROM wallet WHERE address = :addr"),
-        {"addr": address.lower()},
-    )
-    row = result.first()
-    return uuid.UUID(str(row[0])) if row else None
 
 
 def _json_dumps(obj: dict[str, Any]) -> str:

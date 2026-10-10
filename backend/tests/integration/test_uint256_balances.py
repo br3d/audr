@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.portfolio.balances import get_holdings, record_balance
 from audr.portfolio.snapshot import publish_valuation_snapshot
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
@@ -56,11 +57,17 @@ async def test_publish_snapshot_handles_balance_above_bigint_max(
     asset_id = uuid.uuid4()
     qset_id = uuid.uuid4()
 
+    cols = await wallet_address_columns(db_session, wallet_id, "0x" + "9" * 40)
     await db_session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
         ),
-        {"id": str(wallet_id), "addr": "0x" + "9" * 40},
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     await db_session.execute(
         sa.text(

@@ -37,7 +37,9 @@ from decimal import Decimal
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.operations.init_key import get_master_key
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
+from audr.wallets.service import decrypt_address
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +186,7 @@ async def get_latest_snapshot_lines(
             """
             SELECT
                 vl.wallet_id,
-                w.address,
+                w.address_ciphertext,
                 vl.asset_id,
                 a.token_address,
                 a.symbol,
@@ -207,12 +209,16 @@ async def get_latest_snapshot_lines(
             """
         )
     )
+    fetched = result.fetchall()
     rows = []
-    for row in result:
+    if fetched:
+        key = await get_master_key(session)
+    for row in fetched:
+        wallet_id = uuid.UUID(str(row[0]))
         rows.append(
             {
                 "wallet_id": row[0],
-                "wallet_address": row[1],
+                "wallet_address": decrypt_address(row[1], wallet_id, key),
                 "asset_id": row[2],
                 "token_address": row[3],
                 "symbol": row[4],

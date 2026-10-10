@@ -666,17 +666,36 @@ async def test_label_envelope_is_not_transplantable_between_wallets(
 @pytest.mark.integration
 async def test_wallet_list_survives_an_unreadable_label(
     http_client: httpx.AsyncClient,
-    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """criterion 5: one wallet's unreadable envelope must not 500 the whole
-    list — see docs/operations.md#key-loss-behavior."""
-    csrf = await _setup_and_get_csrf(http_client)
-    await _add_wallet(http_client, csrf, address=_ADDR_A, label="readable while this key is live")
+    list — see docs/operations.md#key-loss-behavior.
 
-    # Simulate the key used to encrypt this row no longer being the one in
-    # effect (rotated SECRET_KEY, or a corrupted envelope) — get_master_key
-    # now returns different bytes than encrypt_label used above.
-    monkeypatch.setenv("SECRET_KEY", os.urandom(32).hex())
+    Previously this simulated a rotated SECRET_KEY (the whole master key
+    becoming unreadable). AUD-490 changed that scenario's behavior on
+    purpose: a master-key-level failure now propagates instead of
+    degrading (`_attach_wallet_fields` calls `get_master_key` directly, same
+    as the address path needs to), since `wallet.address` sits behind the
+    same key and has no sensible placeholder — see the "If a single row's
+    envelope is unreadable" vs. the global-loss paragraph in
+    docs/operations.md#key-loss-behavior. What criterion 5 actually tests —
+    one bad row not sinking the whole list — now needs a single corrupted
+    *row*, the same technique as
+    test_label_envelope_is_not_transplantable_between_wallets, so the master
+    key stays valid and only this wallet's label_ciphertext fails to
+    authenticate.
+    """
+    csrf = await _setup_and_get_csrf(http_client)
+    created = (
+        await _add_wallet(http_client, csrf, label="readable until this row is corrupted")
+    ).json()
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("UPDATE wallet SET label_ciphertext = :ct WHERE id = :id"),
+                {"ct": bytes([1]) + os.urandom(12) + os.urandom(16), "id": created["id"]},
+            )
 
     r = await http_client.get(_WALLETS_URL, headers={"x-csrf-token": csrf})
     assert r.status_code == 200

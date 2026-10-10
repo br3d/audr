@@ -189,37 +189,28 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
 
     if wallet_id is not None:
         active = [scoped_wallet]
-        rows = await session.execute(
-            sa.text(
-                """
-                SELECT w.address, a.token_address
-                FROM monitored_pair mp
-                JOIN wallet w ON w.id = mp.wallet_id
-                JOIN asset  a ON a.id = mp.asset_id
-                WHERE w.id = :wallet_id AND w.status = 'active'
-                """
-            ),
-            {"wallet_id": wallet_id},
-        )
     else:
         wallets = await list_wallets(session)
         active = [w for w in wallets if w.status == "active"]
         if not active:
             return
-        rows = await session.execute(
-            sa.text(
-                """
-                SELECT w.address, a.token_address
-                FROM monitored_pair mp
-                JOIN wallet w ON w.id = mp.wallet_id
-                JOIN asset  a ON a.id = mp.asset_id
-                WHERE w.status = 'active'
-                """
-            )
-        )
-    monitored: dict[str, list[str]] = {}
-    for wallet_addr, token_addr in rows:
-        monitored.setdefault(wallet_addr, []).append(token_addr)
+
+    # Keyed by wallet_id rather than address: monitored_pair already carries
+    # wallet_id directly, so no join against wallet (and no address
+    # decryption) is needed just to find each active wallet's monitored
+    # tokens (AUD-490).
+    monitor_stmt = sa.text(
+        "SELECT mp.wallet_id, a.token_address"
+        " FROM monitored_pair mp"
+        " JOIN asset a ON a.id = mp.asset_id"
+        " WHERE mp.wallet_id IN :wallet_ids"
+    ).bindparams(sa.bindparam("wallet_ids", expanding=True))
+    rows = await session.execute(
+        monitor_stmt, {"wallet_ids": [str(w.id) for w in active]}
+    )
+    monitored: dict[uuid.UUID, list[str]] = {}
+    for row_wallet_id, token_addr in rows:
+        monitored.setdefault(uuid.UUID(str(row_wallet_id)), []).append(token_addr)
 
     async with RpcReader(
         url=rpc_endpoints[0],
@@ -285,7 +276,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
             if not await _read_and_record(addr, None):
                 failures.append((addr, None))
 
-            for token_addr in monitored.get(addr, []):
+            for token_addr in monitored.get(wallet.id, []):
                 attempted += 1
                 if not await _read_and_record(addr, token_addr):
                     failures.append((addr, token_addr))

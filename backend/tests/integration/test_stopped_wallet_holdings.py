@@ -21,13 +21,23 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.portfolio.snapshot import _get_current_holdings, publish_valuation_snapshot
+from tests.helpers import wallet_address_columns
 
 
 async def _insert_wallet(session: AsyncSession, address: str, *, status: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
-        sa.text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', :status)"),
-        {"id": str(wallet_id), "addr": address.lower(), "status": status},
+        sa.text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', :status)"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+            "status": status,
+        },
     )
     return wallet_id
 

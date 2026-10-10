@@ -14,17 +14,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.jobs.event_indexer import _index_wallet
 from audr.providers.rpc_reader import LOG_CHUNK_SIZE
+from tests.helpers import wallet_address_columns
 
 _WALLET_ADDRESS = "0x" + "11" * 20
 _TOKEN_ADDRESS = "0x" + "cc" * 20
 
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
-    result = await session.execute(
-        sa.text("INSERT INTO wallet (address, label_ciphertext) VALUES (:addr, '') RETURNING id"),
-        {"addr": address},
+    wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
+    await session.execute(
+        sa.text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
-    return uuid.UUID(str(result.scalar_one()))
+    return wallet_id
 
 
 async def _insert_checkpoint(session: AsyncSession, wallet_id: uuid.UUID, block: int) -> None:

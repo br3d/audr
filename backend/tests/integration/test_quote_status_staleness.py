@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.jobs.quotes import get_quote_status
 from audr.operations.status import ComponentStatus
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
@@ -37,9 +38,17 @@ _no_coingecko_key = patch(
 async def _insert_wallet_and_asset(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
     wallet_id = uuid.uuid4()
     asset_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, "0x" + "1a" * 20)
     await session.execute(
-        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
-        {"id": str(wallet_id), "addr": "0x" + "1a" * 20},
+        text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     await session.execute(
         text(

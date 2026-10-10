@@ -31,7 +31,7 @@ from audr.assets.constants import (
 from audr.assets.models import Asset
 from audr.operations.init_key import get_master_key
 from audr.wallets.models import Wallet
-from audr.wallets.service import encrypt_label
+from audr.wallets.service import compute_address_bidx, encrypt_address, encrypt_label
 
 
 @dataclass
@@ -102,19 +102,20 @@ async def get_holdings(
     Only assets for which at least one observation exists are returned.
     """
     addr = wallet_address.lower()
+    key = await get_master_key(session)
+    bidx = compute_address_bidx(addr, key)
 
     result = await session.execute(
         sa.text(
             """
             SELECT
-                w.address   AS wallet_address,
                 a.token_address,
                 bo.raw_amount::numeric AS raw_amount,
                 bo.block_number
             FROM balance_observation bo
             JOIN wallet w ON w.id = bo.wallet_id
             JOIN asset  a ON a.id = bo.asset_id
-            WHERE w.address = :addr
+            WHERE w.address_bidx = :bidx
               AND bo.observed_at = (
                   SELECT MAX(bo2.observed_at)
                   FROM balance_observation bo2
@@ -123,14 +124,17 @@ async def get_holdings(
               )
             """
         ),
-        {"addr": addr},
+        {"bidx": bidx},
     )
+    # wallet_address is the caller-supplied address, not a column read back
+    # from the row: w.address is ciphertext now, and the bidx match above
+    # already proves it is the same address under the hood.
     return [
         BalanceObservation(
-            wallet_address=row[0],
-            token_address=row[1],
-            raw_amount=int(row[2]),
-            block_number=int(row[3]),
+            wallet_address=addr,
+            token_address=row[0],
+            raw_amount=int(row[1]),
+            block_number=int(row[2]),
         )
         for row in result
     ]
@@ -143,15 +147,17 @@ async def get_holdings(
 
 async def _ensure_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     """Return the wallet ID for *address*, inserting a row if absent."""
-    result = await session.execute(sa.select(Wallet.id).where(Wallet.address == address))
+    key = await get_master_key(session)
+    bidx = compute_address_bidx(address, key)
+    result = await session.execute(sa.select(Wallet.id).where(Wallet.address_bidx == bidx))
     row = result.first()
     if row is not None:
         return uuid.UUID(str(row[0]))
     wallet_id = uuid.uuid4()
-    key = await get_master_key(session)
     wallet = Wallet(
         id=wallet_id,
-        address=address,
+        address_ciphertext=encrypt_address(address, wallet_id, key),
+        address_bidx=bidx,
         label_ciphertext=encrypt_label("", wallet_id, key),
         status="active",
     )

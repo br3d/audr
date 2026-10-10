@@ -23,7 +23,10 @@ from audr.assets.catalog import (
     get_latest_catalog_version,
     import_catalog,
 )
+from audr.operations.init_key import get_master_key
 from audr.operations.status import ComponentStatus
+from audr.wallets.service import compute_address_bidx
+from tests.helpers import wallet_address_columns
 
 BUTERIN_ADDRESS = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
 # Known-real mainnet tokens that must be present in the vendored snapshot.
@@ -125,11 +128,17 @@ async def test_health_ready_surfaces_catalog_degradation(
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
         ),
-        {"id": str(wallet_id), "addr": address.lower()},
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     await session.flush()
     return wallet_id
@@ -163,14 +172,16 @@ async def test_discovery_finds_candidates_from_real_vendored_catalog(
     )
     assert new_pairs > 300
 
+    key = await get_master_key(db_session)
+    bidx = compute_address_bidx(BUTERIN_ADDRESS.lower(), key)
     pair_count = await db_session.execute(
         sa.text(
             """
             SELECT COUNT(*) FROM monitored_pair mp
             JOIN wallet w ON w.id = mp.wallet_id
-            WHERE w.address = :addr
+            WHERE w.address_bidx = :bidx
             """
         ),
-        {"addr": BUTERIN_ADDRESS},
+        {"bidx": bidx},
     )
     assert pair_count.scalar() > 300

@@ -29,13 +29,16 @@ What it covers:
   owner-written column in the schema, and the only wallet column that is
   never filtered, sorted or joined on, which is what makes it encryptable at
   all (see §2 D below on why the others are not)
+- `wallet.address` (`wallet.address_ciphertext` + `wallet.address_bidx`,
+  AUD-490) — the last owner-identifying column. Its `unique=True` constraint
+  moved to `address_bidx`, a deterministic HMAC-SHA256 blind index keyed by a
+  subkey derived from the master key (not the master key itself), which is
+  what makes a column that *is* filtered and joined on (unlike the label)
+  encryptable without losing lookup/uniqueness. See item 3b in
+  [security-at-rest-design.md](security-at-rest-design.md#3-where-that-leaves-the-backlog).
 
 What is **plaintext on disk**:
 
-- wallet addresses (`wallet.address` — tracked separately as item 3b in
-  [security-at-rest-design.md](security-at-rest-design.md#3-where-that-leaves-the-backlog);
-  out of scope for AUD-488 because its `unique=True` constraint would have to
-  move to a blind index)
 - holdings, balances, valuation snapshots and lines (`valuation_snapshot`,
   `valuation_line`)
 - the full price/quote history (`quote_set`, `quote_observation`)

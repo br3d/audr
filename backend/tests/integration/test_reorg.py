@@ -24,6 +24,7 @@ from audr.jobs.canonicality import (
     schedule_replacement_scans,
 )
 from audr.portfolio.history import materialize_history_point
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.anyio
 
@@ -35,11 +36,17 @@ pytestmark = pytest.mark.anyio
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wid = uuid.uuid4()
+    cols = await wallet_address_columns(session, wid, address)
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
         ),
-        {"id": str(wid), "addr": address.lower()},
+        {
+            "id": str(wid),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wid
 

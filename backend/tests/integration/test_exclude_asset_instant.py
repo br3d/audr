@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.api.app import app
 from audr.db import get_db
+from tests.helpers import wallet_address_columns
 
 _BASE = "http://test"
 _SETUP_URL = "/api/v1/setup"
@@ -101,17 +102,22 @@ async def _setup_and_get_csrf(client: httpx.AsyncClient) -> str:
 async def _seed_wallet(
     factory: async_sessionmaker[AsyncSession], address: str = "0x" + "a" * 40
 ) -> str:
-    wallet_id = str(uuid.uuid4())
+    wallet_id = uuid.uuid4()
     async with factory() as session:
         async with session.begin():
+            cols = await wallet_address_columns(session, wallet_id, address)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
-                    " VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
-                {"id": wallet_id, "addr": address.lower()},
+                {
+                    "id": str(wallet_id),
+                    "addr_ct": cols["address_ciphertext"],
+                    "addr_bidx": cols["address_bidx"],
+                },
             )
-    return wallet_id
+    return str(wallet_id)
 
 
 async def _seed_asset(

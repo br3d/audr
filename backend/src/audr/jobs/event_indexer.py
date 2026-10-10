@@ -32,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.config import get_settings
 from audr.jobs.policy import get_shared_rpc_rate_limiter
+from audr.operations.init_key import get_master_key
+from audr.wallets.service import decrypt_address
 from audr.providers.rpc_reader import (
     APPROVAL_TOPIC,
     TRANSFER_TOPIC,
@@ -355,8 +357,18 @@ async def _insert_event(
 async def _get_active_wallets(
     session: AsyncSession,
 ) -> list[tuple[uuid.UUID, str]]:
-    rows = await session.execute(sa.text("SELECT id, address FROM wallet WHERE status = 'active'"))
-    return [(uuid.UUID(str(row[0])), str(row[1])) for row in rows.fetchall()]
+    rows = (
+        await session.execute(
+            sa.text("SELECT id, address_ciphertext FROM wallet WHERE status = 'active'")
+        )
+    ).fetchall()
+    if not rows:
+        return []
+    key = await get_master_key(session)
+    return [
+        (uuid.UUID(str(row[0])), decrypt_address(row[1], uuid.UUID(str(row[0])), key))
+        for row in rows
+    ]
 
 
 async def _get_tracked_token_addresses(session: AsyncSession) -> list[str]:

@@ -23,6 +23,7 @@ from audr.jobs.store import (
     JobKind,
     claim_job,
 )
+from audr.operations.init_key import get_master_key
 from audr.portfolio.balances import get_holdings, record_balance
 from audr.portfolio.discovery import (
     DiscoveryResult,
@@ -31,6 +32,8 @@ from audr.portfolio.discovery import (
     persist_discovery_candidates,
     save_discovery_checkpoint,
 )
+from audr.wallets.service import compute_address_bidx
+from tests.helpers import wallet_address_columns
 
 
 @pytest.mark.integration
@@ -108,14 +111,25 @@ async def test_checkpoint_is_none_for_fresh_run(db_session: AsyncSession) -> Non
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
         ),
-        {"id": str(wallet_id), "addr": address.lower()},
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     await session.flush()
     return wallet_id
+
+
+async def _wallet_bidx(session: AsyncSession, address: str) -> bytes:
+    key = await get_master_key(session)
+    return compute_address_bidx(address.lower(), key)
 
 
 @pytest.mark.integration
@@ -156,15 +170,16 @@ async def test_persist_creates_asset_and_monitored_pair(
     assert asset_row is not None
 
     # monitored_pair row exists
+    waddr_bidx = await _wallet_bidx(db_session, wallet_addr)
     pair_row = (
         await db_session.execute(
             sa.text(
                 "SELECT mp.id FROM monitored_pair mp "
                 "JOIN wallet w ON w.id = mp.wallet_id "
                 "JOIN asset a ON a.id = mp.asset_id "
-                "WHERE w.address = :waddr AND a.token_address = :taddr"
+                "WHERE w.address_bidx = :waddr AND a.token_address = :taddr"
             ),
-            {"waddr": wallet_addr.lower(), "taddr": token_addr.lower()},
+            {"waddr": waddr_bidx, "taddr": token_addr.lower()},
         )
     ).first()
     assert pair_row is not None
@@ -190,15 +205,16 @@ async def test_persist_is_idempotent(db_session: AsyncSession) -> None:
     assert first == 1
     assert second == 0  # already existed — no new row
 
+    waddr_bidx = await _wallet_bidx(db_session, wallet_addr)
     count = (
         await db_session.execute(
             sa.text(
                 "SELECT COUNT(*) FROM monitored_pair mp "
                 "JOIN wallet w ON w.id = mp.wallet_id "
                 "JOIN asset a ON a.id = mp.asset_id "
-                "WHERE w.address = :waddr AND a.token_address = :taddr"
+                "WHERE w.address_bidx = :waddr AND a.token_address = :taddr"
             ),
-            {"waddr": wallet_addr.lower(), "taddr": token_addr.lower()},
+            {"waddr": waddr_bidx, "taddr": token_addr.lower()},
         )
     ).scalar()
     assert count == 1
@@ -295,14 +311,15 @@ async def test_discovery_gives_full_catalog_coverage_to_every_wallet(
     await _discover_for_active_wallets(db_session, run_id=run_id)
 
     for wallet_addr in (wallet_a, wallet_b):
+        addr_bidx = await _wallet_bidx(db_session, wallet_addr)
         count = (
             await db_session.execute(
                 sa.text(
                     "SELECT COUNT(*) FROM monitored_pair mp "
                     "JOIN wallet w ON w.id = mp.wallet_id "
-                    "WHERE w.address = :addr"
+                    "WHERE w.address_bidx = :addr"
                 ),
-                {"addr": wallet_addr.lower()},
+                {"addr": addr_bidx},
             )
         ).scalar()
         assert count == len(catalog_tokens), (

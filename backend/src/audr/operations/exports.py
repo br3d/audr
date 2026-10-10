@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -13,6 +14,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.operations.csv_safe import sanitize
+from audr.operations.init_key import get_master_key
+from audr.wallets.service import decrypt_address
 
 _log = logging.getLogger(__name__)
 
@@ -54,7 +57,8 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
         sa.text(
             """
             SELECT
-                w.address         AS wallet_address,
+                w.id              AS wallet_id,
+                w.address_ciphertext,
                 a.symbol          AS asset_symbol,
                 a.name            AS asset_name,
                 a.token_address,
@@ -70,25 +74,36 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
                 ORDER BY observed_at DESC
                 LIMIT 1
             ) bo ON true
-            ORDER BY w.address, a.symbol
+            ORDER BY w.id, a.symbol
             """
         )
     )
     rows = result.fetchall()
 
+    # This export is bounded by wallet count × asset count (never streamed),
+    # so decrypting every row and re-sorting by the plaintext address in
+    # Python — matching the pre-AUD-490 alphabetical-by-address order — costs
+    # nothing worth avoiding. Addresses are decrypted once per wallet via
+    # this cache rather than once per (wallet, asset) row.
+    address_cache: dict[object, str] = {}
+    key = await get_master_key(session) if rows else None
     holdings = []
     for row in rows:
-        raw_amount = row[4]  # Decimal or None
+        wallet_id, address_ciphertext = uuid.UUID(str(row[0])), row[1]
+        if wallet_id not in address_cache:
+            address_cache[wallet_id] = decrypt_address(address_ciphertext, wallet_id, key)
+        raw_amount = row[5]  # Decimal or None
         holdings.append(
             {
-                "wallet_address": str(row[0]),
-                "asset_symbol": str(row[1]),
-                "asset_name": str(row[2]),
-                "token_address": str(row[3]),
+                "wallet_address": address_cache[wallet_id],
+                "asset_symbol": str(row[2]),
+                "asset_name": str(row[3]),
+                "token_address": str(row[4]),
                 "raw_amount": str(Decimal(raw_amount)) if raw_amount is not None else None,
-                "decimals": int(row[5]),
+                "decimals": int(row[6]),
             }
         )
+    holdings.sort(key=lambda h: (h["wallet_address"], h["asset_symbol"]))
 
     return {
         "schema_version": 1,
@@ -101,13 +116,21 @@ async def export_current_portfolio(session: AsyncSession) -> dict:  # type: igno
 # Single flat query shared by export_full_history and stream_history_csv.
 # LEFT JOIN valuation_line so that snapshots with no lines still appear
 # (they produce a row with NULLs for the line columns).
+#
+# Ordered by w.id rather than the decrypted address (AUD-490): a GCM envelope's
+# nonce is random per row, so ordering by address_ciphertext would be
+# meaningless, and both queries feed a row-by-row streaming CSV export that
+# cannot buffer the full result set just to sort on plaintext. w.id is stable
+# and deterministic, which is all the "deterministic row order" requirement
+# needs — it does not have to be alphabetical-by-address.
 _HISTORY_QUERY = sa.text(
     """
     SELECT
         vs.id                                             AS snapshot_id,
         vs.snapshotted_at,
         vs.quality,
-        w.address                                         AS wallet_address,
+        w.id                                               AS wallet_id,
+        w.address_ciphertext,
         a.symbol                                          AS asset_symbol,
         COALESCE(amr.name, a.name)                        AS asset_name,
         vl.raw_amount,
@@ -127,7 +150,7 @@ _HISTORY_QUERY = sa.text(
     ) amr ON true
     WHERE (:from_ IS NULL OR vs.snapshotted_at >= :from_)
       AND (:to_   IS NULL OR vs.snapshotted_at <= :to_)
-    ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
+    ORDER BY vs.snapshotted_at ASC, w.id, a.symbol
     """
 ).bindparams(
     sa.bindparam("from_", type_=sa.TIMESTAMP(timezone=True)),
@@ -142,7 +165,8 @@ _HISTORY_STREAM_QUERY = sa.text(
         vs.id                                             AS snapshot_id,
         vs.snapshotted_at,
         vs.quality,
-        w.address                                         AS wallet_address,
+        w.id                                               AS wallet_id,
+        w.address_ciphertext,
         a.symbol                                          AS asset_symbol,
         COALESCE(amr.name, a.name)                        AS asset_name,
         vl.raw_amount,
@@ -162,7 +186,7 @@ _HISTORY_STREAM_QUERY = sa.text(
     ) amr ON true
     WHERE (:from_ IS NULL OR vs.snapshotted_at >= :from_)
       AND (:to_   IS NULL OR vs.snapshotted_at <= :to_)
-    ORDER BY vs.snapshotted_at ASC, w.address, a.symbol
+    ORDER BY vs.snapshotted_at ASC, w.id, a.symbol
     """
 ).bindparams(
     sa.bindparam("from_", type_=sa.TIMESTAMP(timezone=True)),
@@ -219,11 +243,14 @@ async def export_full_history(
     snap_map: dict[str, dict] = {}  # type: ignore[type-arg]
     snap_order: list[dict] = []  # type: ignore[type-arg]
 
+    address_cache: dict[object, str] = {}
+    key = await get_master_key(session) if rows else None
     for row in rows:
         snap_id = str(row[0])
         snapshotted_at: datetime = row[1]
         quality: str = row[2]
-        wallet_addr = row[3]
+        wallet_id = uuid.UUID(str(row[3])) if row[3] is not None else None
+        address_ciphertext = row[4]
 
         if snap_id not in snap_map:
             entry: dict = {  # type: ignore[type-arg]
@@ -235,17 +262,19 @@ async def export_full_history(
             snap_map[snap_id] = entry
             snap_order.append(entry)
 
-        if wallet_addr is not None:
-            raw_amount = row[6]
-            price_usd = row[7]
+        if wallet_id is not None:
+            if wallet_id not in address_cache:
+                address_cache[wallet_id] = decrypt_address(address_ciphertext, wallet_id, key)
+            raw_amount = row[7]
+            price_usd = row[8]
             snap_map[snap_id]["lines"].append(
                 {
-                    "wallet_address": str(wallet_addr),
-                    "asset_symbol": str(row[4]),
-                    "asset_name": str(row[5]),
+                    "wallet_address": address_cache[wallet_id],
+                    "asset_symbol": str(row[5]),
+                    "asset_name": str(row[6]),
                     "raw_amount": str(Decimal(raw_amount)) if raw_amount is not None else None,
                     "price_usd": str(Decimal(price_usd)) if price_usd is not None else None,
-                    "decimals": int(row[8]),
+                    "decimals": int(row[9]),
                 }
             )
 
@@ -297,20 +326,31 @@ async def stream_history_csv(
     stream = await session.stream(_HISTORY_STREAM_QUERY, {"from_": from_, "to_": to_})
     stream = stream.yield_per(500)
 
+    # Master key fetched lazily on the first row (never, for an empty
+    # export), then reused — decrypted addresses are cached per wallet_id so
+    # a wallet with many lines across many snapshots is decrypted once.
+    key: bytes | None = None
+    address_cache: dict[uuid.UUID, str] = {}
+
     row_count = 0
     async for row in stream:
-        raw_amount = str(Decimal(row[6])) if row[6] is not None else ""
-        price_usd = str(Decimal(row[7])) if row[7] is not None else ""
+        if key is None:
+            key = await get_master_key(session)
+        wallet_id = uuid.UUID(str(row[3]))
+        if wallet_id not in address_cache:
+            address_cache[wallet_id] = decrypt_address(row[4], wallet_id, key)
+        raw_amount = str(Decimal(row[7])) if row[7] is not None else ""
+        price_usd = str(Decimal(row[8])) if row[8] is not None else ""
         yield _csv_row(
             str(row[0]),
             row[1].isoformat(),
             str(row[2]),
-            sanitize(str(row[3])),
-            sanitize(str(row[4])),
+            sanitize(address_cache[wallet_id]),
             sanitize(str(row[5])),
+            sanitize(str(row[6])),
             raw_amount,
             price_usd,
-            int(row[8]),
+            int(row[9]),
         )
         row_count += 1
         if row_count >= _MAX_HISTORY_EXPORT_ROWS:

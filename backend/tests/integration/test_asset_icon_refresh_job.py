@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.jobs.asset_icons import handle_asset_icon_refresh
 from audr.jobs.policy import get_shared_asset_icon_rate_limiter
 from audr.providers.asset_icons import trust_wallet_logo_url
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
@@ -25,9 +26,17 @@ _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
-        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
-        {"id": str(wallet_id), "addr": address.lower()},
+        text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wallet_id
 
@@ -248,17 +257,21 @@ async def test_disabled_flag_makes_no_outbound_request(
 ) -> None:
     from audr.config import get_settings
 
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
-    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
-    monkeypatch.setenv("ASSET_ICONS_REMOTE_FETCH", "false")
-    get_settings.cache_clear()
-
+    # Insert before the SECRET_KEY monkeypatch below: wallet inserts now need a
+    # real master key (AUD-490) to build address_ciphertext/address_bidx, and
+    # "super-secret-key" below is not valid hex, so get_master_key would fail
+    # if called after it took effect.
     run_id = uuid.uuid4()
     addr = "0x" + "01" * 20
     wallet_id = await _insert_wallet(db_session, "0xface" + "7" * 36)
     asset_id = await _insert_asset(db_session, token_address=addr, symbol="OFF")
     await _insert_balance(db_session, wallet_id=wallet_id, asset_id=asset_id)
     await db_session.flush()
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+    monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+    monkeypatch.setenv("ASSET_ICONS_REMOTE_FETCH", "false")
+    get_settings.cache_clear()
 
     try:
         with respx.mock(assert_all_called=True) as mock:
