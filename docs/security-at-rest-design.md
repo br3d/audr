@@ -75,9 +75,12 @@ Keep `crypto.py`, widen its coverage from credentials to portfolio data.
 - **Cost — the real constraint:** encrypted columns cannot be filtered,
   joined, ordered or aggregated in SQL. `portfolio/history_query.py` and the
   valuation rollups do exactly that, so blanket encryption would force those
-  aggregations into Python. Workable fields are the ones only ever read whole:
-  wallet labels, manual-asset notes, and (via a blind index — a keyed HMAC
-  column for lookup alongside the ciphertext) wallet addresses.
+  aggregations into Python. Workable fields are the ones only ever read whole.
+  In today's schema that is exactly two: `wallet.label`, and `wallet.address`
+  via a blind index — a keyed HMAC column carrying the uniqueness constraint
+  and the lookup, alongside the ciphertext. (An earlier revision of this file
+  also listed "manual-asset notes"; no such column exists — manual assets have
+  no free-text field.)
 - **Verdict:** a good incremental second layer, scoped to non-aggregated
   columns. Do not attempt to encrypt the valuation/quote history this way.
 
@@ -96,13 +99,16 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | --- | --- | --- | --- | --- |
 | 1 | ~~Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance~~ — **done**: `compose.encrypted-volume.yaml` overlay + [procedure](operations.md#encrypting-the-database-volume), linked from the README install step | A | S | infra |
 | 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
-| 3 | Extend envelope encryption to wallet labels/addresses + manual-asset notes, with an HMAC blind index for address lookup | D | M | backend |
+| 3a | Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests) | D | S | backend |
+| 3b | Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup. Separate from 3a because it changes lookup and uniqueness semantics, not just storage | D | M | backend |
 | 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
 
-Items 1–3 are additive, carry no migration risk, and together close the
-realistic threat (disk or backup leaves the building) without touching the
-zero-config promise.
+Items 1 and 2 — both done — are what actually close the realistic threat (a
+disk or a backup leaves the building), and neither touched the application or
+the zero-config promise. 3a is additive. 3b is the one item here that changes
+semantics rather than just storage, since the address uniqueness constraint has
+to move to the blind index; it is a migration, not a column rewrite.
 
 ## 4. The open product decision
 
