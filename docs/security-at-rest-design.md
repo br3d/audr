@@ -126,11 +126,13 @@ Keep `crypto.py`, widen its coverage from credentials to portfolio data.
   joined, ordered or aggregated in SQL. `portfolio/history_query.py` and the
   valuation rollups do exactly that, so blanket encryption would force those
   aggregations into Python. Workable fields are the ones only ever read whole.
-  In today's schema that is exactly two: `wallet.label`, and `wallet.address`
+  In today's schema that is `wallet.label`, and `wallet.address`
   via a blind index — a keyed HMAC column carrying the uniqueness constraint
   and the lookup, alongside the ciphertext. (An earlier revision of this file
   also listed "manual-asset notes"; no such column exists — manual assets have
-  no free-text field.)
+  no free-text field.) `onchain_event`'s address columns belong to this set too
+  and were missed; they are item 3c, and the fix there is to stop storing the
+  owner's side rather than to encrypt it.
 - **Verdict:** a good incremental second layer, scoped to non-aggregated
   columns. Do not attempt to encrypt the valuation/quote history this way.
 
@@ -152,10 +154,23 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | 3a | ~~Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests)~~ — **done** (AUD-488): `wallet.label_ciphertext`, migration 0021, key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | S | backend |
 | 3b | ~~Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup~~ — **done** (AUD-490): `wallet.address_ciphertext` + `wallet.address_bidx` (HKDF-derived subkey, not the master key itself), migration 0022. Of `operations/exports.py`'s three `ORDER BY w.address` queries, the bounded current-portfolio export now decrypts then sorts in Python (cheap at wallet×asset scale, keeps the old alphabetical-by-address order); the two streamed full-history queries order by `w.id` instead, since buffering the whole export just to sort on plaintext would defeat streaming. Key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | M | backend |
 | 4 | ~~Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback~~ — **done** (2026-10-10): works, `default_table_access_method = tde_heap` needs no application change, dump/restore is the migration path, ~9% write cost; **not adopted** — see [spike results](#spike-results-item-4-2026-10-10) for why and for what would change the answer | B | M | infra |
+| 3c | Stop storing the owner's own address in plaintext in `onchain_event` — `from_address`/`to_address` are plain `text`, and a row only exists when one of them *is* the tracked wallet, so every indexed event carries the owner's address in the clear. Cheapest shape: store the counterparty only, since `event_type` + `wallet_id` already determines which side the owner was on | D | M | backend |
+| 3d | ~~Operator step after any encrypt-a-column migration: rewrite the table so the dropped plaintext actually leaves the heap~~ — **done**: [procedure](operations.md#scrubbing-plaintext-left-by-an-encrypt-a-column-migration), and applied to the staging stand's `wallet` table, which still held three plaintext addresses after 0022 | — | S | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
 
-Items 1–4 are all closed; item 5 is the only one left, and it is the founder's
+Items 1–4 are closed. 3c is open and is the one remaining place where an
+owner-identifying value sits on disk in plaintext; item 5 is the founder's
 decision in §4, not an engineering task.
+
+**Correction (2026-10-10).** An earlier revision of this file called 3b "the
+last owner-identifying column still stored as plaintext", and migration 0022's
+docstring says the same. Both are wrong: `onchain_event.from_address` /
+`to_address` were never in scope and still hold the owner's address on every
+stand with event history — hence 3c. 3b took the address out of one table, not
+off the disk. Separately, dropping a plaintext column does not remove its bytes
+from the heap, so 3a/3b left recoverable plaintext behind on an already-deployed
+stand until the table was rewritten — measured and fixed, hence 3d. Evidence for
+both: [verification-history.md](verification-history.md#verification-what-the-worker-actually-reads-and-what-an-encrypt-a-column-migration-leaves-on-disk-aud-389-item-5-prep).
 
 Items 1 and 2 are what actually close the realistic threat (a disk or a backup
 leaves the building), and neither touched the application or the zero-config
@@ -200,15 +215,31 @@ That directly conflicts with the always-on `worker`. The three ways out:
 2. **Password-derived key, degraded background work.** Jobs run only while a
    session is live; quotes and the event index go stale when nobody logs in.
    Maximum confidentiality, visibly worse product.
-3. **Two-tier keys.** A machine key (as today) protects operational data the
-   worker needs — quotes, the event index, news. A password-derived key
-   protects the owner-identifying set — addresses, labels, holdings — which the
-   worker arguably does not need in plaintext. Best balance, most work, and it
-   needs a careful audit of what the worker actually reads.
+3. **Two-tier keys — ruled out by measurement, 2026-10-10.** The idea was a
+   machine key for what the worker needs (quotes, the event index, news) and a
+   password-derived key for the owner-identifying set (addresses, labels),
+   which the worker was assumed not to need in plaintext. That assumption was
+   the one thing here nobody had checked, and it is false. The
+   [worker audit](verification-history.md#1-what-the-worker-reads) walked the
+   call graph of all eight job kinds: `BALANCE_SCAN`, `DISCOVERY` and
+   `EVENT_INDEXER` each need the plaintext address because the address *is* the
+   query — the RPC parameter for a balance read, the scan target for discovery,
+   the padded log topic for the event filter. There is no ciphertext
+   substitution; the chain only answers to the address. So a password tier over
+   the owner-identifying set behaves exactly like option 2 (background work
+   stops without a live session) for everything except `wallet.label`, which no
+   job reads and which is display-only. A second key protecting only a cosmetic
+   field is not worth its complexity.
+
+**The real choice is therefore between 1 and 2**, and it is the same trade in
+both directions: always-on background refresh, or data that is unreadable
+without the owner present. Option 3 was the "have both" answer and it does not
+exist at this architecture.
 
 Items 1–4 shipped without it and none of them foreclose any of the three: the
 envelope layer 3a/3b extended is exactly where a password-derived KEK would be
 swapped in, and the pg_tde spike's conclusion is independent of which key model
-wins. Option 3 would, however, make the pg_tde question *more* interesting —
-splitting the schema by who needs plaintext is the one case where a per-database
-key is actually useful.
+wins. (The earlier note that option 3 would make the pg_tde question more
+interesting no longer applies — splitting the schema by who needs plaintext was
+the appealing part of option 3, and that split is what the worker audit
+disallows.)

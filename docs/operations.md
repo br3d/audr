@@ -234,8 +234,10 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 ## Encrypting the database volume
 
 Holdings and the whole valuation history are plaintext at the column level
-(wallet addresses and labels are not, as of AUD-488/AUD-490), so **the volume
-is the layer that protects them**. Putting it on LUKS or a ZFS
+(wallet addresses and labels are not, as of AUD-488/AUD-490 — though
+`onchain_event.from_address`/`to_address` still record the tracked wallet's own
+address in the clear on every indexed event, see AUD-389 item 3c), so **the
+volume is the layer that protects them**. Putting it on LUKS or a ZFS
 native-encrypted dataset is audr's recommended at-rest baseline; what that
 does and does not protect against is in
 [security-at-rest.md](security-at-rest.md#2-what-to-do-about-it).
@@ -308,6 +310,60 @@ encrypt the disk under Docker's data root as well, or to rebuild the host.
 `secrets/master_key.hex` is unaffected by any of this — it lives on the host
 filesystem, not in the volume, and volume encryption does nothing for it. See
 [key-loss behavior](#key-loss-behavior).
+
+---
+
+## Scrubbing plaintext left by an encrypt-a-column migration
+
+A migration that encrypts an existing column — 0021 (`wallet.label`), 0022
+(`wallet.address`), and any future one — does **not** take the old plaintext
+off disk on a stand that already had rows. It leaves it in two places:
+
+- `ALTER TABLE ... DROP COLUMN` is a catalog-only operation. It marks the
+  column dropped and stops returning it; the bytes stay in every existing
+  tuple.
+- The encrypting `UPDATE` supersedes each row rather than overwriting it, and
+  the old row version keeps a complete plaintext copy.
+
+This is not theoretical: the staging stand's `wallet` heap still contained
+three plaintext wallet addresses after 0022 had run and the column was gone
+from the schema. Measurements and the controlled experiment are in
+[verification-history.md](verification-history.md#2-drop-column-does-not-take-the-plaintext-off-disk).
+
+Fix is a table rewrite, which `VACUUM FULL` performs:
+
+```bash
+# After deploying a migration that encrypts a column on a stand with data.
+# Brief ACCESS EXCLUSIVE lock — fine for `wallet` (a handful of rows); use
+# pg_repack instead if the table is large enough for the lock to matter.
+docker compose exec db psql -U audr -d audr -c "VACUUM (FULL, ANALYZE) wallet"
+```
+
+Verify, rather than assuming — the file path changes when the rewrite happens,
+so check the *new* one:
+
+```bash
+docker compose exec db psql -U audr -d audr -At \
+  -c "CHECKPOINT" -c "SELECT pg_relation_filepath('wallet')"
+# base/16384/27720
+
+docker compose exec db sh -c \
+  'strings /var/lib/postgresql/data/base/16384/27720 | grep -coE "0x[0-9a-fA-F]{40}"'
+# 0   <- clean. Non-zero means the rewrite did not happen or ran on the old path.
+```
+
+Two residues survive the rewrite and are not reachable from SQL:
+
+- **Retained WAL** holds whatever was written until those segments recycle.
+- **The unlinked heap file's blocks** stay on the raw device until something
+  overwrites them; on an SSD this is not under the filesystem's control.
+
+Both are exactly what the [volume-level baseline](#encrypting-the-database-volume)
+is for. Column encryption protects a leaked dump or a Postgres-only compromise;
+it has never been the layer that protects raw disk blocks.
+
+Note this cannot be folded into the Alembic migration itself — `VACUUM FULL`
+refuses to run inside a transaction block, and Alembic runs migrations in one.
 
 ---
 
