@@ -55,6 +55,56 @@ keyring backends ranging from a local keyfile to KMIP/Vault.
 - **Verdict:** worth a timeboxed spike, not worth adopting blind. Revisit if a
   user asks for compliance-grade at-rest encryption.
 
+#### Spike results (item 4, 2026-10-10)
+
+The spike was run against `percona/percona-distribution-postgresql:17`
+(Percona Server for PostgreSQL 17.11.1, `pg_tde` 2.2 in the image). Full
+procedure, commands and raw output:
+[verification-history.md](verification-history.md#verification-pg_tde-spike-aud-389-item-4).
+What it settled:
+
+- **It works, and the application does not have to know.** With
+  `ALTER DATABASE audr SET default_table_access_method = tde_heap`, every table
+  a migration creates afterwards is encrypted with no change to the models, the
+  migrations or any query — unlike option (D), there is no "which columns can we
+  encrypt" question, because indexes, aggregates and ordering all keep working.
+  `ALTER TABLE ... SET ACCESS METHOD heap` converts a table back, so the
+  decision is reversible per table rather than one-way.
+- **The migration path is our existing backup tooling.** A plain `pg_dump` from
+  community PG16 restores into a TDE-enabled PG17 database and the restored
+  tables come out `tde_heap`. No `pg_upgrade` across two differently-built
+  distributions is needed, which was the main feared risk of the image swap.
+- **WAL encryption needs a two-phase first boot.** `pg_tde.wal_encrypt=on` on a
+  fresh cluster is a `FATAL: principal key not configured` boot loop: the server
+  key is set through a SQL function, which needs a server that will not start.
+  First boot has to run with WAL encryption off, set the server key, then
+  restart with it on. A self-hoster hitting that on install sees a database that
+  will not start and no obvious way back — this is exactly the "new thing the
+  self-hoster must get right" cost above, now measured rather than guessed.
+- **Cost is ~9% on writes, nil on reads.** `pgbench -s 10`, 4 clients: 1084 →
+  991 tps on the default write mix (-8.6%), and no measurable difference
+  read-only (13.5k vs 13.7k tps, within noise on a working set that fits in
+  shared buffers). Both numbers already include WAL encryption, so the delta is
+  the `tde_heap` page cost alone.
+- **The keyring reintroduces the same problem it is meant to solve.** With the
+  local-keyfile provider, the 292-byte key sits on the same host as the data, so
+  against whole-machine theft it adds nothing over option (A); it only helps
+  when data files or a base backup leak off a running host. Pointing it at
+  KMIP/Vault fixes that and hands the self-hoster a second service to run.
+  Losing the keyfile is survivable-looking and worse than it looks: the server
+  boots fine and every encrypted table fails at read time with
+  `key "..." not found in key provider`.
+
+**Conclusion: not adopting it now, and the reason is sharper than before the
+spike.** What pg_tde buys over the adopted baseline is confidentiality of data
+files leaked off a *running* host — and only if the keyring lives somewhere else,
+which means Vault. The cost is a vendor-controlled image, a boot-order trap on
+install, and a second key whose loss destroys the whole database rather than a
+few columns. Items 1, 2 and the (D) column work cover the realistic threats
+without any of that. Revisit if a user asks for compliance-grade at-rest
+encryption, or if we ever run a KMIP/Vault service for other reasons — the
+technical path is now known and the spike does not have to be redone.
+
 ### C. `pgcrypto` column encryption
 
 Encrypt columns in SQL with `pgp_sym_encrypt`.
@@ -101,17 +151,20 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
 | 3a | ~~Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests)~~ — **done** (AUD-488): `wallet.label_ciphertext`, migration 0021, key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | S | backend |
 | 3b | ~~Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup~~ — **done** (AUD-490): `wallet.address_ciphertext` + `wallet.address_bidx` (HKDF-derived subkey, not the master key itself), migration 0022. Of `operations/exports.py`'s three `ORDER BY w.address` queries, the bounded current-portfolio export now decrypts then sorts in Python (cheap at wallet×asset scale, keeps the old alphabetical-by-address order); the two streamed full-history queries order by `w.id` instead, since buffering the whole export just to sort on plaintext would defeat streaming. Key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | M | backend |
-| 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
+| 4 | ~~Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback~~ — **done** (2026-10-10): works, `default_table_access_method = tde_heap` needs no application change, dump/restore is the migration path, ~9% write cost; **not adopted** — see [spike results](#spike-results-item-4-2026-10-10) for why and for what would change the answer | B | M | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
 
-Items 1 and 2 — both done — are what actually close the realistic threat (a
-disk or a backup leaves the building), and neither touched the application or
-the zero-config promise. 3a is additive. 3b is the one item here that changes
-semantics rather than just storage, since the address uniqueness constraint has
-to move to the blind index; it is a migration, not a column rewrite.
+Items 1–4 are all closed; item 5 is the only one left, and it is the founder's
+decision in §4, not an engineering task.
 
-Two specifics about 3b that the 3a work surfaced, recorded here so they are not
-rediscovered during implementation:
+Items 1 and 2 are what actually close the realistic threat (a disk or a backup
+leaves the building), and neither touched the application or the zero-config
+promise. 3a was additive. 3b was the one item here that changed semantics rather
+than just storage, since the address uniqueness constraint had to move to the
+blind index; it was a migration, not a column rewrite.
+
+Two specifics about 3b that the 3a work surfaced, kept here because they are the
+reasoning behind the shipped shape and apply to any future encrypted column:
 
 - **The constraint, not the column, is the hard part.** `add_wallet` detects a
   duplicate by catching the `IntegrityError` from `address`'s unique index. The
@@ -128,8 +181,8 @@ rediscovered during implementation:
   `api/wallets.py`, `api/holdings.py`) reads the address whole and needs nothing
   beyond the transient-attribute pattern 3a established.
 
-Note also that 3b widens the blast radius of a lost KEK: today losing it costs
-provider credentials and labels, after 3b it costs the wallet list itself.
+Note also that 3b widened the blast radius of a lost KEK: it used to cost
+provider credentials and labels, it now costs the wallet list itself.
 
 ## 4. The open product decision
 
@@ -153,5 +206,9 @@ That directly conflicts with the always-on `worker`. The three ways out:
    worker arguably does not need in plaintext. Best balance, most work, and it
    needs a careful audit of what the worker actually reads.
 
-Until that is decided, items 1–4 stand on their own and none of them foreclose
-any of the three.
+Items 1–4 shipped without it and none of them foreclose any of the three: the
+envelope layer 3a/3b extended is exactly where a password-derived KEK would be
+swapped in, and the pg_tde spike's conclusion is independent of which key model
+wins. Option 3 would, however, make the pg_tde question *more* interesting —
+splitting the schema by who needs plaintext is the one case where a per-database
+key is actually useful.
