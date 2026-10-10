@@ -86,7 +86,7 @@ def downgrade() -> None:
                 WHEN event_type = 'transfer_in' THEN {_PLACEHOLDER}
                 ELSE COALESCE(counterparty_address, {_PLACEHOLDER})
             END
-        """
+        """  # noqa: S608 -- _PLACEHOLDER is a hardcoded module constant, not user input
     )
 
     op.alter_column("onchain_event", "from_address", existing_type=sa.Text(), nullable=False)
