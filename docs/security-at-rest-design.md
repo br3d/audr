@@ -154,19 +154,22 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | 3a | ~~Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests)~~ — **done** (AUD-488): `wallet.label_ciphertext`, migration 0021, key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | S | backend |
 | 3b | ~~Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup~~ — **done** (AUD-490): `wallet.address_ciphertext` + `wallet.address_bidx` (HKDF-derived subkey, not the master key itself), migration 0022. Of `operations/exports.py`'s three `ORDER BY w.address` queries, the bounded current-portfolio export now decrypts then sorts in Python (cheap at wallet×asset scale, keeps the old alphabetical-by-address order); the two streamed full-history queries order by `w.id` instead, since buffering the whole export just to sort on plaintext would defeat streaming. Key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | M | backend |
 | 4 | ~~Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback~~ — **done** (2026-10-10): works, `default_table_access_method = tde_heap` needs no application change, dump/restore is the migration path, ~9% write cost; **not adopted** — see [spike results](#spike-results-item-4-2026-10-10) for why and for what would change the answer | B | M | infra |
-| 3c | Stop storing the owner's own address in plaintext in `onchain_event` — `from_address`/`to_address` are plain `text`, and a row only exists when one of them *is* the tracked wallet, so every indexed event carries the owner's address in the clear. Cheapest shape: store the counterparty only, since `event_type` + `wallet_id` already determines which side the owner was on | D | M | backend |
+| 3c | ~~Stop storing the owner's own address in plaintext in `onchain_event`~~ — **done** (AUD-492): `from_address`/`to_address` collapsed into a single `counterparty` column by migration 0023, since `wallet_id` + `event_type` already determine which side the owner was on. The owner's address is *removed* rather than encrypted — it was pure redundancy — and the counterparty is left in plaintext deliberately: it is not owner-identifying, and it has to stay queryable. Followed by the 3d heap scrub on the stand | D | M | backend |
 | 3d | ~~Operator step after any encrypt-a-column migration: rewrite the table so the dropped plaintext actually leaves the heap~~ — **done**: [procedure](operations.md#scrubbing-plaintext-left-by-an-encrypt-a-column-migration), and applied to the staging stand's `wallet` table, which still held three plaintext addresses after 0022 | — | S | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
 
-Items 1–4 are closed. 3c is open and is the one remaining place where an
-owner-identifying value sits on disk in plaintext; item 5 is the founder's
-decision in §4, not an engineering task.
+**Every engineering item is now closed.** Items 1–4 and 3a–3d have shipped, and
+no owner-identifying value is left on disk in plaintext on a stand built from
+`main`: the wallet address and label are enveloped, the `onchain_event` owner
+column is gone, and the heap-scrub step has been applied where a migration
+dropped a plaintext column. The only open row is item 5, which is the founder's
+decision in §4 — a product trade, not an engineering task.
 
 **Correction (2026-10-10).** An earlier revision of this file called 3b "the
 last owner-identifying column still stored as plaintext", and migration 0022's
 docstring says the same. Both are wrong: `onchain_event.from_address` /
-`to_address` were never in scope and still hold the owner's address on every
-stand with event history — hence 3c. 3b took the address out of one table, not
+`to_address` were never in scope and held the owner's address on every stand
+with event history — hence 3c, since fixed. 3b took the address out of one table, not
 off the disk. Separately, dropping a plaintext column does not remove its bytes
 from the heap, so 3a/3b left recoverable plaintext behind on an already-deployed
 stand until the table was rewritten — measured and fixed, hence 3d. Evidence for
