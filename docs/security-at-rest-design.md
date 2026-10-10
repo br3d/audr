@@ -94,7 +94,7 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 
 | # | Action | Option | Effort | Owner |
 | --- | --- | --- | --- | --- |
-| 1 | Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance | A | S | infra |
+| 1 | ~~Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance~~ — **done**: `compose.encrypted-volume.yaml` overlay + [procedure](operations.md#encrypting-the-database-volume), linked from the README install step | A | S | infra |
 | 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
 | 3 | Extend envelope encryption to wallet labels/addresses + manual-asset notes, with an HMAC blind index for address lookup | D | M | backend |
 | 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |

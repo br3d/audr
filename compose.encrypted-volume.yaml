@@ -1,0 +1,32 @@
+# Put the database volume on an encrypted mount (LUKS or a ZFS native-encrypted
+# dataset). Optional overlay — compose.yaml alone stores the database in a
+# plain Docker named volume under Docker's data root.
+#
+# This is the recommended at-rest baseline for audr: wallet addresses, holdings
+# and the whole valuation history are plaintext at the column level, so the
+# volume is the layer that protects them. See docs/security-at-rest.md.
+#
+# Usage — in the audr directory's .env:
+#
+#     COMPOSE_FILE=compose.yaml:compose.encrypted-volume.yaml
+#     AUDR_DB_DATA_PATH=/mnt/encrypted/audr/db
+#
+# AUDR_DB_DATA_PATH must be a directory on a mounted encrypted filesystem, and
+# that filesystem must be unlocked before the stack starts. It is required
+# rather than defaulted: a missing value must fail the start, not silently fall
+# back to the unencrypted default volume.
+#
+# DECIDE THIS BEFORE THE FIRST `docker compose up`. Adding this overlay to an
+# install that already has a `db_data` volume is a SILENT NO-OP — Docker
+# ignores driver_opts for a volume name that already exists, so Postgres keeps
+# serving from the unencrypted volume while this file suggests otherwise. The
+# migration procedure, and the one command that tells the two apart, are in
+# docs/operations.md#encrypting-the-database-volume.
+
+volumes:
+  db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${AUDR_DB_DATA_PATH:?AUDR_DB_DATA_PATH is unset - set it to a directory on your encrypted mount, see docs/operations.md}
