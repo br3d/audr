@@ -503,3 +503,193 @@ query changes, dump/restore migration, per-table rollback). It is **not
 adopted**: with a local keyfile it adds nothing over LUKS against whole-machine
 theft, and the version that does add something needs Vault/KMIP. See the design
 doc for the full argument and the conditions that would reopen it.
+
+---
+
+# Verification: what the worker actually reads, and what an encrypt-a-column migration leaves on disk (AUD-389 item 5 prep)
+
+**Date**: 2026-10-10
+**Branch**: docs/aud389-worker-plaintext-audit
+**Author**: infraLead
+
+[security-at-rest-design.md](security-at-rest-design.md#4-the-open-product-decision)
+§4 option 3 ("two-tier keys") rested on one unmeasured claim — that the
+owner-identifying columns are ones *"the worker arguably does not need in
+plaintext"* — and listed "a careful audit of what the worker actually reads"
+as its outstanding cost. This is that audit. It also checks the adjacent
+assumption nobody had tested: that migrations 0021/0022 removed the plaintext
+they replaced from disk, rather than merely from the schema.
+
+Both answers came out against the shipped story, so they are recorded here
+rather than only in the design doc.
+
+## Scope
+
+1. Which worker job kinds need a plaintext `wallet.address`, by call graph.
+2. Whether `ALTER TABLE ... DROP COLUMN` after an in-place encrypting `UPDATE`
+   actually takes the plaintext off disk (throwaway container, with a control).
+3. The same question on the live staging stand, post-0022.
+4. Whether any *other* table still stores the owner's own address in plaintext.
+
+## 1. What the worker reads
+
+Call graph from `audr/jobs/__main__.py`, one row per job kind the worker
+dispatches:
+
+| Job kind | Needs plaintext `wallet.address`? | Why |
+| --- | --- | --- |
+| `BALANCE_SCAN` | **Yes, unavoidably** | The address *is* the RPC parameter: `jobs/__main__.py:271` reads `wallet.address`, which reaches `eth_getBalance` / `balanceOf` via `_read_and_record`. No ciphertext substitution exists — the chain only answers to the address. |
+| `DISCOVERY` | **Yes, unavoidably** | `list_wallets` → `wallet.address` for the RPC scan, and the per-run checkpoint is sub-keyed by address (`jobs/__main__.py:136-142`). |
+| `EVENT_INDEXER` | **Yes, unavoidably** | `jobs/event_indexer.py:362-369` decrypts every active wallet's address, then pads it into the `Transfer`/`Approval` log topic filter. The filter is the address. |
+| `QUOTE_REFRESH` | No | Reads `asset.token_address` only — token contract addresses, public by nature (`jobs/quotes.py:278-290`). |
+| `NEWS_REFRESH` | No | No wallet access at all. |
+| `ASSET_ICON_REFRESH` | No | Token addresses only. |
+| `VALIDATE_RPC` / `VALIDATE_QUOTES` | No | Provider credentials only. |
+
+Two incidental results worth keeping:
+
+- **AUD-490 already removed the avoidable reads.** `BALANCE_SCAN`'s
+  monitored-token lookup keys on `wallet_id`, and `publish_valuation_snapshot`
+  never decrypts an address — only the API-side
+  `get_latest_snapshot_lines` does (`portfolio/snapshot.py:221`). So what
+  remains is not laziness; it is the set where plaintext is load-bearing.
+- **`wallet.label` is the one owner-identifying field the worker reads and does
+  not use.** `wallets.service.list_wallets` decrypts label and address together
+  (`wallets/service.py:129-130`); no job touches the label.
+
+**Conclusion for §4 option 3:** the premise is false as written. Three of the
+worker's eight job kinds — and precisely the three that make audr a tracker
+rather than a viewer — cannot run without the plaintext address. A
+password-derived tier over the owner-identifying set therefore does not buy
+"background work keeps running"; it degrades to option 2 for everything except
+`wallet.label`, which is cosmetic. Option 3's remaining honest form is a tier
+that holds *only* the label, which is not worth a second key.
+
+## 2. `DROP COLUMN` does not take the plaintext off disk
+
+Throwaway `postgres:16-alpine` container, no audr code or data, removed
+afterwards. The second row is the control — a value whose column is *not*
+dropped, so a scan finding nothing would have to be explained:
+
+```sql
+CREATE TABLE w (id int primary key, address text, ct bytea);
+INSERT INTO w VALUES (1,'0xdeadbeefMARKERplaintextADDR1111111111aa', NULL);
+INSERT INTO w VALUES (2,'0xCONTROLnotdroppedMARKER22222222222222bb', NULL);
+UPDATE w SET ct = decode('aabbcc','hex');   -- mirrors 0021/0022's in-place encrypt
+ALTER TABLE w DROP COLUMN address;
+CHECKPOINT;
+```
+
+```console
+$ strings base/16384/16385 | grep -c MARKER
+4                      # both rows, two tuple versions each (pre- and post-UPDATE)
+$ grep -c MARKER pg_wal/000000010000000000000001
+2
+```
+
+`DROP COLUMN` is a catalog operation: it sets `attisdropped` and stops
+returning the column. The bytes stay in every existing tuple, and the
+superseded row versions left by the encrypting `UPDATE` keep a full plaintext
+copy until they are vacuumed away — which `VACUUM` alone does not guarantee to
+remove from the page image.
+
+Remediation, verified in the same container:
+
+```console
+$ psql -c "VACUUM FULL w;" -c "SELECT pg_relation_filepath('w');" -c "CHECKPOINT;"
+base/16384/16392       # new relfilenode: the table was rewritten
+$ strings base/16384/16392 | grep -c MARKER
+0
+$ ls base/16384/16385
+ls: No such file or directory          # old heap unlinked
+$ grep -rl MARKER $PGDATA
+/var/lib/postgresql/data/pg_wal/000000010000000000000001   # WAL still holds it
+```
+
+So a table rewrite (`VACUUM FULL`, or `pg_repack` where the exclusive lock is
+unacceptable) is what actually removes it from the heap. Two residues survive
+even that: the retained WAL segments, until they recycle, and the unlinked
+heap's blocks on the raw device, until something overwrites them. Neither is
+scrubbable from SQL — which is the argument for the volume-level baseline, not
+against the column work.
+
+Note `VACUUM FULL` cannot run inside a transaction block, so this cannot be
+appended to the Alembic migration that creates the need for it. It is an
+operator step: [operations.md](operations.md#scrubbing-plaintext-left-by-an-encrypt-a-column-migration).
+
+## 3. On the live staging stand, post-0022
+
+`192.168.1.228`, `audr-db-1`, after migration 0022 had been deployed and the
+plaintext `wallet.address` column dropped:
+
+```console
+$ psql -At -c "CHECKPOINT" -c "SELECT pg_relation_filepath('wallet')"
+base/16384/16611
+$ strings base/16384/16611 | grep -coE "0x[0-9a-fA-F]{40}"
+15
+$ strings ... | grep -oE "0x[0-9a-fA-F]{40}" | sort | uniq -c
+      4 0x9b061f…
+      1 0xab5801…
+     10 0xd8da6b…
+```
+
+Three distinct real addresses, in plaintext, in the `wallet` heap of a stand
+whose schema says addresses are encrypted. `pg_stat_user_tables` showed
+`n_dead_tup = 4` on a two-row table — the 0021/0022 `UPDATE`s' superseded
+versions. Fixed in place:
+
+```console
+$ psql -At -c "VACUUM (FULL, ANALYZE) wallet" -c "SELECT pg_relation_filepath('wallet')" -c "CHECKPOINT"
+base/16384/27720
+$ strings base/16384/27720 | grep -coE "0x[0-9a-fA-F]{40}"
+0
+$ ls base/16384/16611 && echo present || echo unlinked
+unlinked
+```
+
+The retained WAL still contains all three addresses (`grep -ac` hits in 5 of
+the 5 retained segments for one of them), as §2 predicts — and will keep
+containing them regardless, because of §4.
+
+Addresses are masked here deliberately; they are the founder's own wallets.
+The scan counted a 40-hex-digit pattern rather than a known value, so it is a
+discovery scan, not a confirmation of something already known. It is also
+specifically *not* the mistake recorded in
+[why grep is not evidence](#why-grep-over-postgres-files-and-dumps-is-not-evidence):
+a scan finding plaintext is positive evidence, whereas that section is about
+a scan finding *nothing* being worthless.
+
+## 4. `onchain_event` stores the owner's address in plaintext anyway
+
+`onchain_event.from_address` and `to_address` are plain `text`
+(`backend/migrations/versions/0004_onchain_events.py:38-39`), and
+`_insert_event` only writes a row when one of them *is* the tracked wallet:
+`transfer_out` requires `from_addr == wallet_norm`, `transfer_in` requires
+`to_addr == wallet_norm`, `approval` requires the owner topic to match
+(`jobs/event_indexer.py:299-327`). Every row therefore carries the owner's own
+address in plaintext, by construction.
+
+The staging stand has 12 such rows today, so this is live, not theoretical.
+
+This means **AUD-490 did not take the owner's addresses off disk** on any stand
+with event history — it took them out of one table. The design doc's framing of
+3b as "the last owner-identifying column still stored as plaintext" was wrong,
+and so was migration 0022's docstring repeating it. Backlog item 3c covers the
+fix; the cheap shape is to stop storing the owner's side at all, since
+`event_type` plus `wallet_id` already determines which side it was.
+
+## Cleanup
+
+The throwaway container was `docker rm -f`'d. On the stand, the only change was
+`VACUUM (FULL, ANALYZE) wallet` — a 2-row table, sub-second exclusive lock, no
+schema or data change. Nothing else on the host was touched.
+
+## Conclusion
+
+Option 3 as described in §4 is not available: the worker needs plaintext
+addresses for balance scanning, discovery and event indexing, so the realistic
+choice is option 1 or option 2. Separately, two things the at-rest work claimed
+were closed are not: an encrypting migration leaves the plaintext in the heap
+until the table is rewritten (fixed on the stand, documented as an operator
+step), and `onchain_event` still writes the owner's address in plaintext on
+every indexed event (backlog item 3c).
