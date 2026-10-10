@@ -101,7 +101,7 @@ localhost — see [operations.md](docs/operations.md#tls--https-proxy).
 - **No DeFi position decomposition** — LP, staking and lending positions are not
   broken out.
 - Addresses, balances and history are stored unencrypted at the column level;
-  provider credentials are encrypted. Threat model:
+  provider credentials and wallet labels are encrypted. Threat model:
   [security-at-rest.md](docs/security-at-rest.md).
 
 News, AI recommendations and address-security monitoring are *not* in this

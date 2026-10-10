@@ -121,7 +121,6 @@ async def test_no_alembic_version_returns_unknown(db_session: AsyncSession) -> N
     ("table", "column", "expected"),
     [
         ("quote_set", "status", "'pending'::text"),
-        ("wallet", "label", "''::text"),
         ("wallet", "status", "'active'::text"),
     ],
 )
@@ -129,7 +128,10 @@ async def test_string_defaults_are_not_double_quoted(
     db_session: AsyncSession, table: str, column: str, expected: str
 ) -> None:
     """The 0001 baseline double-escaped these defaults, so they stored the quote
-    characters and violated their own CHECK constraints. 0007 repairs them."""
+    characters and violated their own CHECK constraints. 0007 repairs them.
+
+    wallet.label is excluded here (AUD-488 replaced it with label_ciphertext,
+    which has no server default — every row must supply real ciphertext)."""
     row = await db_session.execute(
         text(
             "SELECT column_default FROM information_schema.columns"
@@ -143,10 +145,17 @@ async def test_string_defaults_are_not_double_quoted(
 async def test_defaulted_insert_satisfies_check_constraints(
     db_session: AsyncSession,
 ) -> None:
-    """Inserting while relying on the server defaults must not trip a CHECK."""
+    """Inserting while relying on the server defaults must not trip a CHECK.
+
+    wallet.label_ciphertext has no default (AUD-488) and is supplied
+    explicitly here; the default under test for wallet is status only.
+    """
     await db_session.execute(text("INSERT INTO quote_set (provider) VALUES ('coingecko')"))
     await db_session.execute(
-        text("INSERT INTO wallet (address) VALUES ('0x000000000000000000000000000000000000dead')")
+        text(
+            "INSERT INTO wallet (address, label_ciphertext)"
+            " VALUES ('0x000000000000000000000000000000000000dead', '')"
+        )
     )
 
     quote_status = await db_session.execute(
@@ -156,11 +165,10 @@ async def test_defaulted_insert_satisfies_check_constraints(
 
     wallet_row = await db_session.execute(
         text(
-            "SELECT label, status FROM wallet"
-            " WHERE address = '0x000000000000000000000000000000000000dead'"
+            "SELECT status FROM wallet WHERE address = '0x000000000000000000000000000000000000dead'"
         )
     )
-    assert wallet_row.one() == ("", "active")
+    assert wallet_row.scalar() == "active"
 
 
 # ---------------------------------------------------------------------------

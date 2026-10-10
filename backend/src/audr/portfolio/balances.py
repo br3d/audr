@@ -29,7 +29,9 @@ from audr.assets.constants import (
     normalise_token_address,
 )
 from audr.assets.models import Asset
+from audr.operations.init_key import get_master_key
 from audr.wallets.models import Wallet
+from audr.wallets.service import encrypt_label
 
 
 @dataclass
@@ -145,7 +147,14 @@ async def _ensure_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     row = result.first()
     if row is not None:
         return uuid.UUID(str(row[0]))
-    wallet = Wallet(id=uuid.uuid4(), address=address, label="", status="active")
+    wallet_id = uuid.uuid4()
+    key = await get_master_key(session)
+    wallet = Wallet(
+        id=wallet_id,
+        address=address,
+        label_ciphertext=encrypt_label("", wallet_id, key),
+        status="active",
+    )
     session.add(wallet)
     await session.flush()
     return wallet.id

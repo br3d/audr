@@ -20,13 +20,22 @@ under [key-loss behavior](operations.md#key-loss-behavior):
 | Master key | Random 32-byte AES-256 key, wrapped by the KEK | `key_state.wrapped_key` in Postgres |
 | Payloads | AES-256-GCM, versioned envelope `version(1) || nonce(12) || ct+tag` | `backend/src/audr/operations/crypto.py` |
 
-What it covers: **provider credentials only** — RPC URLs, quote-provider API
-keys, and the `allow_private_host` flag (`integration.encrypted_blob`, see
-`backend/src/audr/settings/integrations.py`).
+What it covers:
+
+- provider credentials — RPC URLs, quote-provider API keys, and the
+  `allow_private_host` flag (`integration.encrypted_blob`, see
+  `backend/src/audr/settings/integrations.py`)
+- `wallet.label` (`wallet.label_ciphertext`, AUD-488) — the only free-text,
+  owner-written column in the schema, and the only wallet column that is
+  never filtered, sorted or joined on, which is what makes it encryptable at
+  all (see §2 D below on why the others are not)
 
 What is **plaintext on disk**:
 
-- wallet addresses and labels (`wallet`)
+- wallet addresses (`wallet.address` — tracked separately as item 3b in
+  [security-at-rest-design.md](security-at-rest-design.md#3-where-that-leaves-the-backlog);
+  out of scope for AUD-488 because its `unique=True` constraint would have to
+  move to a blind index)
 - holdings, balances, valuation snapshots and lines (`valuation_snapshot`,
   `valuation_line`)
 - the full price/quote history (`quote_set`, `quote_observation`)

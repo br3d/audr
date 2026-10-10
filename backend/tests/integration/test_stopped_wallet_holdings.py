@@ -26,7 +26,7 @@ from audr.portfolio.snapshot import _get_current_holdings, publish_valuation_sna
 async def _insert_wallet(session: AsyncSession, address: str, *, status: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
     await session.execute(
-        sa.text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', :status)"),
+        sa.text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', :status)"),
         {"id": str(wallet_id), "addr": address.lower(), "status": status},
     )
     return wallet_id

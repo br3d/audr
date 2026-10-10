@@ -46,7 +46,7 @@ pytestmark = pytest.mark.integration
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wid = uuid.uuid4()
     await session.execute(
-        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wid), "addr": address.lower()},
     )
     return wid

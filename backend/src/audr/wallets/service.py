@@ -9,6 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from audr.operations.crypto import InvalidEnvelopeError, MissingKeyError, decrypt, encrypt
+from audr.operations.init_key import get_master_key
 from audr.portfolio.history import rematerialize_history_points
 from audr.wallets.models import Wallet
 
@@ -23,6 +25,62 @@ class WalletNotFoundError(Exception):
 
 class InvalidAddressError(Exception):
     """Raised when the provided Ethereum address is malformed."""
+
+
+# A label envelope's AAD is bound to its wallet id, so it cannot be moved onto
+# another row even by someone with write access to the table (AUD-488).
+_LABEL_AAD_PREFIX = "wallet:label:"
+
+# Returned in place of a label whose envelope fails to decrypt (wrong/rotated
+# key, or a corrupted row) rather than raising. See the key-loss rationale in
+# docs/operations.md#key-loss-behavior: a single unreadable label must not
+# turn GET /wallets into a 500 for every wallet in the list.
+LABEL_UNREADABLE_PLACEHOLDER = "[unreadable]"
+
+
+def _label_aad(wallet_id: uuid.UUID) -> bytes:
+    return f"{_LABEL_AAD_PREFIX}{wallet_id}".encode()
+
+
+def encrypt_label(label: str, wallet_id: uuid.UUID, key: bytes) -> bytes:
+    """Encrypt a wallet label. Exposed for callers that insert a Wallet row
+    directly (e.g. audr.portfolio.balances._ensure_wallet) rather than going
+    through add_wallet."""
+    return encrypt(label.encode("utf-8"), _label_aad(wallet_id), key)
+
+
+def decrypt_label(ciphertext: bytes, wallet_id: uuid.UUID, key: bytes | None) -> str:
+    if key is None:
+        return LABEL_UNREADABLE_PLACEHOLDER
+    try:
+        return decrypt(ciphertext, _label_aad(wallet_id), key).decode("utf-8")
+    except (InvalidEnvelopeError, UnicodeDecodeError):
+        return LABEL_UNREADABLE_PLACEHOLDER
+
+
+async def _master_key_or_none(session: AsyncSession) -> bytes | None:
+    """Best-effort master key lookup for the *read* path only.
+
+    Catches InvalidEnvelopeError too, not just MissingKeyError: if SECRET_KEY
+    cannot unwrap key_state itself (as opposed to one row's label envelope
+    being bad), every label degrades to the placeholder rather than 500ing
+    GET /wallets. Writes (add_wallet/set_label) call get_master_key directly
+    and let both errors propagate — a label cannot be *written* without a
+    usable key, so that failure stays loud.
+    """
+    try:
+        return await get_master_key(session)
+    except (MissingKeyError, InvalidEnvelopeError):
+        return None
+
+
+async def _attach_labels(session: AsyncSession, wallets: list[Wallet]) -> None:
+    """Decrypt and attach the transient ``.label`` attribute on each wallet."""
+    if not wallets:
+        return
+    key = await _master_key_or_none(session)
+    for wallet in wallets:
+        wallet.label = decrypt_label(wallet.label_ciphertext, wallet.id, key)
 
 
 def _normalize_address(address: str) -> str:
@@ -45,12 +103,15 @@ async def add_wallet(
 ) -> Wallet:
     """Add a new tracked wallet.  Raises WalletAlreadyExistsError on duplicate."""
     normalised = _normalize_address(address)
+    wallet_id = uuid.uuid4()
+    key = await get_master_key(session)
     wallet = Wallet(
-        id=uuid.uuid4(),
+        id=wallet_id,
         address=normalised,
-        label=label,
+        label_ciphertext=encrypt_label(label, wallet_id, key),
         status="active",
     )
+    wallet.label = label
     session.add(wallet)
     try:
         await session.flush()
@@ -69,6 +130,8 @@ async def set_label(
 ) -> Wallet:
     """Update the label of a wallet."""
     wallet = await _get_or_raise(session, wallet_id)
+    key = await get_master_key(session)
+    wallet.label_ciphertext = encrypt_label(label, wallet_id, key)
     wallet.label = label
     wallet.updated_at = datetime.now(tz=UTC)
     await session.flush()
@@ -231,7 +294,9 @@ async def delete_wallet(
 async def list_wallets(session: AsyncSession) -> list[Wallet]:
     """Return all tracked wallets, ordered by creation time."""
     result = await session.execute(sa.select(Wallet).order_by(Wallet.created_at))
-    return list(result.scalars())
+    wallets = list(result.scalars())
+    await _attach_labels(session, wallets)
+    return wallets
 
 
 async def list_wallets_page(
@@ -259,6 +324,7 @@ async def list_wallets_page(
     has_more = len(wallets) > limit
     wallets = wallets[:limit]
     next_cursor = wallets[-1].id if has_more and wallets else None
+    await _attach_labels(session, wallets)
     return wallets, next_cursor
 
 
@@ -268,11 +334,15 @@ async def get_wallet(
     wallet_id: uuid.UUID,
 ) -> Wallet | None:
     """Fetch a wallet by ID or return None."""
-    return await session.get(Wallet, wallet_id)
+    wallet = await session.get(Wallet, wallet_id)
+    if wallet is not None:
+        await _attach_labels(session, [wallet])
+    return wallet
 
 
 async def _get_or_raise(session: AsyncSession, wallet_id: uuid.UUID) -> Wallet:
     wallet = await session.get(Wallet, wallet_id)
     if wallet is None:
         raise WalletNotFoundError(str(wallet_id))
+    await _attach_labels(session, [wallet])
     return wallet
