@@ -78,6 +78,14 @@ setting.
 Addresses and scan schedules live in the web interface too; routine operation
 needs no file editing and no shell.
 
+**One thing is easier to decide now than later: whether the database volume sits
+on an encrypted disk.** Addresses, holdings and the value history are plaintext
+at the column level, so that volume is what protects them — and moving it onto
+an encrypted mount after Postgres has written to it is a dump-and-restore, not a
+setting. If this machine is a laptop, a NAS, or anything whose disk might outlive
+your control of it, set that up before the `up -d` above:
+[encrypting the database volume](docs/operations.md#encrypting-the-database-volume).
+
 If port 80 is taken, set `AUDR_HTTP_PORT=8080` in `.env`. Only HTTP is served, so
 put a TLS-terminating reverse proxy in front of it before exposing it beyond
 localhost — see [operations.md](docs/operations.md#tls--https-proxy).

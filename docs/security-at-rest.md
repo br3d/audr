@@ -54,6 +54,10 @@ This is the honest answer to "what is audr's SQLCipher". It is also what the
 PostgreSQL community itself recommends, community PostgreSQL having no
 transparent data encryption of its own.
 
+The operator procedure — the `compose.encrypted-volume.yaml` overlay, and why
+this is a first-time-setup decision rather than a toggle you flip later — is in
+[operations.md](operations.md#encrypting-the-database-volume).
+
 **Keep backups encrypted.** `scripts/backup.sh` pipes `pg_dump` through `age`
 (or `gpg --symmetric` when `age` is unavailable) and never writes a plaintext
 dump to disk; it generates a recipient key on first run so the first backup is

@@ -227,6 +227,85 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 
 ---
 
+## Encrypting the database volume
+
+Wallet addresses, holdings and the whole valuation history are plaintext at the
+column level, so **the volume is the layer that protects them**. Putting it on
+LUKS or a ZFS native-encrypted dataset is audr's recommended at-rest baseline;
+what that does and does not protect against is in
+[security-at-rest.md](security-at-rest.md#2-what-to-do-about-it).
+
+`compose.encrypted-volume.yaml` is the overlay that points `db_data` at a
+directory on an encrypted mount. Two variables in the audr directory's `.env`:
+
+```bash
+COMPOSE_FILE=compose.yaml:compose.encrypted-volume.yaml
+AUDR_DB_DATA_PATH=/mnt/encrypted/audr/db
+```
+
+Unlock and mount that filesystem **before** the stack starts — on an
+unattended reboot that means a keyfile or TPM2 unlock ordered before Docker,
+not an interactive passphrase. If `AUDR_DB_DATA_PATH` is unset, `docker
+compose` refuses to start rather than falling back to the unencrypted default.
+
+Point it at an **empty** directory. Postgres `initdb`s into it on first start
+and chowns it to the container's `postgres` user — uid 70, which usually maps
+to no host account, so `ls` on it as a normal host user returns *Permission
+denied*. That is expected, not a failure.
+
+### Decide before the first `docker compose up`
+
+Adding the overlay to an install that already has a `db_data` volume is a
+**silent no-op**. Docker applies `driver_opts` only when it creates a volume;
+for a name that already exists it reuses the existing one and ignores the
+options entirely — no error, no warning. Postgres keeps serving from the
+unencrypted volume, the encrypted directory stays empty, and nothing in the
+output says so.
+
+One command tells the two apart:
+
+```bash
+docker volume inspect audr_db_data --format '{{.Options}}'
+# map[device:/mnt/encrypted/audr/db o:bind type:none]   <- on the encrypted mount
+# map[]                                                 <- NOT encrypted, overlay ignored
+```
+
+Empty `map[]` with the overlay in `COMPOSE_FILE` means the move never happened.
+Migrating an existing install is a dump-and-restore, because the volume has to
+be destroyed for Docker to recreate it with the bind:
+
+```bash
+# 1. Back up, and verify you can read the backup back. This is the only copy
+#    of the data for the next few steps — see "Restoring" below.
+./scripts/backup.sh
+
+# 2. Destroy the unencrypted volume. Nothing after step 1 recovers it.
+docker compose down -v
+
+# 3. Add COMPOSE_FILE and AUDR_DB_DATA_PATH to .env as above, then start.
+#    Confirm the bind took effect before restoring anything into it.
+docker compose up -d
+docker volume inspect audr_db_data --format '{{.Options}}'
+
+# 4. Restore into the empty database. No --force: it has no tables yet.
+./scripts/restore.sh backups/audr-<timestamp>.sql.age
+```
+
+Keep `secrets/master_key.hex` exactly as it was across those steps — the
+restored `key_state` row is wrapped with it, and a replaced key leaves provider
+credentials unreadable.
+
+The old volume's bytes remain recoverable on the unencrypted disk until that
+region is overwritten; on an SSD, `docker volume rm` does not change that.
+Where the plaintext history mattering is the point, the honest fix is to
+encrypt the disk under Docker's data root as well, or to rebuild the host.
+
+`secrets/master_key.hex` is unaffected by any of this — it lives on the host
+filesystem, not in the volume, and volume encryption does nothing for it. See
+[key-loss behavior](#key-loss-behavior).
+
+---
+
 ## Backups
 
 audr has no proprietary indexer — a lost `db_data` volume with no backup means
