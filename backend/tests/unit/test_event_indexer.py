@@ -84,8 +84,8 @@ class TestApprovalTopic:
 @pytest.mark.unit
 class TestInsertEventApprovalClassification:
     """_insert_event must classify Approval logs as event_type='approval',
-    owner->from_address, spender->to_address, and skip logs where the wallet
-    is not the owner (AUD-300)."""
+    store the spender as counterparty_address (never the owner), and skip
+    logs where the wallet is not the owner (AUD-300, AUD-389 item 3c)."""
 
     async def test_approval_owned_by_wallet_is_inserted(self) -> None:
         session = _make_session_mock()
@@ -107,8 +107,7 @@ class TestInsertEventApprovalClassification:
         assert n == 1
         params = session.execute.call_args.args[1]
         assert params["event_type"] == "approval"
-        assert params["from_address"] == wallet_address
-        assert params["to_address"] == spender
+        assert params["counterparty_address"] == spender
         assert params["raw_amount"] == str(2**256 - 1)
 
     async def test_approval_not_owned_by_wallet_is_skipped(self) -> None:
@@ -158,6 +157,93 @@ class TestInsertEventApprovalClassification:
 
         assert n == 0
         session.execute.assert_not_called()
+
+
+@pytest.mark.unit
+class TestInsertEventCounterpartyAddress:
+    """_insert_event must never write the owner's own address into
+    counterparty_address — only the non-owner side, and NULL when there is
+    no non-owner side at all (AUD-389 item 3c)."""
+
+    async def test_transfer_out_counterparty_is_recipient(self) -> None:
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        recipient = "0x" + "22" * 20
+        log = _make_log(
+            topics=[
+                TRANSFER_TOPIC,
+                _pad_address_topic(wallet_address),
+                _pad_address_topic(recipient),
+            ],
+            data=hex(1_000),
+        )
+
+        await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        params = session.execute.call_args.args[1]
+        assert params["event_type"] == "transfer_out"
+        assert params["counterparty_address"] == recipient
+        assert "from_address" not in params
+        assert "to_address" not in params
+
+    async def test_transfer_in_counterparty_is_sender(self) -> None:
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        sender = "0x" + "22" * 20
+        log = _make_log(
+            topics=[
+                TRANSFER_TOPIC,
+                _pad_address_topic(sender),
+                _pad_address_topic(wallet_address),
+            ],
+            data=hex(1_000),
+        )
+
+        await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        params = session.execute.call_args.args[1]
+        assert params["event_type"] == "transfer_in"
+        assert params["counterparty_address"] == sender
+
+    async def test_self_transfer_counterparty_is_null(self) -> None:
+        """A wallet sending to itself (from == to == wallet) must not leak
+        the owner's own address back into counterparty_address."""
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        log = _make_log(
+            topics=[
+                TRANSFER_TOPIC,
+                _pad_address_topic(wallet_address),
+                _pad_address_topic(wallet_address),
+            ],
+            data=hex(1_000),
+        )
+
+        await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        params = session.execute.call_args.args[1]
+        assert params["event_type"] == "transfer_out"
+        assert params["counterparty_address"] is None
+
+    async def test_self_approval_counterparty_is_null(self) -> None:
+        """A wallet approving itself as spender must not leak the owner's
+        own address back into counterparty_address."""
+        session = _make_session_mock()
+        wallet_address = "0x" + "11" * 20
+        log = _make_log(
+            topics=[
+                APPROVAL_TOPIC,
+                _pad_address_topic(wallet_address),
+                _pad_address_topic(wallet_address),
+            ],
+            data=hex(1_000),
+        )
+
+        await _insert_event(session, log=log, wallet_id=_WALLET_ID, wallet_address=wallet_address)
+
+        params = session.execute.call_args.args[1]
+        assert params["event_type"] == "approval"
+        assert params["counterparty_address"] is None
 
 
 # ---------------------------------------------------------------------------

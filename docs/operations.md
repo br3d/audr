@@ -234,9 +234,9 @@ On restart, the `migrate` service re-runs Alembic migrations (idempotent) and th
 ## Encrypting the database volume
 
 Holdings and the whole valuation history are plaintext at the column level
-(wallet addresses and labels are not, as of AUD-488/AUD-490 — though
-`onchain_event.from_address`/`to_address` still record the tracked wallet's own
-address in the clear on every indexed event, see AUD-389 item 3c), so **the
+(wallet addresses and labels are not, as of AUD-488/AUD-490; `onchain_event`
+no longer stores the tracked wallet's own address at all, as of AUD-492 —
+only the third-party `counterparty_address`, see AUD-389 item 3c), so **the
 volume is the layer that protects them**. Putting it on LUKS or a ZFS
 native-encrypted dataset is audr's recommended at-rest baseline; what that
 does and does not protect against is in

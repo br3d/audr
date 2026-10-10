@@ -40,7 +40,6 @@ async def _seed_approval(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     wallet_id: str,
-    wallet_address: str,
     token_address: str,
     spender: str,
     amount: int,
@@ -54,10 +53,10 @@ async def _seed_approval(
                     """
                     INSERT INTO onchain_event
                       (wallet_id, tx_hash, block_number, log_index, event_type,
-                       token_address, from_address, to_address, raw_amount)
+                       token_address, counterparty_address, raw_amount)
                     VALUES
                       (:wallet_id, :tx_hash, :block_number, :log_index, 'approval',
-                       :token_address, :owner, :spender, :amount)
+                       :token_address, :spender, :amount)
                     """
                 ),
                 {
@@ -66,7 +65,6 @@ async def _seed_approval(
                     "block_number": block_number,
                     "log_index": log_index,
                     "token_address": token_address,
-                    "owner": wallet_address,
                     "spender": spender,
                     "amount": str(amount),
                 },
@@ -80,13 +78,11 @@ async def test_returns_latest_approval_per_spender(
 ) -> None:
     client, _csrf = seeded_client
     wallet_id = buterin_wallet["id"]
-    wallet_address = buterin_wallet["address"]
 
     # Older, smaller approval — should be superseded.
     await _seed_approval(
         db_session_factory,
         wallet_id=wallet_id,
-        wallet_address=wallet_address,
         token_address=WETH_ADDRESS,
         spender=_SPENDER_A,
         amount=1_000,
@@ -96,7 +92,6 @@ async def test_returns_latest_approval_per_spender(
     await _seed_approval(
         db_session_factory,
         wallet_id=wallet_id,
-        wallet_address=wallet_address,
         token_address=WETH_ADDRESS,
         spender=_SPENDER_A,
         amount=2**256 - 1,
@@ -121,12 +116,10 @@ async def test_small_allowance_is_not_flagged_unlimited(
 ) -> None:
     client, _csrf = seeded_client
     wallet_id = buterin_wallet["id"]
-    wallet_address = buterin_wallet["address"]
 
     await _seed_approval(
         db_session_factory,
         wallet_id=wallet_id,
-        wallet_address=wallet_address,
         token_address=WETH_ADDRESS,
         spender=_SPENDER_B,
         amount=5_000_000,
@@ -146,12 +139,10 @@ async def test_unlimited_only_filter(
 ) -> None:
     client, _csrf = seeded_client
     wallet_id = buterin_wallet["id"]
-    wallet_address = buterin_wallet["address"]
 
     await _seed_approval(
         db_session_factory,
         wallet_id=wallet_id,
-        wallet_address=wallet_address,
         token_address=WETH_ADDRESS,
         spender=_SPENDER_A,
         amount=2**256 - 1,
@@ -160,7 +151,6 @@ async def test_unlimited_only_filter(
     await _seed_approval(
         db_session_factory,
         wallet_id=wallet_id,
-        wallet_address=wallet_address,
         token_address=WETH_ADDRESS,
         spender=_SPENDER_B,
         amount=42,
