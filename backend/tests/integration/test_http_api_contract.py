@@ -680,14 +680,14 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status)"
+                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
                     " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_a, "addr": "0x" + "a" * 40},
             )
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status)"
+                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
                     " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_b, "addr": "0x" + "b" * 40},

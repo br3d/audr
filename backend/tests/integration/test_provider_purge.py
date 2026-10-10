@@ -53,7 +53,7 @@ async def _insert_wallet(
     """Insert a wallet row and return its UUID."""
     wallet_id = uuid.uuid4()
     await session.execute(
-        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": address.lower()},
     )
     return wallet_id

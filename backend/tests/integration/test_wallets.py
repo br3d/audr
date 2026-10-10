@@ -11,10 +11,13 @@ Covers:
   - POST /api/v1/wallets/{id}/reactivate: resume scanning
   - Address normalisation: mixed-case input stored as lowercase
   - CSRF enforcement on mutating endpoints
+  - Label encryption at rest (AUD-488): stored as an envelope, not
+    transplantable between wallets, API contract unchanged, key-loss behaviour
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from decimal import Decimal
@@ -584,3 +587,97 @@ async def test_delete_wallet_requires_csrf(http_client: httpx.AsyncClient) -> No
     r = await http_client.delete(f"{_WALLETS_URL}/{wallet_id}")
     assert r.status_code == 403
     assert (await http_client.get(f"{_WALLETS_URL}/{wallet_id}")).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Label encryption at rest (AUD-488)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_label_is_stored_as_ciphertext_not_plaintext(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """criterion 1: wallet.label is a crypto.py envelope, never the raw string."""
+    csrf = await _setup_and_get_csrf(http_client)
+    label = "Buterin's wallet"
+    created = (await _add_wallet(http_client, csrf, label=label)).json()
+
+    async with db_session_factory() as session:
+        row = (
+            await session.execute(
+                text("SELECT label_ciphertext FROM wallet WHERE id = :id"),
+                {"id": created["id"]},
+            )
+        ).first()
+
+    assert row is not None
+    stored = bytes(row[0])
+    assert label.encode("utf-8") not in stored
+    # version(1) + nonce(12) + tag(16) overhead beyond the plaintext length.
+    assert len(stored) == len(label.encode("utf-8")) + 29
+
+
+@pytest.mark.integration
+async def test_label_envelope_is_not_transplantable_between_wallets(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """criterion 2: AAD is bound to the wallet id, so swapping two wallets'
+    ciphertext at the storage layer must not swap their visible labels."""
+    csrf = await _setup_and_get_csrf(http_client)
+    wallet_a = (await _add_wallet(http_client, csrf, address=_ADDR_A, label="Alice")).json()
+    wallet_b = (await _add_wallet(http_client, csrf, address=_ADDR_B, label="Bob")).json()
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            ct_a = (
+                await session.execute(
+                    text("SELECT label_ciphertext FROM wallet WHERE id = :id"),
+                    {"id": wallet_a["id"]},
+                )
+            ).scalar_one()
+            ct_b = (
+                await session.execute(
+                    text("SELECT label_ciphertext FROM wallet WHERE id = :id"),
+                    {"id": wallet_b["id"]},
+                )
+            ).scalar_one()
+            # Simulate an attacker (or a bug) moving one row's envelope onto another.
+            await session.execute(
+                text("UPDATE wallet SET label_ciphertext = :ct WHERE id = :id"),
+                {"ct": ct_b, "id": wallet_a["id"]},
+            )
+            await session.execute(
+                text("UPDATE wallet SET label_ciphertext = :ct WHERE id = :id"),
+                {"ct": ct_a, "id": wallet_b["id"]},
+            )
+
+    r = await http_client.get(_WALLETS_URL, headers={"x-csrf-token": csrf})
+    assert r.status_code == 200
+    labels_by_id = {w["id"]: w["label"] for w in r.json()["items"]}
+    # Neither swapped envelope decrypts under the other wallet's AAD — both
+    # degrade to the placeholder rather than leaking the other wallet's label.
+    assert labels_by_id[wallet_a["id"]] == "[unreadable]"
+    assert labels_by_id[wallet_b["id"]] == "[unreadable]"
+
+
+@pytest.mark.integration
+async def test_wallet_list_survives_an_unreadable_label(
+    http_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """criterion 5: one wallet's unreadable envelope must not 500 the whole
+    list — see docs/operations.md#key-loss-behavior."""
+    csrf = await _setup_and_get_csrf(http_client)
+    await _add_wallet(http_client, csrf, address=_ADDR_A, label="readable while this key is live")
+
+    # Simulate the key used to encrypt this row no longer being the one in
+    # effect (rotated SECRET_KEY, or a corrupted envelope) — get_master_key
+    # now returns different bytes than encrypt_label used above.
+    monkeypatch.setenv("SECRET_KEY", os.urandom(32).hex())
+
+    r = await http_client.get(_WALLETS_URL, headers={"x-csrf-token": csrf})
+    assert r.status_code == 200
+    assert r.json()["items"][0]["label"] == "[unreadable]"

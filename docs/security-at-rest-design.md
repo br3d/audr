@@ -99,7 +99,7 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | --- | --- | --- | --- | --- |
 | 1 | ~~Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance~~ — **done**: `compose.encrypted-volume.yaml` overlay + [procedure](operations.md#encrypting-the-database-volume), linked from the README install step | A | S | infra |
 | 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
-| 3a | Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests) | D | S | backend |
+| 3a | ~~Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests)~~ — **done** (AUD-488): `wallet.label_ciphertext`, migration 0021, key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | S | backend |
 | 3b | Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup. Separate from 3a because it changes lookup and uniqueness semantics, not just storage | D | M | backend |
 | 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |

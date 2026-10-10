@@ -21,7 +21,7 @@ _TOKEN_ADDRESS = "0x" + "cc" * 20
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     result = await session.execute(
-        sa.text("INSERT INTO wallet (address) VALUES (:addr) RETURNING id"),
+        sa.text("INSERT INTO wallet (address, label_ciphertext) VALUES (:addr, '') RETURNING id"),
         {"addr": address},
     )
     return uuid.UUID(str(result.scalar_one()))

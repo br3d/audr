@@ -106,7 +106,7 @@ async def _seed_wallet(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label, status)"
+                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
                     " VALUES (:id, :addr, '', 'active')"
                 ),
                 {"id": wallet_id, "addr": address.lower()},

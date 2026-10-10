@@ -189,10 +189,13 @@ async def _generate_wallets(session: AsyncSession) -> list[uuid.UUID]:
         wid = uuid.uuid4()
         ids.append(wid)
         address = f"0x{i:040x}"
-        rows.append({"id": str(wid), "addr": address, "label": f"wallet-{i}"})
+        # Not a valid envelope, just distinct bytes per row — this fixture
+        # never reads the label back through decryption, only through
+        # service-layer round trips tested elsewhere (AUD-488).
+        rows.append({"id": str(wid), "addr": address, "label": f"wallet-{i}".encode()})
     await _batch_insert(
         session,
-        "INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, :label, 'active')",
+        "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, :label, 'active')",
         rows,
     )
     return ids

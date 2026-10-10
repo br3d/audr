@@ -125,7 +125,7 @@ async def _insert_wallet(
     async with db_session_factory() as session:
         async with session.begin():
             await session.execute(
-                text("INSERT INTO wallet (id, address) VALUES (:id, :addr)"),
+                text("INSERT INTO wallet (id, address, label_ciphertext) VALUES (:id, :addr, '')"),
                 {"id": wallet_id, "addr": address.lower()},
             )
     return wallet_id

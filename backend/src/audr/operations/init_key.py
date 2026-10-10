@@ -108,6 +108,35 @@ async def rotate_kek(session: AsyncSession, old_kek: bytes, new_kek: bytes) -> N
     await session.flush()
 
 
+def ensure_master_key_sync(connection: object) -> bytes:
+    """Synchronous counterpart to init_key + get_master_key, for Alembic migrations.
+
+    migrations/env.py runs upgrade() on a sync-wrapped connection (there is no
+    running event loop to await the async session helpers above from inside
+    it), so a migration that needs to encrypt pre-existing rows under the
+    master key goes through this instead. Same idempotent bootstrap: generate
+    and store the key if key_state is empty, otherwise unwrap and return the
+    existing one. Raises MissingKeyError if SECRET_KEY is absent/invalid.
+    """
+    kek = _load_kek()
+    row = connection.execute(
+        text("SELECT wrapped_key FROM key_state WHERE name = :name"),
+        {"name": _KEY_STATE_ROW},
+    ).first()
+    if row is None:
+        raw_key = os.urandom(32)
+        wrapped = encrypt(raw_key, b"key_state:master_key", kek)
+        connection.execute(
+            text(
+                "INSERT INTO key_state (name, wrapped_key) VALUES (:name, :blob)"
+                " ON CONFLICT (name) DO NOTHING"
+            ),
+            {"name": _KEY_STATE_ROW, "blob": wrapped},
+        )
+        return raw_key
+    return decrypt(row[0], b"key_state:master_key", kek)
+
+
 async def _load_raw(session: AsyncSession) -> bytes | None:
     result = await session.execute(
         text("SELECT wrapped_key FROM key_state WHERE name = :name"),

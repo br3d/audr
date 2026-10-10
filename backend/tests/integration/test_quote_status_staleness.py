@@ -38,7 +38,7 @@ async def _insert_wallet_and_asset(session: AsyncSession) -> tuple[uuid.UUID, uu
     wallet_id = uuid.uuid4()
     asset_id = uuid.uuid4()
     await session.execute(
-        text("INSERT INTO wallet (id, address, label, status) VALUES (:id, :addr, '', 'active')"),
+        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
         {"id": str(wallet_id), "addr": "0x" + "1a" * 20},
     )
     await session.execute(
