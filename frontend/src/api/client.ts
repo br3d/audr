@@ -715,8 +715,10 @@ export interface OnchainEvent {
   log_index: number
   event_type: OnchainEventType
   token_address: string
-  from_address: string
-  to_address: string
+  // The non-owner side of the event; null for a self-transfer, where the
+  // owner is both sides (AUD-389 item 3c — the owner's own address is
+  // never stored).
+  counterparty_address: string | null
   // Raw uint256 as a decimal string — never a float
   raw_amount: string
   indexed_at: string
@@ -732,7 +734,9 @@ export interface EventsResponse {
 export interface Allowance {
   wallet_id: string
   token_address: string
-  spender_address: string
+  // Null only for the degenerate case of a wallet approving itself as
+  // spender (AUD-389 item 3c).
+  spender_address: string | null
   // Raw uint256 as a decimal string — never a float
   raw_amount: string
   is_unlimited: boolean

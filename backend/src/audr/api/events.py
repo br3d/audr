@@ -54,8 +54,9 @@ class OnchainEventResponse(BaseModel):
     # 'transfer_in' | 'transfer_out'
     event_type: str
     token_address: str
-    from_address: str
-    to_address: str
+    # The non-owner side of the event; NULL for a self-transfer (owner is
+    # both sides) so the owner's own address is never stored (AUD-389 3c).
+    counterparty_address: str | None
     # Raw uint256 as decimal string — never float
     raw_amount: str
     indexed_at: str
@@ -124,7 +125,7 @@ async def get_events(
         sa.text(
             f"""
             SELECT id, wallet_id, tx_hash, block_number, log_index,
-                   event_type, token_address, from_address, to_address,
+                   event_type, token_address, counterparty_address,
                    raw_amount, indexed_at
             FROM onchain_event
             {where}
@@ -144,10 +145,9 @@ async def get_events(
             log_index=int(row[4]),
             event_type=str(row[5]),
             token_address=str(row[6]),
-            from_address=str(row[7]),
-            to_address=str(row[8]),
-            raw_amount=str(row[9]),
-            indexed_at=row[10].isoformat(),
+            counterparty_address=str(row[7]) if row[7] is not None else None,
+            raw_amount=str(row[8]),
+            indexed_at=row[9].isoformat(),
         )
         for row in rows.fetchall()
     ]
@@ -168,7 +168,9 @@ async def get_events(
 class AllowanceResponse(BaseModel):
     wallet_id: str
     token_address: str
-    spender_address: str
+    # NULL only for the degenerate case of a wallet approving itself as
+    # spender — there is no third-party address to show (AUD-389 3c).
+    spender_address: str | None
     # Raw uint256 as decimal string — never float
     raw_amount: str
     is_unlimited: bool
@@ -222,16 +224,18 @@ async def get_allowances(
         params["wallet_id"] = str(wallet_uuid)
     where = "WHERE " + " AND ".join(conditions)
 
-    # Latest Approval per (wallet, token, spender); to_address holds the
-    # spender for approval-typed rows (see jobs/event_indexer.py). `where` is a
+    # Latest Approval per (wallet, token, spender); counterparty_address holds
+    # the spender for approval-typed rows (see jobs/event_indexer.py) — NULL
+    # only for the degenerate self-approval case (owner == spender), which a
+    # spender-keyed view has no address to show for anyway. `where` is a
     # fixed vocabulary of ":param" fragments; values are bound, never interpolated.
     latest_cte = f"""
-        SELECT DISTINCT ON (wallet_id, token_address, to_address)
-            wallet_id, token_address, to_address AS spender_address,
+        SELECT DISTINCT ON (wallet_id, token_address, counterparty_address)
+            wallet_id, token_address, counterparty_address AS spender_address,
             raw_amount, block_number, tx_hash, indexed_at
         FROM onchain_event
         {where}
-        ORDER BY wallet_id, token_address, to_address, block_number DESC, log_index DESC
+        ORDER BY wallet_id, token_address, counterparty_address, block_number DESC, log_index DESC
     """  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
 
     having = "WHERE raw_amount >= :threshold" if unlimited_only else ""
@@ -260,7 +264,7 @@ async def get_allowances(
         AllowanceResponse(
             wallet_id=str(row[0]),
             token_address=str(row[1]),
-            spender_address=str(row[2]),
+            spender_address=str(row[2]) if row[2] is not None else None,
             raw_amount=str(row[3]),
             is_unlimited=int(row[3]) >= _UNLIMITED_ALLOWANCE_THRESHOLD,
             observed_at_block=int(row[4]),

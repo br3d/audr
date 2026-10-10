@@ -127,10 +127,11 @@ function EventRow({ event, walletLabel }: { event: OnchainEvent; walletLabel: st
         <span title={event.token_address}>{shorten(event.token_address)}</span>
       </td>
       <td className="td-mono">
-        <span title={event.from_address}>{shorten(event.from_address)}</span>
-      </td>
-      <td className="td-mono">
-        <span title={event.to_address}>{shorten(event.to_address)}</span>
+        {event.counterparty_address ? (
+          <span title={event.counterparty_address}>{shorten(event.counterparty_address)}</span>
+        ) : (
+          <span className="text-muted">self</span>
+        )}
       </td>
       <td className="td-mono">
         {formatRawAmount(event.raw_amount)} <span className="text-muted">raw</span>
@@ -159,14 +160,18 @@ function AllowanceRow({ allowance, walletLabel }: { allowance: Allowance; wallet
         <span title={allowance.token_address}>{shorten(allowance.token_address)}</span>
       </td>
       <td className="td-mono">
-        <a
-          href={etherscanAddressUrl(allowance.spender_address)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={allowance.spender_address}
-        >
-          {shorten(allowance.spender_address)}
-        </a>
+        {allowance.spender_address ? (
+          <a
+            href={etherscanAddressUrl(allowance.spender_address)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={allowance.spender_address}
+          >
+            {shorten(allowance.spender_address)}
+          </a>
+        ) : (
+          <span className="text-muted">self</span>
+        )}
       </td>
       <td>
         <span className="td-mono">
@@ -337,8 +342,7 @@ export default function EventsPage() {
                     <th scope="col">Dir</th>
                     <th scope="col">Wallet</th>
                     <th scope="col">Token</th>
-                    <th scope="col">From</th>
-                    <th scope="col">To</th>
+                    <th scope="col">Counterparty</th>
                     <th scope="col">Amount</th>
                     <th scope="col">Tx</th>
                     <th scope="col">Block</th>

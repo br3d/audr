@@ -49,8 +49,7 @@ const EVENT_1: OnchainEvent = {
   log_index: 0,
   event_type: 'transfer_in',
   token_address: '0x2222222222222222222222222222222222222222',
-  from_address: '0x3333333333333333333333333333333333333333',
-  to_address: '0xabcdef1234567890abcdef1234567890abcdef12',
+  counterparty_address: '0x3333333333333333333333333333333333333333',
   raw_amount: '1000000000000000000',
   indexed_at: '2026-06-01T00:00:00Z',
 }

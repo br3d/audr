@@ -327,15 +327,26 @@ async def _insert_event(
         # Shouldn't happen given our topic filter, but be defensive
         return 0
 
+    # The owner side is redundant (wallet_id + event_type already determine
+    # it) and is never stored (AUD-389 item 3c) — only the counterparty goes
+    # on disk. transfer_in's owner is the `to` side, so its counterparty is
+    # `from`; transfer_out and approval's owner is `from`, so their
+    # counterparty is `to` (the approval spender). A self-transfer or
+    # self-approval would otherwise put the owner's own address right back
+    # into counterparty_address, so that case is stored as NULL instead.
+    counterparty_addr = from_addr if event_type == "transfer_in" else to_addr
+    if counterparty_addr == wallet_norm:
+        counterparty_addr = None
+
     result = await session.execute(
         sa.text(
             """
             INSERT INTO onchain_event
               (wallet_id, tx_hash, block_number, log_index, event_type,
-               token_address, from_address, to_address, raw_amount)
+               token_address, counterparty_address, raw_amount)
             VALUES
               (:wallet_id, :tx_hash, :block_number, :log_index, :event_type,
-               :token_address, :from_address, :to_address, :raw_amount)
+               :token_address, :counterparty_address, :raw_amount)
             ON CONFLICT (tx_hash, log_index) DO NOTHING
             """
         ),
@@ -346,8 +357,7 @@ async def _insert_event(
             "log_index": log.log_index,
             "event_type": event_type,
             "token_address": log.address,
-            "from_address": from_addr,
-            "to_address": to_addr,
+            "counterparty_address": counterparty_addr,
             "raw_amount": str(amount),
         },
     )
