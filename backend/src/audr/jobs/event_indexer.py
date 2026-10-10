@@ -33,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.config import get_settings
 from audr.jobs.policy import get_shared_rpc_rate_limiter
 from audr.operations.init_key import get_master_key
-from audr.wallets.service import decrypt_address
 from audr.providers.rpc_reader import (
     APPROVAL_TOPIC,
     TRANSFER_TOPIC,
@@ -46,6 +45,7 @@ from audr.providers.rpc_reader import (
     decode_transfer_amount,
 )
 from audr.providers.rpc_targets import RpcUrlError, get_rpc_endpoints
+from audr.wallets.service import decrypt_address
 
 logger = logging.getLogger(__name__)
 

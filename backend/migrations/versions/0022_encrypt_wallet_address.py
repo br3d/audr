@@ -54,9 +54,9 @@ _BIDX_HKDF_INFO = b"audr:wallet:address_bidx:v1"
 
 
 def _bidx(address: str, master_key: bytes) -> bytes:
-    subkey = HKDF(
-        algorithm=hashes.SHA256(), length=32, salt=None, info=_BIDX_HKDF_INFO
-    ).derive(master_key)
+    subkey = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_BIDX_HKDF_INFO).derive(
+        master_key
+    )
     return hmac.new(subkey, address.encode("utf-8"), hashlib.sha256).digest()
 
 
@@ -83,9 +83,7 @@ def upgrade() -> None:
                 },
             )
 
-    op.alter_column(
-        "wallet", "address_ciphertext", existing_type=sa.LargeBinary(), nullable=False
-    )
+    op.alter_column("wallet", "address_ciphertext", existing_type=sa.LargeBinary(), nullable=False)
     op.alter_column("wallet", "address_bidx", existing_type=sa.LargeBinary(), nullable=False)
     op.drop_constraint("uq_wallet_address", "wallet", type_="unique")
     # The CHECK tying plaintext address to its lowercased form goes with the
@@ -103,9 +101,7 @@ def downgrade() -> None:
     # column is unique and a fixed placeholder would collide across rows.
     op.drop_constraint("uq_wallet_address_bidx", "wallet", type_="unique")
     op.add_column("wallet", sa.Column("address", sa.Text(), nullable=True))
-    op.execute(
-        "UPDATE wallet SET address = '0x' || lpad(replace(id::text, '-', ''), 40, '0')"
-    )
+    op.execute("UPDATE wallet SET address = '0x' || lpad(replace(id::text, '-', ''), 40, '0')")
     op.alter_column("wallet", "address", existing_type=sa.Text(), nullable=False)
     op.create_unique_constraint("uq_wallet_address", "wallet", ["address"])
     op.drop_column("wallet", "address_ciphertext")

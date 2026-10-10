@@ -125,9 +125,7 @@ async def test_upgrade_0022_encrypts_preexisting_plaintext_addresses(
             )
             row = (
                 await conn.execute(
-                    sa.text(
-                        "SELECT address_ciphertext, address_bidx FROM wallet WHERE id = :id"
-                    ),
+                    sa.text("SELECT address_ciphertext, address_bidx FROM wallet WHERE id = :id"),
                     {"id": wallet_id},
                 )
             ).one()
@@ -181,7 +179,9 @@ async def test_upgrade_0022_rejects_duplicate_address_via_bidx(
 
         scratch_engine = create_async_engine(scratch_url)
         async with scratch_engine.connect() as conn:
-            await conn.execute(sa.text("ALTER TABLE wallet DROP CONSTRAINT ck_wallet_ck_wallet_address_lower"))
+            await conn.execute(
+                sa.text("ALTER TABLE wallet DROP CONSTRAINT ck_wallet_ck_wallet_address_lower")
+            )
             await conn.execute(
                 sa.text(
                     "INSERT INTO wallet (id, address, label_ciphertext, status)"

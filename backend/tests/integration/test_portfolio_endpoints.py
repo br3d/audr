@@ -142,7 +142,8 @@ async def _seed_wallet(
             cols = await wallet_address_columns(session, wallet_id, address)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    "INSERT INTO wallet"
+                    " (id, address_ciphertext, address_bidx, label_ciphertext, status)"
                     " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
                 {

@@ -682,7 +682,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
             cols_a = await wallet_address_columns(session, uuid.UUID(wallet_a), "0x" + "a" * 40)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    "INSERT INTO wallet"
+                    " (id, address_ciphertext, address_bidx, label_ciphertext, status)"
                     " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
                 {
@@ -694,7 +695,8 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
             cols_b = await wallet_address_columns(session, uuid.UUID(wallet_b), "0x" + "b" * 40)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    "INSERT INTO wallet"
+                    " (id, address_ciphertext, address_bidx, label_ciphertext, status)"
                     " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
                 {

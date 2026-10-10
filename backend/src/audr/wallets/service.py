@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.operations.crypto import InvalidEnvelopeError, MissingKeyError, decrypt, encrypt
+from audr.operations.crypto import InvalidEnvelopeError, decrypt, encrypt
 from audr.operations.init_key import get_master_key
 from audr.portfolio.history import rematerialize_history_points
 from audr.wallets.models import Wallet

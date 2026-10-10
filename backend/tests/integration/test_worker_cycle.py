@@ -274,4 +274,6 @@ async def test_get_latest_snapshot_lines_issues_constant_queries_regardless_of_w
 
     assert len(lines) == 3
     assert {line["wallet_address"] for line in lines} == {"0x" + f"{i:02x}" * 20 for i in range(3)}
-    assert query_count == 2, f"expected exactly 2 queries (main fetch + master key), issued {query_count}"
+    assert query_count == 2, (
+        f"expected exactly 2 queries (main fetch + master key), issued {query_count}"
+    )

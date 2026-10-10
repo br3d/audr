@@ -205,9 +205,7 @@ async def handle_balance_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
         " JOIN asset a ON a.id = mp.asset_id"
         " WHERE mp.wallet_id IN :wallet_ids"
     ).bindparams(sa.bindparam("wallet_ids", expanding=True))
-    rows = await session.execute(
-        monitor_stmt, {"wallet_ids": [str(w.id) for w in active]}
-    )
+    rows = await session.execute(monitor_stmt, {"wallet_ids": [str(w.id) for w in active]})
     monitored: dict[uuid.UUID, list[str]] = {}
     for row_wallet_id, token_addr in rows:
         monitored.setdefault(uuid.UUID(str(row_wallet_id)), []).append(token_addr)
