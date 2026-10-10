@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator
 from unittest.mock import MagicMock, patch
 
@@ -9,8 +10,10 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from audr.operations.init_key import init_key
 from audr.operations.migrations import _get_head_revision, check_migration_readiness
 from audr.operations.reset_password import ResetPasswordError, reset_password
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
@@ -48,17 +51,13 @@ async def _reseed_owner_and_key_state(
     async with db_session_factory() as session:
         await setup_owner(session, _OWNER_PASSWORD)
 
-    # Seed a dummy key_state row so reset_password tests can assert it survived.
+    # Seed a real, decryptable key_state row (reset_password tests only assert
+    # it survives — the content never mattered — but AUD-490 added a wallet
+    # INSERT in this module, via wallet_address_columns, that now needs a
+    # usable master key, so a dummy undecryptable blob is no longer safe here).
     async with db_session_factory() as session:
         async with session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO key_state (name, wrapped_key)"
-                    " VALUES ('master_key', :blob)"
-                    " ON CONFLICT (name) DO NOTHING"
-                ),
-                {"blob": b"\xab" * 64},
-            )
+            await init_key(session)
 
     yield
 
@@ -148,14 +147,26 @@ async def test_defaulted_insert_satisfies_check_constraints(
     """Inserting while relying on the server defaults must not trip a CHECK.
 
     wallet.label_ciphertext has no default (AUD-488) and is supplied
-    explicitly here; the default under test for wallet is status only.
+    explicitly here; wallet.address_ciphertext/address_bidx have no default
+    either (AUD-490) and are supplied via the real encrypt/bidx helpers so
+    the INSERT matches what `add_wallet` would produce. The default under
+    test for wallet is status only.
     """
     await db_session.execute(text("INSERT INTO quote_set (provider) VALUES ('coingecko')"))
+    wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(
+        db_session, wallet_id, "0x000000000000000000000000000000000000dead"
+    )
     await db_session.execute(
         text(
-            "INSERT INTO wallet (address, label_ciphertext)"
-            " VALUES ('0x000000000000000000000000000000000000dead', '')"
-        )
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
 
     quote_status = await db_session.execute(
@@ -164,9 +175,8 @@ async def test_defaulted_insert_satisfies_check_constraints(
     assert quote_status.scalar() == "pending"
 
     wallet_row = await db_session.execute(
-        text(
-            "SELECT status FROM wallet WHERE address = '0x000000000000000000000000000000000000dead'"
-        )
+        text("SELECT status FROM wallet WHERE id = :id"),
+        {"id": str(wallet_id)},
     )
     assert wallet_row.scalar() == "active"
 

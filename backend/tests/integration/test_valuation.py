@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.money import format_decimal, quantity_to_usd, raw_to_quantity
 from audr.portfolio.snapshot import _compute_quality, publish_valuation_snapshot
+from tests.helpers import wallet_address_columns
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,11 +58,17 @@ async def _insert_asset(
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
         ),
-        {"id": str(wallet_id), "addr": address.lower()},
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wallet_id
 

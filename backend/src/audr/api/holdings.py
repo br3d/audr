@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_session
@@ -17,7 +16,7 @@ from audr.db import get_db
 from audr.portfolio.balances import get_holdings
 from audr.portfolio.money import format_decimal, raw_to_quantity
 from audr.portfolio.snapshot import get_latest_snapshot_lines
-from audr.wallets.models import Wallet
+from audr.wallets.service import get_wallet
 
 router = APIRouter(prefix="/api/v1")
 
@@ -58,11 +57,10 @@ async def get_wallet_holdings(
     _session: Annotated[Session, Depends(_require_session)],
     db: AsyncSession = Depends(get_db),
 ) -> WalletHoldingsResponse:
-    result = await db.execute(select(Wallet.address).where(Wallet.id == wallet_id))
-    row = result.first()
-    if row is None:
+    wallet = await get_wallet(db, wallet_id=wallet_id)
+    if wallet is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Wallet not found")
-    address = row[0]
+    address = wallet.address
 
     observations = await get_holdings(db, wallet_address=address)
     return WalletHoldingsResponse(

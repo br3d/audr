@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.jobs import __main__ as worker_main
 from audr.jobs.store import JobKind, enqueue_job
-from audr.wallets.service import add_wallet, stop_wallet
+from audr.operations.init_key import get_master_key
+from audr.wallets.service import add_wallet, decrypt_address, stop_wallet
 
 _WALLET_A = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
 _WALLET_B = "0x00000000219ab540356cbb839cbe05303d7705fa"
@@ -118,19 +119,17 @@ async def test_handle_balance_scan_scoped_to_one_wallet(
     )
 
     async with db_session_factory() as session:
+        key = await get_master_key(session)
         rows = (
-            (
-                await session.execute(
-                    text(
-                        "SELECT w.address FROM balance_observation bo"
-                        " JOIN wallet w ON w.id = bo.wallet_id"
-                    )
+            await session.execute(
+                text(
+                    "SELECT w.id, w.address_ciphertext FROM balance_observation bo"
+                    " JOIN wallet w ON w.id = bo.wallet_id"
                 )
             )
-            .scalars()
-            .all()
-        )
-    assert set(rows) == {_WALLET_A}
+        ).all()
+        addresses = {decrypt_address(ciphertext, wallet_id, key) for wallet_id, ciphertext in rows}
+    assert addresses == {_WALLET_A}
 
 
 @pytest.mark.integration

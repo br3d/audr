@@ -19,6 +19,7 @@ Environment variable: TEST_DATABASE_URL (default: postgresql+psycopg://audr:audr
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -189,13 +190,22 @@ async def _generate_wallets(session: AsyncSession) -> list[uuid.UUID]:
         wid = uuid.uuid4()
         ids.append(wid)
         address = f"0x{i:040x}"
-        # Not a valid envelope, just distinct bytes per row — this fixture
-        # never reads the label back through decryption, only through
-        # service-layer round trips tested elsewhere (AUD-488).
-        rows.append({"id": str(wid), "addr": address, "label": f"wallet-{i}".encode()})
+        # Not valid envelopes, just distinct bytes per row — this fixture
+        # never reads the label or address back through decryption, only
+        # through service-layer round trips tested elsewhere (AUD-488,
+        # AUD-490). address_bidx just needs to be unique per row.
+        rows.append(
+            {
+                "id": str(wid),
+                "addr_ct": f"wallet-{i}".encode(),
+                "addr_bidx": hashlib.sha256(address.encode()).digest(),
+                "label": f"wallet-{i}".encode(),
+            }
+        )
     await _batch_insert(
         session,
-        "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, :label, 'active')",
+        "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+        " VALUES (:id, :addr_ct, :addr_bidx, :label, 'active')",
         rows,
     )
     return ids

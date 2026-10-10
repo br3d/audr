@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from audr.portfolio.history import materialize_history_point
 from audr.portfolio.history_query import query_history
 from audr.portfolio.snapshot import get_latest_snapshot_lines, publish_valuation_snapshot
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.anyio
 
@@ -29,11 +30,17 @@ pytestmark = pytest.mark.anyio
 
 async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wid = uuid.uuid4()
+    cols = await wallet_address_columns(session, wid, address)
     await session.execute(
         sa.text(
-            "INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, 'test', 'active')"
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, 'test', 'active')"
         ),
-        {"id": str(wid), "addr": address.lower()},
+        {
+            "id": str(wid),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wid
 
@@ -226,11 +233,18 @@ async def test_handle_valuation_is_idempotent_on_same_snapshot(
 
 
 @pytest.mark.integration
-async def test_get_latest_snapshot_lines_issues_one_query_regardless_of_wallet_count(
+async def test_get_latest_snapshot_lines_issues_constant_queries_regardless_of_wallet_count(
     db_session: AsyncSession,
     db_engine: AsyncEngine,
 ) -> None:
-    """No N+1: the wallet address is joined in, not fetched per line (AUD-322)."""
+    """No N+1: the wallet address is joined in, not fetched per line (AUD-322).
+
+    Was pinned to exactly 1 query before AUD-490. wallet.address is now
+    ciphertext, decrypted in Python after the fetch, which needs one extra
+    fixed query to load the master key from key_state — so this now expects
+    exactly 2, still independent of how many wallets/lines come back (the
+    guarantee this test exists to pin), not N+1 per line.
+    """
     wallets = []
     for i in range(3):
         wallet_id = await _insert_wallet(db_session, "0x" + f"{i:02x}" * 20)
@@ -260,4 +274,4 @@ async def test_get_latest_snapshot_lines_issues_one_query_regardless_of_wallet_c
 
     assert len(lines) == 3
     assert {line["wallet_address"] for line in lines} == {"0x" + f"{i:02x}" * 20 for i in range(3)}
-    assert query_count == 1, f"expected exactly 1 query, issued {query_count}"
+    assert query_count == 2, f"expected exactly 2 queries (main fetch + master key), issued {query_count}"

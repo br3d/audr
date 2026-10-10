@@ -32,6 +32,7 @@ from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import JobKind, JobRunStatus, claim_job
 from audr.operations.purge import execute_purge, preview_purge
 from audr.settings.integrations import get_integration
+from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
 
@@ -52,9 +53,17 @@ async def _insert_wallet(
 ) -> uuid.UUID:
     """Insert a wallet row and return its UUID."""
     wallet_id = uuid.uuid4()
+    cols = await wallet_address_columns(session, wallet_id, address)
     await session.execute(
-        text("INSERT INTO wallet (id, address, label_ciphertext, status) VALUES (:id, :addr, '', 'active')"),
-        {"id": str(wallet_id), "addr": address.lower()},
+        text(
+            "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+            " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
+        ),
+        {
+            "id": str(wallet_id),
+            "addr_ct": cols["address_ciphertext"],
+            "addr_bidx": cols["address_bidx"],
+        },
     )
     return wallet_id
 

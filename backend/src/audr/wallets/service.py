@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +35,16 @@ class InvalidAddressError(Exception):
 # another row even by someone with write access to the table (AUD-488).
 _LABEL_AAD_PREFIX = "wallet:label:"
 
+# Same idea for the address envelope, with a distinct prefix so an envelope
+# cannot be moved between the two columns either (AUD-490).
+_ADDRESS_AAD_PREFIX = "wallet:address:"
+
+# Fixed HKDF info label for deriving the blind-index subkey from the master
+# key. A distinct subkey (not the raw master key) is used for the HMAC blind
+# index so that compromising the index key alone does not help decrypt
+# address/label envelopes, and vice versa (AUD-490).
+_BIDX_HKDF_INFO = b"audr:wallet:address_bidx:v1"
+
 # Returned in place of a label whose envelope fails to decrypt (wrong/rotated
 # key, or a corrupted row) rather than raising. See the key-loss rationale in
 # docs/operations.md#key-loss-behavior: a single unreadable label must not
@@ -40,6 +54,10 @@ LABEL_UNREADABLE_PLACEHOLDER = "[unreadable]"
 
 def _label_aad(wallet_id: uuid.UUID) -> bytes:
     return f"{_LABEL_AAD_PREFIX}{wallet_id}".encode()
+
+
+def _address_aad(wallet_id: uuid.UUID) -> bytes:
+    return f"{_ADDRESS_AAD_PREFIX}{wallet_id}".encode()
 
 
 def encrypt_label(label: str, wallet_id: uuid.UUID, key: bytes) -> bytes:
@@ -58,28 +76,57 @@ def decrypt_label(ciphertext: bytes, wallet_id: uuid.UUID, key: bytes | None) ->
         return LABEL_UNREADABLE_PLACEHOLDER
 
 
-async def _master_key_or_none(session: AsyncSession) -> bytes | None:
-    """Best-effort master key lookup for the *read* path only.
+def encrypt_address(address: str, wallet_id: uuid.UUID, key: bytes) -> bytes:
+    """Encrypt a normalised wallet address. Exposed for callers that insert a
+    Wallet row directly (e.g. audr.portfolio.balances._ensure_wallet) rather
+    than going through add_wallet."""
+    return encrypt(address.encode("utf-8"), _address_aad(wallet_id), key)
 
-    Catches InvalidEnvelopeError too, not just MissingKeyError: if SECRET_KEY
-    cannot unwrap key_state itself (as opposed to one row's label envelope
-    being bad), every label degrades to the placeholder rather than 500ing
-    GET /wallets. Writes (add_wallet/set_label) call get_master_key directly
-    and let both errors propagate — a label cannot be *written* without a
-    usable key, so that failure stays loud.
+
+def decrypt_address(ciphertext: bytes, wallet_id: uuid.UUID, key: bytes) -> str:
+    """Decrypt a wallet address envelope.
+
+    Unlike labels, a failure here is not papered over with a placeholder: an
+    address that cannot be decrypted means the wallet it belongs to cannot be
+    identified at all, which is a harder failure than an unreadable label (see
+    docs/operations.md#key-loss-behavior). Callers let MissingKeyError /
+    InvalidEnvelopeError propagate.
     """
-    try:
-        return await get_master_key(session)
-    except (MissingKeyError, InvalidEnvelopeError):
-        return None
+    return decrypt(ciphertext, _address_aad(wallet_id), key).decode("utf-8")
 
 
-async def _attach_labels(session: AsyncSession, wallets: list[Wallet]) -> None:
-    """Decrypt and attach the transient ``.label`` attribute on each wallet."""
+def _derive_bidx_key(master_key: bytes) -> bytes:
+    """Derive the blind-index subkey from the master key via HKDF-SHA256."""
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_BIDX_HKDF_INFO).derive(
+        master_key
+    )
+
+
+def compute_address_bidx(normalised_address: str, master_key: bytes) -> bytes:
+    """Deterministic HMAC-SHA256 blind index for a normalised (lowercase) address.
+
+    Deterministic so the same address always produces the same index value
+    (needed for the unique constraint and for equality lookups), but keyed by
+    a subkey derived from the master key rather than reproducible from the
+    address alone.
+    """
+    subkey = _derive_bidx_key(master_key)
+    return hmac.new(subkey, normalised_address.encode("utf-8"), hashlib.sha256).digest()
+
+
+async def _attach_wallet_fields(session: AsyncSession, wallets: list[Wallet]) -> None:
+    """Decrypt and attach the transient ``.address`` / ``.label`` attributes.
+
+    The master key is fetched once via ``get_master_key``, which raises
+    (MissingKeyError / InvalidEnvelopeError) rather than degrading — an
+    address that cannot be decrypted makes the wallet list itself unusable,
+    unlike a single bad label (see docs/operations.md#key-loss-behavior).
+    """
     if not wallets:
         return
-    key = await _master_key_or_none(session)
+    key = await get_master_key(session)
     for wallet in wallets:
+        wallet.address = decrypt_address(wallet.address_ciphertext, wallet.id, key)
         wallet.label = decrypt_label(wallet.label_ciphertext, wallet.id, key)
 
 
@@ -107,10 +154,12 @@ async def add_wallet(
     key = await get_master_key(session)
     wallet = Wallet(
         id=wallet_id,
-        address=normalised,
+        address_ciphertext=encrypt_address(normalised, wallet_id, key),
+        address_bidx=compute_address_bidx(normalised, key),
         label_ciphertext=encrypt_label(label, wallet_id, key),
         status="active",
     )
+    wallet.address = normalised
     wallet.label = label
     session.add(wallet)
     try:
@@ -295,7 +344,7 @@ async def list_wallets(session: AsyncSession) -> list[Wallet]:
     """Return all tracked wallets, ordered by creation time."""
     result = await session.execute(sa.select(Wallet).order_by(Wallet.created_at))
     wallets = list(result.scalars())
-    await _attach_labels(session, wallets)
+    await _attach_wallet_fields(session, wallets)
     return wallets
 
 
@@ -324,7 +373,7 @@ async def list_wallets_page(
     has_more = len(wallets) > limit
     wallets = wallets[:limit]
     next_cursor = wallets[-1].id if has_more and wallets else None
-    await _attach_labels(session, wallets)
+    await _attach_wallet_fields(session, wallets)
     return wallets, next_cursor
 
 
@@ -336,7 +385,7 @@ async def get_wallet(
     """Fetch a wallet by ID or return None."""
     wallet = await session.get(Wallet, wallet_id)
     if wallet is not None:
-        await _attach_labels(session, [wallet])
+        await _attach_wallet_fields(session, [wallet])
     return wallet
 
 
@@ -344,5 +393,5 @@ async def _get_or_raise(session: AsyncSession, wallet_id: uuid.UUID) -> Wallet:
     wallet = await session.get(Wallet, wallet_id)
     if wallet is None:
         raise WalletNotFoundError(str(wallet_id))
-    await _attach_labels(session, [wallet])
+    await _attach_wallet_fields(session, [wallet])
     return wallet

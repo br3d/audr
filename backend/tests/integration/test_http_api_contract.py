@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.api.app import app
 from audr.db import get_db
+from tests.helpers import wallet_address_columns
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -678,19 +679,29 @@ async def test_portfolio_allocations_shape_aggregated_per_asset(
 
     async with db_session_factory() as session:
         async with session.begin():
+            cols_a = await wallet_address_columns(session, uuid.UUID(wallet_a), "0x" + "a" * 40)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
-                    " VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
-                {"id": wallet_a, "addr": "0x" + "a" * 40},
+                {
+                    "id": wallet_a,
+                    "addr_ct": cols_a["address_ciphertext"],
+                    "addr_bidx": cols_a["address_bidx"],
+                },
             )
+            cols_b = await wallet_address_columns(session, uuid.UUID(wallet_b), "0x" + "b" * 40)
             await session.execute(
                 text(
-                    "INSERT INTO wallet (id, address, label_ciphertext, status)"
-                    " VALUES (:id, :addr, '', 'active')"
+                    "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
+                    " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
                 ),
-                {"id": wallet_b, "addr": "0x" + "b" * 40},
+                {
+                    "id": wallet_b,
+                    "addr_ct": cols_b["address_ciphertext"],
+                    "addr_bidx": cols_b["address_bidx"],
+                },
             )
             await session.execute(
                 text(
