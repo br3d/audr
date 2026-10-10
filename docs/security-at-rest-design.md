@@ -100,7 +100,7 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | 1 | ~~Document and recommend LUKS/ZFS for the `db_data` volume; make it part of first-time setup guidance~~ — **done**: `compose.encrypted-volume.yaml` overlay + [procedure](operations.md#encrypting-the-database-volume), linked from the README install step | A | S | infra |
 | 2 | ~~Define a backup procedure, with `pg_dump` output encrypted by default~~ — **done** | E | S | infra |
 | 3a | ~~Extend envelope encryption to `wallet.label` — the only free-text owner-written column that exists today, and the one that establishes the encrypted-column pattern (migration, model, round-trip tests)~~ — **done** (AUD-488): `wallet.label_ciphertext`, migration 0021, key-loss behaviour documented in [operations.md](operations.md#key-loss-behavior) | D | S | backend |
-| 3b | Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup. Separate from 3a because it changes lookup and uniqueness semantics, not just storage | D | M | backend |
+| 3b | Encrypt `wallet.address`, replacing its `unique=True` with a unique HMAC blind-index column for lookup. Separate from 3a because it changes lookup and uniqueness semantics, not just storage — **in flight** (AUD-490) | D | M | backend |
 | 4 | Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback | B | M | infra |
 | 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
 
@@ -109,6 +109,27 @@ disk or a backup leaves the building), and neither touched the application or
 the zero-config promise. 3a is additive. 3b is the one item here that changes
 semantics rather than just storage, since the address uniqueness constraint has
 to move to the blind index; it is a migration, not a column rewrite.
+
+Two specifics about 3b that the 3a work surfaced, recorded here so they are not
+rediscovered during implementation:
+
+- **The constraint, not the column, is the hard part.** `add_wallet` detects a
+  duplicate by catching the `IntegrityError` from `address`'s unique index. The
+  envelope ciphertext cannot carry that index — AES-GCM uses a fresh nonce per
+  write, so the same address encrypts to a different value every time. The
+  uniqueness has to live on a deterministic keyed HMAC column, which should use
+  a subkey derived from the master key rather than the master key itself, so a
+  blind-index value can never be confused with encryption key material.
+- **`operations/exports.py` is the one place SQL actually breaks.** Three raw
+  queries `ORDER BY w.address`. Ordering by ciphertext is not a stable sort at
+  all, so that ordering has to move — into Python after decryption, or onto
+  another stable key. Every other reader (`jobs/__main__.py`,
+  `jobs/event_indexer.py`, `portfolio/snapshot.py`, `portfolio/balances.py`,
+  `api/wallets.py`, `api/holdings.py`) reads the address whole and needs nothing
+  beyond the transient-attribute pattern 3a established.
+
+Note also that 3b widens the blast radius of a lost KEK: today losing it costs
+provider credentials and labels, after 3b it costs the wallet list itself.
 
 ## 4. The open product decision
 
