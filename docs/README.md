@@ -25,7 +25,7 @@ dependency pins in a release, with licence attribution.
 | [development.md](development.md) | Developer setup, every test suite and how to run it, lint/typecheck, migrations, conventions |
 | [engineering-workflow.md](engineering-workflow.md) | Branches, the shared checkout and worktrees, when to self-merge vs. escalate, the QA gate, planning artifacts |
 | [containers.md](containers.md) | Why each compose service exists, what was removed, what could still go |
-| [security-at-rest-design.md](security-at-rest-design.md) | The at-rest option space (LUKS, `pg_tde`, `pgcrypto`, wider envelope encryption), the rotki comparison, and the open product decision |
+| [security-at-rest-design.md](security-at-rest-design.md) | The at-rest option space (LUKS, `pg_tde`, `pgcrypto`, wider envelope encryption), the rotki comparison, and the settled key-model decision (option 1, 2026-10-11) |
 | [releases.md](releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [deploy-runbook.md](deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
 | [github-actions.md](github-actions.md) | The public GitHub workflows: the test gate, the manual image release, GHCR and the README badges |

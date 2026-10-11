@@ -81,9 +81,13 @@ separate, deliberately un-bundled file. The operator procedure is in
 same host as the database, so whoever takes the whole running machine takes
 both halves, and volume encryption only helps while the machine is powered off.
 Deriving the key from the owner's login password instead would change that, at
-the cost of background jobs that can only run while someone is logged in; the
-trade-off is written up in
-[security-at-rest-design.md](security-at-rest-design.md).
+the cost of background jobs that can only run while someone is logged in. That
+trade was decided on 2026-10-11 in favour of the current model — always-on
+background refresh beats data that is unreadable while the owner is away, and
+an attacker holding the running machine holds the live session too, so the
+password tier would not compound. The full reasoning, and what would reopen it,
+is in
+[security-at-rest-design.md](security-at-rest-design.md#4-the-key-model-decision--settled-2026-10-11-option-1).
 
 ## 3. Handling key material: never echo a secret value
 
