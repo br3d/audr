@@ -512,7 +512,7 @@ doc for the full argument and the conditions that would reopen it.
 **Branch**: docs/aud389-worker-plaintext-audit
 **Author**: infraLead
 
-[security-at-rest-design.md](security-at-rest-design.md#4-the-open-product-decision)
+[security-at-rest-design.md](security-at-rest-design.md#4-the-key-model-decision--settled-2026-10-11-option-1)
 §4 option 3 ("two-tier keys") rested on one unmeasured claim — that the
 owner-identifying columns are ones *"the worker arguably does not need in
 plaintext"* — and listed "a careful audit of what the worker actually reads"

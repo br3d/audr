@@ -1,4 +1,4 @@
-# At-rest encryption: the option space and the open decision
+# At-rest encryption: the option space and the key-model decision
 
 Maintainer-facing companion to [security-at-rest.md](security-at-rest.md),
 which states what audr encrypts today and what an operator should do about it.
@@ -156,14 +156,14 @@ through `age`/`gpg`, with the recipient key held to the same discipline as
 | 4 | ~~Timeboxed spike: `pg_tde` on Percona PG17 — image swap, keyring, upgrade path, rollback~~ — **done** (2026-10-10): works, `default_table_access_method = tde_heap` needs no application change, dump/restore is the migration path, ~9% write cost; **not adopted** — see [spike results](#spike-results-item-4-2026-10-10) for why and for what would change the answer | B | M | infra |
 | 3c | ~~Stop storing the owner's own address in plaintext in `onchain_event`~~ — **done** (AUD-492): `from_address`/`to_address` collapsed into a single `counterparty` column by migration 0023, since `wallet_id` + `event_type` already determine which side the owner was on. The owner's address is *removed* rather than encrypted — it was pure redundancy — and the counterparty is left in plaintext deliberately: it is not owner-identifying, and it has to stay queryable. Followed by the 3d heap scrub on the stand | D | M | backend |
 | 3d | ~~Operator step after any encrypt-a-column migration: rewrite the table so the dropped plaintext actually leaves the heap~~ — **done**: [procedure](operations.md#scrubbing-plaintext-left-by-an-encrypt-a-column-migration), and applied to the staging stand's `wallet` table, which still held three plaintext addresses after 0022 | — | S | infra |
-| 5 | Password-derived KEK (true rotki parity) — **blocked on the product decision in §4** | — | L | founder |
+| 5 | ~~Password-derived KEK (true rotki parity)~~ — **not adopted** (2026-10-11): the §4 decision is option 1, `SECRET_KEY` stays on the host and the `worker` stays always-on. Revisitable under the conditions listed in §4 | — | L | founder |
 
-**Every engineering item is now closed.** Items 1–4 and 3a–3d have shipped, and
+**Every item is now closed.** Items 1–4 and 3a–3d have shipped, and
 no owner-identifying value is left on disk in plaintext on a stand built from
 `main`: the wallet address and label are enveloped, the `onchain_event` owner
 column is gone, and the heap-scrub step has been applied where a migration
-dropped a plaintext column. The only open row is item 5, which is the founder's
-decision in §4 — a product trade, not an engineering task.
+dropped a plaintext column. Item 5 is closed by the §4 decision rather than by
+implementation — it was a product trade, not an engineering task.
 
 **Correction (2026-10-10).** An earlier revision of this file called 3b "the
 last owner-identifying column still stored as plaintext", and migration 0022's
@@ -202,7 +202,24 @@ reasoning behind the shipped shape and apply to any future encrypted column:
 Note also that 3b widened the blast radius of a lost KEK: it used to cost
 provider credentials and labels, it now costs the wallet list itself.
 
-## 4. The open product decision
+## 4. The key-model decision — settled 2026-10-11: option 1
+
+**Decided: option 1. `SECRET_KEY` stays on the host and the `worker` stays
+always-on.** The reasoning given with the decision: a tracker whose data goes
+stale while the owner is offline is not useful as a tracker, and the extra
+threat option 2 would cover — an attacker holding the whole running machine —
+also holds the live session, so the protection does not compound. That is the
+same conclusion the analysis below reaches; it is recorded here as the standing
+answer so the comparison does not get reopened by default.
+
+This closes item 5 in §3 and with it the last open row of AUD-389. The option
+space is kept below because the decision is revisitable, not because it is
+pending: **what would reopen it** is a second user on the stand (the
+whole-machine attacker stops being the owner), a compliance commitment that
+names password-derived keys, or a product shift where stale background data is
+acceptable. Absent one of those, option 1 holds.
+
+### The trade, as analysed
 
 Today `SECRET_KEY` sits in a file on the same host as the database. Anyone who
 takes the whole machine takes both halves, and volume encryption only helps
