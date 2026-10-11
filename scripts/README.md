@@ -39,6 +39,8 @@ or an SSH key, and they act on infrastructure outside your installation.
 | `host-gc.sh` | Bounds the deploy host's Docker disk usage. Every push to `main` builds a new image on the host runner and nothing else removes them. Retention is age-based *and* capped by count, and escalates to shorter windows on its own while the disk is above the warn threshold |
 | `registry-prune.py` | Enforces a tag-retention policy on the image registry over the `/v2` HTTP API, since the registry has no built-in retention and we have no shell on it |
 | `test_registry_prune.py` | Dependency-free unit tests for the pruner: `python3 scripts/test_registry_prune.py`. Not in the pytest suite, which runs in a container that cannot see `scripts/` |
+| `dump-prune.py` | Applies the authorised GFS retention (3 days of hourlies + newest dump per older ISO week) to the Paperclip DB dump directory on ai-stuff. Dry-run by default; the durable fix is a board setting an agent token cannot write, so this is the stopgap that has to repeat weekly — see AUD-435 and the script header |
+| `test_dump_prune.py` | Dependency-free unit tests for the dump pruner: `python3 scripts/test_dump_prune.py`. One case reproduces the 2026-10-11 hand-prune file-for-file |
 | `benchmark.py` | Two reports: warm dashboard/history read latency against the reference scale fixture, and the catalog's logical RPC call count. Results are published in [`docs/benchmark.md`](../docs/benchmark.md) |
 | `gen_third_party.py` | Regenerates the dependency licence tables in [`docs/third-party.md`](../docs/third-party.md) from the locked runtime closure |
 | `gen_brand_assets.py` | Derives the transparent PNGs and icons the app loads from the source logo artwork in `assets/brand/` |
