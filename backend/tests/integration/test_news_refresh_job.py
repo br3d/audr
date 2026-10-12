@@ -52,6 +52,7 @@ async def _clean_tables(db_session: AsyncSession) -> None:
     order-dependent on the rest of the suite.
     """
     await db_session.execute(text("DELETE FROM news_feed"))
+    await db_session.execute(text("DELETE FROM snapshot_space"))
     await db_session.execute(text("DELETE FROM asset_news"))
     await db_session.execute(text("DELETE FROM balance_observation_invalidation"))
     await db_session.execute(text("DELETE FROM balance_observation"))

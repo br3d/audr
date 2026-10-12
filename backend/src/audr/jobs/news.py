@@ -1,15 +1,19 @@
-"""News-refresh job handler — keyless ingestion (AUD-512).
+"""News-refresh job handler — keyless ingestion (AUD-512, AUD-513).
 
 Polls the feed registry (`news_feed`: project blogs, GitHub release feeds,
 and portfolio-wide trade press — docs/news-sources.md §2) with conditional
-GET, normalises Atom/RSS into the existing `asset_news` shape, and falls
-back to the keyless GDELT Doc API for held assets with no native feed. No
-step here requires an API key — this retires the CoinGecko-only path that
-previously made `news_refresh` a no-op on a fresh install (AUD-503).
+GET, normalises Atom/RSS into the existing `asset_news` shape, falls back to
+the keyless GDELT Doc API for held assets with no native feed, and polls
+Snapshot Hub governance proposals for assets explicitly mapped to a space in
+`snapshot_space` (docs/news-sources.md §3 — matched by mapping, not symbol
+keyword). No step here requires an API key — this retires the
+CoinGecko-only path that previously made `news_refresh` a no-op on a fresh
+install (AUD-503).
 
-A broken feed (404, moved to an HTML error page, malformed XML) or a GDELT
-outage is recorded as a health counter / logged and skipped — it must never
-fail the run for every other feed.
+A broken feed (404, moved to an HTML error page, malformed XML), a GDELT
+outage, or a Snapshot request/GraphQL failure is recorded as a health
+counter / logged and skipped — it must never fail the run for every other
+source.
 """
 
 from __future__ import annotations
@@ -33,14 +37,22 @@ from audr.jobs.news_feed_registry import (
     record_feed_not_modified,
     record_feed_success,
 )
+from audr.jobs.snapshot_registry import (
+    SnapshotSpace,
+    list_due_spaces,
+    record_space_failure,
+    record_space_success,
+)
 from audr.providers.feed_parser import FeedItem, FeedParseError, parse_feed
 from audr.providers.gdelt import GdeltArticle, GdeltProvider
+from audr.providers.snapshot import SnapshotError, SnapshotProposal, SnapshotProvider
 
 logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = 15.0
 _USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
 _GDELT_SOURCE = "gdelt"
+_SNAPSHOT_SOURCE = "snapshot"
 
 # Retention (AUD-512 req. 6): one shared policy with ADR-007 alerting
 # (AUD-337) — do not invent a second number here.
@@ -91,6 +103,16 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
                         inserted += await _insert_gdelt_article(
                             session, asset_id=asset.id, article=article
                         )
+
+        due_spaces = await list_due_spaces(session)
+        async with SnapshotProvider(http_client=client) as snapshot:
+            for space in due_spaces:
+                asset_ids = [a.id for a in assets if a.symbol.upper() == space.asset_symbol.upper()]
+                if not asset_ids:
+                    continue
+                inserted += await _poll_snapshot_space(
+                    session, snapshot=snapshot, space=space, asset_ids=asset_ids
+                )
 
     pruned = await _prune_old_news(session)
     await session.flush()
@@ -213,6 +235,58 @@ async def _insert_gdelt_article(
 
 
 # ---------------------------------------------------------------------------
+# Snapshot governance tier (AUD-513)
+# ---------------------------------------------------------------------------
+
+
+async def _poll_snapshot_space(
+    session: AsyncSession,
+    *,
+    snapshot: SnapshotProvider,
+    space: SnapshotSpace,
+    asset_ids: list[uuid.UUID],
+) -> int:
+    try:
+        proposals = await snapshot.list_proposals(space.space_id)
+    except SnapshotError as exc:
+        logger.info("news_refresh snapshot space=%s request failed: %s", space.space_id, exc)
+        await record_space_failure(session, space_id=space.id, error=str(exc))
+        return 0
+
+    await record_space_success(session, space_id=space.id)
+
+    inserted = 0
+    for proposal in proposals:
+        for asset_id in asset_ids:
+            inserted += await _upsert_snapshot_proposal(
+                session, asset_id=asset_id, proposal=proposal
+            )
+    return inserted
+
+
+def _snapshot_title(proposal: SnapshotProposal) -> str:
+    """Fold proposal state into the title — a proposal going active -> closed
+    must update the existing `asset_news` row rather than hide the change.
+    """
+    return f"[{proposal.state}] {proposal.title}"
+
+
+async def _upsert_snapshot_proposal(
+    session: AsyncSession, *, asset_id: uuid.UUID, proposal: SnapshotProposal
+) -> int:
+    return await _upsert_news(
+        session,
+        asset_id=asset_id,
+        source=_SNAPSHOT_SOURCE,
+        external_id=proposal.id,
+        title=_snapshot_title(proposal),
+        url=proposal.link,
+        news_site="snapshot",
+        published_at=proposal.start,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -260,6 +334,57 @@ async def _insert_news(
               (:asset_id, :source, :external_id, :title, :url, :news_site,
                :thumbnail_url, :published_at)
             ON CONFLICT (asset_id, source, external_id) DO NOTHING
+            """
+        ),
+        {
+            "asset_id": str(asset_id),
+            "source": source,
+            "external_id": external_id,
+            "title": title,
+            "url": url,
+            "news_site": news_site,
+            "thumbnail_url": thumbnail_url,
+            "published_at": published_at,
+        },
+    )
+    return result.rowcount or 0
+
+
+async def _upsert_news(
+    session: AsyncSession,
+    *,
+    asset_id: uuid.UUID,
+    source: str,
+    external_id: str,
+    title: str,
+    url: str,
+    news_site: str,
+    published_at: datetime,
+    thumbnail_url: str | None = None,
+) -> int:
+    """Insert, or update in place on a dedup-key conflict.
+
+    Unlike `_insert_news`'s `DO NOTHING`, a source whose items change after
+    first being seen (a Snapshot proposal moving active -> closed) must
+    update the existing row rather than duplicate it or go stale — the
+    `WHERE` clause keeps a no-op re-poll from touching the row at all.
+    """
+    result = await session.execute(
+        sa.text(
+            """
+            INSERT INTO asset_news
+              (asset_id, source, external_id, title, url, news_site,
+               thumbnail_url, published_at)
+            VALUES
+              (:asset_id, :source, :external_id, :title, :url, :news_site,
+               :thumbnail_url, :published_at)
+            ON CONFLICT (asset_id, source, external_id) DO UPDATE SET
+              title = EXCLUDED.title,
+              url = EXCLUDED.url,
+              news_site = EXCLUDED.news_site
+            WHERE asset_news.title IS DISTINCT FROM EXCLUDED.title
+               OR asset_news.url IS DISTINCT FROM EXCLUDED.url
+               OR asset_news.news_site IS DISTINCT FROM EXCLUDED.news_site
             """
         ),
         {
