@@ -33,6 +33,16 @@ export function monogram(symbol: string): string {
   return cleaned.slice(0, 3) || '?'
 }
 
+/**
+ * Deterministic solid swatch for a symbol, drawn from the same hue family as the
+ * monogram gradient above — so a flat color (allocation bar segments, legend dots)
+ * stays visually tied to the two-tone emblem for the same asset.
+ */
+export function emblemColor(symbol: string): string {
+  const [h1] = EMBLEM_HUES[symbolHash(symbol) % EMBLEM_HUES.length]
+  return `hsl(${h1} 62% 46%)`
+}
+
 export default function AssetEmblem({ symbol, logoUrl, size = 'md' }: Props) {
   const [logoBroken, setLogoBroken] = useState(false)
 

@@ -90,8 +90,6 @@ function AllocationRow({
   onExclude: () => void
 }) {
   const isUnpriced = item.value_usd === null
-  // parseFloat is acceptable here: it only sizes the decorative share bar.
-  const barWidth = Math.max(parseFloat(item.percentage), 1.5)
 
   return (
     <tr>
@@ -116,14 +114,9 @@ function AllocationRow({
         {isUnpriced ? (
           <span className="text-muted">—</span>
         ) : (
-          <div className="allocation-share-cell">
-            <span className="allocation-bar" aria-hidden="true">
-              <span className="allocation-bar-fill" style={{ width: `${barWidth}%` }} />
-            </span>
-            <span className="allocation-pct" aria-label={`${item.percentage} percent`}>
-              {item.percentage}%
-            </span>
-          </div>
+          <span className="allocation-pct" aria-label={`${item.percentage} percent`}>
+            {item.percentage}%
+          </span>
         )}
       </td>
       <td className="allocation-actions">
