@@ -265,12 +265,15 @@ export interface Holding {
 export interface AllocationItem {
   asset_id: string
   symbol: string
+  name: string
   /** Null for assets with no usable price — the row still renders, unpriced (AUD-404). */
   value_usd: string | null
   percentage: string
   /** Summed across every wallet holding this asset; null if any contributing read has an unknown quantity. */
   quantity: string | null
   price_usd: string | null
+  /** Null when there is no current price, or no reference observation within tolerance (AUD-523). */
+  price_change_24h_pct: string | null
   wallet_count: number
   read_status: ReadStatus
   included: boolean

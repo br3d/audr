@@ -63,10 +63,12 @@ function makeItem(overrides: Partial<AllocationItem> = {}): AllocationItem {
   return {
     asset_id: 'eth',
     symbol: 'ETH',
+    name: 'Ethereum',
     value_usd: '3456.78',
     percentage: '75.50',
     quantity: '1.5',
     price_usd: '2304.52',
+    price_change_24h_pct: '2.84',
     wallet_count: 1,
     read_status: 'ok',
     included: true,
@@ -75,14 +77,16 @@ function makeItem(overrides: Partial<AllocationItem> = {}): AllocationItem {
 }
 
 const ITEMS: AllocationItem[] = [
-  makeItem({ asset_id: 'eth', symbol: 'ETH', value_usd: '3456.78', percentage: '75.50' }),
+  makeItem({ asset_id: 'eth', symbol: 'ETH', name: 'Ethereum', value_usd: '3456.78', percentage: '75.50' }),
   makeItem({
     asset_id: 'usdc',
     symbol: 'USDC',
+    name: 'USD Coin',
     value_usd: '1122.00',
     percentage: '24.50',
     quantity: '1122.0',
     price_usd: '1.00',
+    price_change_24h_pct: '0.00',
   }),
 ]
 
@@ -177,22 +181,87 @@ describe('AllocationList', () => {
 
   })
 
-  describe('amount column', () => {
-    it('renders the quantity monospaced', async () => {
+  describe('balance column', () => {
+    it('renders the quantity with its symbol under the USD value', async () => {
       const { container, root } = render(
-        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: '1.5' })]} />,
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: '1.5', symbol: 'ETH' })]} />,
       )
       const cell = container.querySelector('.allocation-quantity')!
-      expect(cell.textContent).toBe('1.5')
-      expect(cell.className).toContain('td-mono')
+      expect(cell.textContent).toBe('1.5 ETH')
       await unmount(container, root)
     })
 
-    it('shows "unknown" when quantity is null', async () => {
+    it('shows "unknown" when quantity is null, never 0', async () => {
       const { container, root } = render(
         <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: null })]} />,
       )
       expect(container.querySelector('.allocation-quantity')!.textContent).toBe('unknown')
+      await unmount(container, root)
+    })
+  })
+
+  describe('asset column', () => {
+    it('shows the full name and the ticker symbol separately', async () => {
+      const { container, root } = render(
+        <AllocationList
+          onToggleExclude={noopToggle}
+          items={[makeItem({ name: 'Ethereum', symbol: 'ETH' })]}
+        />,
+      )
+      expect(container.querySelector('.allocation-name')!.textContent).toBe('Ethereum')
+      expect(container.querySelector('.allocation-symbol')!.textContent).toBe('ETH')
+      await unmount(container, root)
+    })
+  })
+
+  describe('price / 24h column', () => {
+    it('shows the current price', async () => {
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ price_usd: '3200.00' })]} />,
+      )
+      expect(container.querySelector('.allocation-price-value')!.textContent).toBe('$3,200.00')
+      await unmount(container, root)
+    })
+
+    it('shows a positive 24h change in green with a leading plus sign', async () => {
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ price_change_24h_pct: '2.84' })]} />,
+      )
+      const change = container.querySelector('.allocation-change')!
+      expect(change.textContent).toBe('+2.84%')
+      expect(change.className).toContain('text-success')
+      await unmount(container, root)
+    })
+
+    it('shows a negative 24h change in red without a double sign', async () => {
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ price_change_24h_pct: '-1.24' })]} />,
+      )
+      const change = container.querySelector('.allocation-change')!
+      expect(change.textContent).toBe('-1.24%')
+      expect(change.className).toContain('text-danger')
+      await unmount(container, root)
+    })
+
+    it('shows a dash, not 0.00%, when there is no 24h reference', async () => {
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ price_change_24h_pct: null })]} />,
+      )
+      const change = container.querySelector('.allocation-change')!
+      expect(change.textContent).toBe('—')
+      expect(change.className).not.toContain('text-success')
+      expect(change.className).not.toContain('text-danger')
+      await unmount(container, root)
+    })
+
+    it('shows "unpriced" instead of a price when the asset has no usable price', async () => {
+      const { container, root } = render(
+        <AllocationList
+          onToggleExclude={noopToggle}
+          items={[makeItem({ value_usd: null, price_usd: null, price_change_24h_pct: null })]}
+        />,
+      )
+      expect(container.querySelector('.allocation-price-value')!.textContent).toBe('unpriced')
       await unmount(container, root)
     })
   })
@@ -209,7 +278,7 @@ describe('AllocationList', () => {
 
     it('shows the amount plus a muted "unpriced" label instead of a value', async () => {
       const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[unpriced]} />)
-      expect(container.querySelector('.allocation-quantity')!.textContent).toBe('5.0')
+      expect(container.querySelector('.allocation-quantity')!.textContent).toBe('5.0 XYZ')
       expect(container.querySelector('.allocation-value')!.textContent).toBe('unpriced')
       await unmount(container, root)
     })

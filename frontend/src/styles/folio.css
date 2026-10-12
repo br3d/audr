@@ -984,25 +984,78 @@ body {
 .asset-emblem-sm.asset-emblem-len-2 { font-size: 9px; }
 .asset-emblem-sm.asset-emblem-len-3 { font-size: 8px; }
 
+.allocation-asset-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .allocation-asset {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.allocation-symbol {
+.allocation-asset-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.allocation-name {
   font-weight: 600;
   font-size: var(--text-base);
   color: var(--text-primary);
 }
 
-.allocation-value {
+.allocation-asset-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.allocation-symbol {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.allocation-row-actions {
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.table-folio tbody tr:hover .allocation-row-actions,
+.allocation-row-actions:focus-within,
+.allocation-row-actions.has-error {
+  opacity: 1;
+}
+
+.allocation-price-cell,
+.allocation-balance-cell {
   white-space: nowrap;
 }
 
+.allocation-price-value,
+.allocation-value {
+  color: var(--text-primary);
+}
+
+.allocation-change,
+.allocation-quantity {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+}
+
+.allocation-quantity {
+  color: var(--text-secondary);
+}
+
 .allocation-share {
-  width: 45%;
-  min-width: 180px;
+  width: 30%;
+  min-width: 120px;
 }
 
 .allocation-pct {
@@ -1059,10 +1112,6 @@ body {
 .allocation-spoiler-pct {
   min-width: 56px;
   text-align: right;
-}
-
-.allocation-actions {
-  white-space: nowrap;
 }
 
 .allocation-row-error {
