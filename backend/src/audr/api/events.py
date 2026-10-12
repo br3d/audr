@@ -2,7 +2,10 @@
 (AUD-300).
 
 GET /api/v1/events
-  Returns a paginated list of indexed ERC-20 Transfer events.
+  Returns a paginated list of indexed ERC-20 Transfer events, enriched
+  (AUD-522) with asset metadata, a decimal `amount`, the latest known
+  `price_usd` / `value_usd`, and the owning wallet's `wallet_label` — all
+  nullable, since any of them can be unknown (unlisted token, no price yet).
   Filters: wallet_id, event_type, token_address.
   Ordered by block_number DESC, log_index DESC.
 
@@ -16,6 +19,7 @@ GET /api/v1/allowances
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Annotated, Literal
 
 import sqlalchemy as sa
@@ -27,6 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from audr.api.auth import _require_session
 from audr.auth.models import Session
 from audr.db import get_db
+from audr.operations.init_key import get_master_key
+from audr.portfolio.money import DecimalsRangeError, format_decimal, quantity_to_usd, raw_to_quantity
+from audr.wallets.models import Wallet
+from audr.wallets.service import decrypt_label
 
 router = APIRouter(prefix="/api/v1")
 
@@ -60,6 +68,22 @@ class OnchainEventResponse(BaseModel):
     # Raw uint256 as decimal string — never float
     raw_amount: str
     indexed_at: str
+    # Everything below is additive enrichment (AUD-522) so the UI can render
+    # a human-readable line instead of a hash + raw integer. NULL wherever
+    # the underlying fact is unknown (e.g. token not in our `asset` catalog,
+    # or no price has ever been fetched) — never coerced to zero.
+    asset_id: str | None = None
+    symbol: str | None = None
+    token_name: str | None = None
+    decimals: int | None = None
+    # raw_amount / 10^decimals as an exact decimal string.
+    amount: str | None = None
+    # amount * price_usd. Both this and price_usd reflect the latest known
+    # price at *request time*, not the price at the event's block — this
+    # endpoint does no historical price lookup, so do not present it as such.
+    value_usd: str | None = None
+    price_usd: str | None = None
+    wallet_label: str | None = None
 
 
 class EventsResponse(BaseModel):
@@ -87,7 +111,12 @@ async def get_events(
     """Return a paginated list of indexed on-chain Transfer events.
 
     Results are ordered newest-first (block_number DESC, log_index DESC).
-    All monetary amounts are raw uint256 decimal strings.
+    `raw_amount` stays the raw uint256 decimal-string source of truth.
+    `amount` / `value_usd` / `price_usd` are derived, human-readable
+    enrichment: `value_usd` and `price_usd` are the *latest known* price at
+    request time (the most recent `quote_set` with `status = 'complete'`),
+    not a historical price as of the event's block — this endpoint does not
+    do a price-at-block lookup, so callers must not present it as such.
     """
     wallet_uuid: uuid.UUID | None = None
     if wallet_id is not None:
@@ -103,54 +132,120 @@ async def get_events(
     params: dict = {"limit": limit, "offset": offset}
 
     if wallet_uuid is not None:
-        conditions.append("wallet_id = :wallet_id")
+        conditions.append("oe.wallet_id = :wallet_id")
         params["wallet_id"] = str(wallet_uuid)
     if event_type is not None:
-        conditions.append("event_type = :event_type")
+        conditions.append("oe.event_type = :event_type")
         params["event_type"] = event_type
     if token_address is not None:
-        conditions.append("token_address = :token_address")
+        conditions.append("oe.token_address = :token_address")
         params["token_address"] = token_address.lower()
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     # `where` is a fixed vocabulary of ":param" fragments; values are bound, never interpolated.
     count_row = await db.execute(
-        sa.text(f"SELECT COUNT(*) FROM onchain_event {where}"),  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
+        sa.text(f"SELECT COUNT(*) FROM onchain_event oe {where}"),  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         params,
     )
     total = count_row.scalar_one()
 
+    # Single query for the whole page: asset metadata and the latest known
+    # price are joined in, not fetched per row (no N+1). `latest_qs` picks
+    # the single most recent complete-with-observations quote_set — the
+    # same "latest known price" each row's price/value is read from, so
+    # every row on a page is priced against the same snapshot in time.
     rows = await db.execute(
         sa.text(
             f"""
-            SELECT id, wallet_id, tx_hash, block_number, log_index,
-                   event_type, token_address, counterparty_address,
-                   raw_amount, indexed_at
-            FROM onchain_event
+            SELECT oe.id, oe.wallet_id, oe.tx_hash, oe.block_number, oe.log_index,
+                   oe.event_type, oe.token_address, oe.counterparty_address,
+                   oe.raw_amount, oe.indexed_at,
+                   a.id AS asset_id, a.symbol, a.name AS token_name,
+                   COALESCE(a.decimals_override, a.decimals) AS decimals,
+                   qo.price_usd::text AS price_usd
+            FROM onchain_event oe
+            LEFT JOIN asset a ON a.token_address = lower(oe.token_address)
+            LEFT JOIN (
+                SELECT qs.id
+                FROM quote_set qs
+                WHERE qs.status = 'complete'
+                  AND EXISTS (
+                      SELECT 1 FROM quote_observation qo2 WHERE qo2.quote_set_id = qs.id
+                  )
+                ORDER BY qs.fetched_at DESC
+                LIMIT 1
+            ) latest_qs ON true
+            LEFT JOIN quote_observation qo
+                ON qo.quote_set_id = latest_qs.id AND qo.asset_id = a.id
             {where}
-            ORDER BY block_number DESC, log_index DESC
+            ORDER BY oe.block_number DESC, oe.log_index DESC
             LIMIT :limit OFFSET :offset
             """  # noqa: S608 — where is a fixed vocabulary of ":param" fragments; values are bound, never interpolated
         ),
         params,
     )
+    event_rows = rows.fetchall()
 
-    events = [
-        OnchainEventResponse(
-            id=str(row[0]),
-            wallet_id=str(row[1]),
-            tx_hash=str(row[2]),
-            block_number=int(row[3]),
-            log_index=int(row[4]),
-            event_type=str(row[5]),
-            token_address=str(row[6]),
-            counterparty_address=str(row[7]) if row[7] is not None else None,
-            raw_amount=str(row[8]),
-            indexed_at=row[9].isoformat(),
+    # Wallet labels are encrypted (AES-256-GCM) and can only be read via the
+    # master key + per-wallet AAD decryption, not a plain SQL join — so this
+    # fetches the (few, distinct) wallets for this page in one extra query
+    # and decrypts in Python, rather than per-row.
+    wallet_ids = {row[1] for row in event_rows}
+    wallet_labels: dict[str, str | None] = {}
+    if wallet_ids:
+        wallet_rows = (
+            await db.execute(
+                sa.select(Wallet.id, Wallet.label_ciphertext).where(Wallet.id.in_(wallet_ids))
+            )
+        ).all()
+        key = await get_master_key(db)
+        wallet_labels = {
+            str(wid): decrypt_label(ciphertext, wid, key) or None
+            for wid, ciphertext in wallet_rows
+        }
+
+    events = []
+    for row in event_rows:
+        decimals = int(row[13]) if row[13] is not None else None
+        price_usd_str: str | None = row[14]
+
+        amount_str: str | None = None
+        quantity: Decimal | None = None
+        if decimals is not None:
+            try:
+                quantity = raw_to_quantity(int(row[8]), decimals)
+            except (DecimalsRangeError, ValueError):
+                quantity = None
+            else:
+                amount_str = format_decimal(quantity)
+
+        value_usd_str: str | None = None
+        if quantity is not None and price_usd_str is not None:
+            value_usd_str = format_decimal(quantity_to_usd(quantity, Decimal(price_usd_str)))
+
+        events.append(
+            OnchainEventResponse(
+                id=str(row[0]),
+                wallet_id=str(row[1]),
+                tx_hash=str(row[2]),
+                block_number=int(row[3]),
+                log_index=int(row[4]),
+                event_type=str(row[5]),
+                token_address=str(row[6]),
+                counterparty_address=str(row[7]) if row[7] is not None else None,
+                raw_amount=str(row[8]),
+                indexed_at=row[9].isoformat(),
+                asset_id=str(row[10]) if row[10] is not None else None,
+                symbol=str(row[11]) if row[11] is not None else None,
+                token_name=str(row[12]) if row[12] is not None else None,
+                decimals=decimals,
+                amount=amount_str,
+                value_usd=value_usd_str,
+                price_usd=price_usd_str,
+                wallet_label=wallet_labels.get(str(row[1])),
+            )
         )
-        for row in rows.fetchall()
-    ]
 
     return EventsResponse(
         total=total,
