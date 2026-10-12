@@ -1,0 +1,17 @@
+# Installed on ai-stuff (192.168.1.152) as
+# /etc/systemd/system/audr-dump-prune.timer. No substitution needed.
+#
+# Persistent=true, unlike audr-watchdog.timer: a prune missed while the host
+# was off is still worth replaying, because the disk pressure it relieves is
+# still there when the host comes back.
+[Unit]
+Description=Weekly Paperclip dump prune (AUD-505)
+
+[Timer]
+OnCalendar=Sun 04:00:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=audr-dump-prune.service
+
+[Install]
+WantedBy=timers.target

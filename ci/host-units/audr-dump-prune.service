@@ -1,0 +1,25 @@
+[Unit]
+# Weekly GFS prune of the Paperclip DB dump volume on ai-stuff.
+# Authorised by the Chief of Staff on AUD-505 (2026-10-11): a weekly timer
+# running dump-prune.py --apply with the default --days 3. No other scope.
+#
+# The executable is a pinned root-owned copy, NOT /home/codex/git/audr, because
+# that working copy is shared between agents and sits on whatever branch was
+# last checked out. Reinstall after changing the script in main:
+#   sudo install -m 0755 -o root -g root \
+#     /home/codex/git/audr/scripts/dump-prune.py /usr/local/lib/audr/dump-prune.py
+# Pinned from audr main @ 4777d65.
+Description=Prune Paperclip DB dumps (GFS, keep 3 days + newest per ISO week)
+Documentation=https://github.com/br3d/audr/blob/main/scripts/dump-prune.py
+ConditionPathIsDirectory=/home/codex/.paperclip/instances/default/data/backups
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/audr/dump-prune.py --apply --days 3
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/codex/.paperclip/instances/default/data/backups
+PrivateTmp=true
+NoNewPrivileges=true
