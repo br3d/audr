@@ -8,6 +8,7 @@ import { applyExclusionOverrides, pruneSettledOverrides } from '../portfolio/exc
 import type { ExcludeOverrides } from '../portfolio/exclusions'
 import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
+import AllocationBar from '../components/AllocationBar'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
 import ScanStatus from '../components/ScanStatus'
@@ -355,102 +356,118 @@ export default function DashboardPage({ setPage }: Props) {
         </p>
       )}
 
-      {/* Portfolio value history */}
-      {!historyQuery.isLoading &&
-        !historyQuery.isError &&
-        historyQuery.data &&
-        historyQuery.data.items.length > 0 && (
-          <section aria-label="Portfolio value history" className="card mb-20">
-            <div className="card-header">
-              <div className="card-title card-title-chart">Portfolio value</div>
-              <div className="range-switcher" role="group" aria-label="History range">
-                {RANGE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className="range-switcher-btn"
-                    aria-pressed={historyPeriod === opt.value}
-                    onClick={() => setHistoryPeriod(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <HistoryQualityNotices points={historyQuery.data.items} />
-            <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
-          </section>
-        )}
-
-      {/* Allocation */}
-      {data.allocations.length > 0 ? (
-        <section aria-label="Asset allocation" className="card mb-20">
-          <div className="card-header">
-            <div className="card-title">Asset Allocation</div>
-            <div className="btn-group">
-              <ScanStatus runId={null} kind="balances" label="Refresh balances" />
-              <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
-            </div>
-          </div>
-          <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
-        </section>
-      ) : (
-        hasHoldings && (
-          <p role="note" className="alert alert-info mb-16">
-            No priced holdings — allocation unavailable. Configure a quote provider in
-            Connections.
-          </p>
-        )
-      )}
-
-      {/* News */}
-      {hasPricedAllocations && (
-        <section aria-label="Asset news" className="mb-20">
-          <div className="section-heading">News</div>
-          <NewsFeed items={pricedAllocations} />
-        </section>
-      )}
-
-      {/* Recent events */}
-      <section aria-label="Recent events" className="mb-20">
-        <div className="row-between mb-12">
-          <div className="section-heading" style={{ marginBottom: 0 }}>
-            Recent Events
-          </div>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => setPage('events')}
-          >
-            View all
-          </button>
-        </div>
-        <div className="card">
-          {recentEvents.length > 0 ? (
-            <ul className="recent-events-list" role="list">
-              {recentEvents.map((e) => (
-                <li key={e.id} className="recent-events-row">
-                  <div className="recent-events-main">
-                    {e.event_type === 'transfer_in' ? (
-                      <span className="badge badge-ok">in</span>
-                    ) : (
-                      <span className="badge badge-neutral">out</span>
-                    )}
-                    <span className="mono" title={e.token_address}>
-                      {shortenAddress(e.token_address)}
-                    </span>
+      <div className="dashboard-grid">
+        <div className="dashboard-left">
+          {/* Portfolio value history */}
+          {!historyQuery.isLoading &&
+            !historyQuery.isError &&
+            historyQuery.data &&
+            historyQuery.data.items.length > 0 && (
+              <section aria-label="Portfolio value history" className="card mb-20">
+                <div className="card-header">
+                  <div className="card-title card-title-chart">Portfolio value</div>
+                  <div className="range-switcher" role="group" aria-label="History range">
+                    {RANGE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className="range-switcher-btn"
+                        aria-pressed={historyPeriod === opt.value}
+                        onClick={() => setHistoryPeriod(opt.value)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
-                  <span className="recent-events-meta">{formatHuman(e.indexed_at)}</span>
-                </li>
-              ))}
-            </ul>
+                </div>
+                <HistoryQualityNotices points={historyQuery.data.items} />
+                <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
+              </section>
+            )}
+
+          {/* Allocation table */}
+          {data.allocations.length > 0 ? (
+            <section aria-label="Asset allocation" className="card mb-20">
+              <div className="card-header">
+                <div className="card-title">Asset Allocation</div>
+                <div className="btn-group">
+                  <ScanStatus runId={null} kind="balances" label="Refresh balances" />
+                  <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
+                </div>
+              </div>
+              <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
+            </section>
           ) : (
-            <p role="note" className="muted-text">
-              No on-chain events indexed yet.
-            </p>
+            hasHoldings && (
+              <p role="note" className="alert alert-info mb-16">
+                No priced holdings — allocation unavailable. Configure a quote provider in
+                Connections.
+              </p>
+            )
+          )}
+
+          {/* Recent events */}
+          <section aria-label="Recent events" className="mb-20">
+            <div className="row-between mb-12">
+              <div className="section-heading" style={{ marginBottom: 0 }}>
+                Recent Events
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setPage('events')}
+              >
+                View all
+              </button>
+            </div>
+            <div className="card">
+              {recentEvents.length > 0 ? (
+                <ul className="recent-events-list" role="list">
+                  {recentEvents.map((e) => (
+                    <li key={e.id} className="recent-events-row">
+                      <div className="recent-events-main">
+                        {e.event_type === 'transfer_in' ? (
+                          <span className="badge badge-ok">in</span>
+                        ) : (
+                          <span className="badge badge-neutral">out</span>
+                        )}
+                        <span className="mono" title={e.token_address}>
+                          {shortenAddress(e.token_address)}
+                        </span>
+                      </div>
+                      <span className="recent-events-meta">{formatHuman(e.indexed_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p role="note" className="muted-text">
+                  No on-chain events indexed yet.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="dashboard-right">
+          {/* Allocation summary */}
+          {hasPricedAllocations && (
+            <section aria-label="Allocation summary" className="card mb-20">
+              <div className="card-header">
+                <div className="card-title">Allocation</div>
+              </div>
+              <AllocationBar items={pricedAllocations} />
+            </section>
+          )}
+
+          {/* News */}
+          {hasPricedAllocations && (
+            <section aria-label="Asset news" className="mb-20">
+              <div className="section-heading">News</div>
+              <NewsFeed items={pricedAllocations} />
+            </section>
           )}
         </div>
-      </section>
+      </div>
     </div>
   )
 }

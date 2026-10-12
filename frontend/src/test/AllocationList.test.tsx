@@ -175,12 +175,6 @@ describe('AllocationList', () => {
       await unmount(container, root)
     })
 
-    it('sizes the share bar from the percentage', async () => {
-      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
-      const fill = container.querySelector('.allocation-bar-fill') as HTMLElement
-      expect(fill.style.width).toBe('75.5%')
-      await unmount(container, root)
-    })
   })
 
   describe('amount column', () => {
@@ -220,9 +214,8 @@ describe('AllocationList', () => {
       await unmount(container, root)
     })
 
-    it('does not render a share bar or percentage for an unpriced row', async () => {
+    it('does not render a percentage for an unpriced row', async () => {
       const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={[unpriced]} />)
-      expect(container.querySelector('.allocation-bar')).toBeNull()
       expect(container.querySelector('.allocation-pct')).toBeNull()
       await unmount(container, root)
     })
