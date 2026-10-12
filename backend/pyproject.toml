@@ -5,10 +5,10 @@ description = "Ethereum portfolio tracker — backend API and worker"
 requires-python = ">=3.14"
 dependencies = [
     # Web framework and ASGI server
-    "fastapi==0.142.2",
+    "fastapi==0.143.0",
     "uvicorn[standard]==0.54.0",
     # Configuration
-    "pydantic==2.13.5",
+    "pydantic==2.14.0",
     "pydantic-settings==2.15.0",
     # ORM and migrations — 2.0.x series per project spec
     "sqlalchemy>=2.0.54,<2.1",
@@ -22,7 +22,7 @@ dependencies = [
     "eth-abi==6.0.0",
     # Keccak-256 backend for eth_utils.to_checksum_address (AUD-385) — eth-hash
     # has no working backend without this installed.
-    "pycryptodome==3.23.0",
+    "pycryptodome==3.24.0",
     # Authenticated encryption (AES-256-GCM)
     "cryptography==50.0.2",
     # Password hashing (Argon2id)
