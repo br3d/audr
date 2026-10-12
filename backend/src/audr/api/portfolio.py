@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
@@ -75,10 +75,12 @@ class HoldingOut(BaseModel):
 class AllocationItemOut(BaseModel):
     asset_id: str
     symbol: str
+    name: str
     value_usd: str | None
     percentage: str
     quantity: str | None
     price_usd: str | None
+    price_change_24h_pct: str | None = None
     wallet_count: int
     read_status: str
     included: bool
@@ -143,6 +145,61 @@ def _icon_url(asset_id: str) -> str:
     resolvability here and no extra latency on this endpoint.
     """
     return f"/api/v1/assets/{asset_id}/icon"
+
+
+async def _get_price_change_24h_pct(
+    db: AsyncSession,
+    current_prices: dict[str, str],
+    now: datetime,
+) -> dict[str, str]:
+    """Return {asset_id: price_change_24h_pct} for assets with a current price.
+
+    The reference price is the quote_observation closest to now()-24h, within
+    a ±6h tolerance window — one query (DISTINCT ON) covering every asset, no
+    N+1. Assets with no reference observation in the window, or whose
+    reference price is zero, are omitted (unknown ≠ zero; caller treats a
+    missing key as null).
+    """
+    asset_ids = list(current_prices)
+    if not asset_ids:
+        return {}
+
+    target = now - timedelta(hours=24)
+    window_start = now - timedelta(hours=30)
+    window_end = now - timedelta(hours=18)
+
+    result = await db.execute(
+        sa.text(
+            """
+            SELECT DISTINCT ON (qo.asset_id)
+                qo.asset_id,
+                qo.price_usd::text AS ref_price_usd
+            FROM quote_observation qo
+            JOIN quote_set qs ON qs.id = qo.quote_set_id
+            WHERE qo.asset_id = ANY(:asset_ids ::uuid[])
+              AND qs.status = 'complete'
+              AND qs.fetched_at BETWEEN :window_start AND :window_end
+            ORDER BY qo.asset_id, ABS(EXTRACT(EPOCH FROM (qs.fetched_at - :target)))
+            """
+        ),
+        {
+            "asset_ids": asset_ids,
+            "window_start": window_start,
+            "window_end": window_end,
+            "target": target,
+        },
+    )
+
+    pct_by_asset: dict[str, str] = {}
+    for row in result:
+        asset_id = str(row[0])
+        ref_price = Decimal(row[1])
+        if ref_price == 0:
+            continue
+        current_price = Decimal(current_prices[asset_id])
+        pct = ((current_price - ref_price) / ref_price * 100).quantize(Decimal("0.01"))
+        pct_by_asset[asset_id] = str(pct)
+    return pct_by_asset
 
 
 _EMPTY_QUALITY = PortfolioQualityOut(
@@ -234,6 +291,7 @@ async def get_portfolio(
                 vl.value_usd::text    AS value_usd,
                 a.token_address,
                 a.symbol,
+                a.name,
                 COALESCE(a.decimals_override, a.decimals) AS decimals,
                 a.source,
                 COALESCE(a.excluded, false) AS excluded,
@@ -411,6 +469,7 @@ async def get_portfolio(
             )
             agg = {
                 "symbol": str(matching["symbol"]) if matching else "?",
+                "name": str(matching["name"]) if matching else "?",
                 "wallet_ids": set(),
                 "value_usd": Decimal(0),
                 "has_priced_line": False,
@@ -450,6 +509,15 @@ async def get_portfolio(
         if asset_aggs[asset_id]["included"] and not asset_aggs[asset_id]["has_priced_line"]
     )
 
+    # price_change_24h_pct reuses the same current price already selected
+    # above for price_usd — one query covering every priced asset, no N+1.
+    current_prices = {
+        asset_id: asset_aggs[asset_id]["price_usd"]
+        for asset_id in asset_order
+        if asset_aggs[asset_id]["price_usd"] is not None
+    }
+    price_change_pcts = await _get_price_change_24h_pct(db, current_prices, now)
+
     # Excluded rows are emitted with their value but a 0% share, and
     # unconditionally — the `priced_subtotal > 0` guard below only governs
     # whether a *share* is computable, and an all-excluded portfolio has a
@@ -465,10 +533,12 @@ async def get_portfolio(
                 AllocationItemOut(
                     asset_id=asset_id,
                     symbol=agg["symbol"],
+                    name=agg["name"],
                     value_usd=format_decimal(agg["value_usd"]),
                     percentage="0",
                     quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
                     price_usd=agg["price_usd"],
+                    price_change_24h_pct=price_change_pcts.get(asset_id),
                     wallet_count=len(agg["wallet_ids"]),
                     read_status=agg["status"],
                     included=False,
@@ -491,10 +561,12 @@ async def get_portfolio(
             AllocationItemOut(
                 asset_id=asset_id,
                 symbol=agg["symbol"],
+                name=agg["name"],
                 value_usd=format_decimal(agg["value_usd"]),
                 percentage=str(pct),
                 quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
                 price_usd=agg["price_usd"],
+                price_change_24h_pct=price_change_pcts.get(asset_id),
                 wallet_count=len(agg["wallet_ids"]),
                 read_status=agg["status"],
                 included=True,
@@ -512,10 +584,12 @@ async def get_portfolio(
             AllocationItemOut(
                 asset_id=asset_id,
                 symbol=agg["symbol"],
+                name=agg["name"],
                 value_usd=None,
                 percentage="0",
                 quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
                 price_usd=None,
+                price_change_24h_pct=None,
                 wallet_count=len(agg["wallet_ids"]),
                 read_status=agg["status"],
                 included=agg["included"],
