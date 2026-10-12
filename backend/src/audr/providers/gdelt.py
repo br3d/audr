@@ -2,8 +2,12 @@
 
 No key, no account, no published rate limit or SLA (docs/news-sources.md
 §6): outages and empty results are normal operation here, not errors, so
-this adapter never raises — any failure degrades to an empty result and the
-caller moves on to the next asset instead of failing the whole job.
+this adapter never raises on an unknown failure — it degrades to an empty
+result and the caller moves on to the next asset instead of failing the
+whole job. A 429 is the one status this module surfaces distinctly, via
+`GdeltRateLimited`: staging ran ~66 sequential queries per cycle and hit
+near-100% 429s (AUD-515) — the caller needs to know "rate limited" from
+"no results" to back off instead of silently burning through every asset.
 """
 
 from __future__ import annotations
@@ -22,6 +26,13 @@ _TIMEOUT = 15.0
 _DEFAULT_MAXRECORDS = 10
 _DEFAULT_TIMESPAN = "1d"
 _USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
+
+
+class GdeltRateLimited(Exception):
+    """Raised on HTTP 429 — distinct from the "no results" cases this
+    adapter otherwise swallows, so the caller can abort the tier instead of
+    treating a rate limit as "nothing happened this run".
+    """
 
 
 @dataclass(frozen=True)
@@ -70,9 +81,10 @@ class GdeltProvider:
     ) -> list[GdeltArticle]:
         """Return recent articles matching *query*, newest first.
 
-        Never raises: GDELT publishes no rate limit or SLA, so a timeout,
-        non-2xx response, or unparseable body is logged and treated as "no
-        results this run" rather than failing the whole job.
+        Raises `GdeltRateLimited` on HTTP 429 only. Every other failure
+        (timeout, other non-2xx, unparseable body) is logged and treated as
+        "no results this run" rather than failing the whole job — GDELT
+        publishes no rate limit or SLA, so those are normal operation.
         """
         try:
             response = await self._client.get(
@@ -89,6 +101,9 @@ class GdeltProvider:
         except httpx.HTTPError as exc:
             logger.info("gdelt: request failed for query=%r: %s", query, exc)
             return []
+
+        if response.status_code == 429:
+            raise GdeltRateLimited(f"429 for query={query!r}")
 
         if not response.is_success:
             logger.info("gdelt: HTTP %s for query=%r", response.status_code, query)

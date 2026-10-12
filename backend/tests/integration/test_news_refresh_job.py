@@ -7,18 +7,29 @@ feed-registry + GDELT path produces news without one is the point.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
 from httpx import Response
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from audr.jobs import news as news_module
 from audr.jobs.news import handle_news_refresh
 from tests.helpers import wallet_address_columns
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _no_gdelt_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the real inter-query delay (AUD-515) — tests assert on call
+    count and query shape, not on wall-clock spacing.
+    """
+    monkeypatch.setattr(news_module, "_GDELT_QUERY_DELAY_S", 0)
+
 
 # A fixed recent-past date would silently fall outside the 90-day retention
 # window as the test suite ages, and handle_news_refresh prunes on every
@@ -43,23 +54,58 @@ def _atom(entry_id: str, title: str, url: str) -> bytes:
     return _ATOM.format(entry_id=entry_id, title=title, url=url, updated=updated).encode()
 
 
-@pytest.fixture(autouse=True)
-async def _clean_tables(db_session: AsyncSession) -> None:
-    """Start from a clean slate within this test's own (rolled-back)
-    transaction. Other test modules commit held-asset fixtures (e.g. UNI/WETH
-    via `seeded_assets` + a balance_observation) that would otherwise leak
-    into `_get_held_assets` here and make GDELT/feed-matching assertions
-    order-dependent on the rest of the suite.
+# The allow-list seed from migration 0026 — held assets outside this set
+# must never get press/GDELT coverage regardless of symbol collisions.
+_SEED_TRACKED_SYMBOLS = ("WETH", "UNI", "AAVE", "LINK")
+
+
+async def _purge_news_tables(session: AsyncSession) -> None:
+    await session.execute(text("DELETE FROM news_feed"))
+    await session.execute(text("DELETE FROM snapshot_space"))
+    await session.execute(text("DELETE FROM asset_news"))
+    await session.execute(text("DELETE FROM balance_observation_invalidation"))
+    await session.execute(text("DELETE FROM balance_observation"))
+    # _SEED_TRACKED_SYMBOLS is a module-local constant, not user input.
+    _seed_list = ", ".join(f"'{symbol}'" for symbol in _SEED_TRACKED_SYMBOLS)
+    _delete_sql = f"DELETE FROM news_tracked_asset WHERE asset_symbol NOT IN ({_seed_list})"  # noqa: S608
+    await session.execute(text(_delete_sql))
+
+
+@pytest.fixture()
+async def news_session(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession]:
+    """A session with real commit/rollback — not `db_session`'s rollback-only
+    transaction.
+
+    `handle_news_refresh` commits per tier (AUD-515 P2: a later tier's crash
+    must not roll back an earlier tier's durable work). SQLAlchemy raises
+    "Can't operate on closed transaction" if code under test calls
+    `session.commit()` from inside the `session.begin()` block `db_session`
+    wraps around every test — `test_provider_purge.py` hit the same
+    constraint for `quotes.py`'s commit-on-provider-error path and worked
+    around it the same way, by bypassing `db_session` and managing the
+    session directly.
+
+    Purging on both setup and teardown, with a real commit, matters here for
+    a second reason: a committed tier is not undone by a plain rollback, so
+    without this a test's held-asset fixtures (wallet + balance_observation)
+    leak into every test that runs after it — including, if this file isn't
+    the last to run, unrelated integration tests in other files.
     """
-    await db_session.execute(text("DELETE FROM news_feed"))
-    await db_session.execute(text("DELETE FROM snapshot_space"))
-    await db_session.execute(text("DELETE FROM asset_news"))
-    await db_session.execute(text("DELETE FROM balance_observation_invalidation"))
-    await db_session.execute(text("DELETE FROM balance_observation"))
+    async with db_session_factory() as session:
+        await _purge_news_tables(session)
+        await session.commit()
+        try:
+            yield session
+        finally:
+            await session.rollback()
+            await _purge_news_tables(session)
+            await session.commit()
 
 
 async def _insert_feed(
-    db_session: AsyncSession,
+    session: AsyncSession,
     *,
     key: str,
     url: str,
@@ -67,7 +113,7 @@ async def _insert_feed(
     asset_symbol: str | None = None,
 ) -> uuid.UUID:
     feed_id = uuid.uuid4()
-    await db_session.execute(
+    await session.execute(
         text(
             """
             INSERT INTO news_feed (id, key, tier, asset_symbol, url)
@@ -82,14 +128,14 @@ async def _insert_feed(
             "url": url,
         },
     )
-    await db_session.flush()
+    await session.flush()
     return feed_id
 
 
-async def _insert_wallet(db_session: AsyncSession, address: str) -> uuid.UUID:
+async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
-    cols = await wallet_address_columns(db_session, wallet_id, address)
-    await db_session.execute(
+    cols = await wallet_address_columns(session, wallet_id, address)
+    await session.execute(
         text(
             "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
             " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
@@ -104,10 +150,10 @@ async def _insert_wallet(db_session: AsyncSession, address: str) -> uuid.UUID:
 
 
 async def _insert_asset(
-    db_session: AsyncSession, *, symbol: str, name: str | None = None
+    session: AsyncSession, *, symbol: str, name: str | None = None
 ) -> uuid.UUID:
     asset_id = uuid.uuid4()
-    await db_session.execute(
+    await session.execute(
         text(
             """
             INSERT INTO asset (id, token_address, symbol, name, decimals, source)
@@ -124,13 +170,11 @@ async def _insert_asset(
     return asset_id
 
 
-async def _hold_asset(
-    db_session: AsyncSession, *, symbol: str, name: str | None = None
-) -> uuid.UUID:
+async def _hold_asset(session: AsyncSession, *, symbol: str, name: str | None = None) -> uuid.UUID:
     """Insert an asset with a non-zero balance, so _get_held_assets sees it."""
-    wallet_id = await _insert_wallet(db_session, "0x" + uuid.uuid4().hex[:40])
-    asset_id = await _insert_asset(db_session, symbol=symbol, name=name)
-    await db_session.execute(
+    wallet_id = await _insert_wallet(session, "0x" + uuid.uuid4().hex[:40])
+    asset_id = await _insert_asset(session, symbol=symbol, name=name)
+    await session.execute(
         text(
             "INSERT INTO balance_observation"
             " (id, wallet_id, asset_id, raw_amount, block_number, observed_at)"
@@ -138,12 +182,24 @@ async def _hold_asset(
         ),
         {"id": str(uuid.uuid4()), "wallet": str(wallet_id), "asset": str(asset_id)},
     )
-    await db_session.flush()
+    await session.flush()
     return asset_id
 
 
-async def _news_rows(db_session: AsyncSession, *, asset_id: uuid.UUID) -> list[dict]:
-    rows = await db_session.execute(
+async def _track_asset(session: AsyncSession, *, symbol: str) -> None:
+    """Opt *symbol* into the press/GDELT allow-list (AUD-515)."""
+    await session.execute(
+        text(
+            "INSERT INTO news_tracked_asset (asset_symbol) VALUES (:symbol)"
+            " ON CONFLICT (asset_symbol) DO NOTHING"
+        ),
+        {"symbol": symbol},
+    )
+    await session.flush()
+
+
+async def _news_rows(session: AsyncSession, *, asset_id: uuid.UUID) -> list[dict]:
+    rows = await session.execute(
         text(
             "SELECT source, external_id, title, url, news_site, published_at"
             " FROM asset_news WHERE asset_id = :id ORDER BY published_at"
@@ -153,11 +209,11 @@ async def _news_rows(db_session: AsyncSession, *, asset_id: uuid.UUID) -> list[d
     return [dict(r) for r in rows.mappings()]
 
 
-async def test_inserts_news_with_no_api_key_configured(db_session: AsyncSession) -> None:
+async def test_inserts_news_with_no_api_key_configured(news_session: AsyncSession) -> None:
     """No `integration` row for coingecko exists anywhere in this test."""
-    asset_id = await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     await _insert_feed(
-        db_session,
+        news_session,
         key="project:ethereum-blog",
         tier="project",
         asset_symbol="WETH",
@@ -172,19 +228,21 @@ async def test_inserts_news_with_no_api_key_configured(db_session: AsyncSession)
                 headers={"etag": '"v1"'},
             )
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=asset_id)
+    rows = await _news_rows(news_session, asset_id=asset_id)
     assert len(rows) == 1
     assert rows[0]["source"] == "project:ethereum-blog"
     assert rows[0]["external_id"] == "entry-1"
     assert rows[0]["title"] == "Upgrade ships"
 
 
-async def test_304_not_modified_recorded_as_success_no_duplicate(db_session: AsyncSession) -> None:
-    asset_id = await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+async def test_304_not_modified_recorded_as_success_no_duplicate(
+    news_session: AsyncSession,
+) -> None:
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     feed_id = await _insert_feed(
-        db_session,
+        news_session,
         key="k",
         tier="project",
         asset_symbol="WETH",
@@ -195,24 +253,24 @@ async def test_304_not_modified_recorded_as_success_no_duplicate(db_session: Asy
         mock.get("https://example.com/feed.xml").mock(
             return_value=Response(200, content=_atom("e1", "T", "https://example.com/1"))
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    assert len(await _news_rows(db_session, asset_id=asset_id)) == 1
+    assert len(await _news_rows(news_session, asset_id=asset_id)) == 1
 
     # Force the feed due again (bypassing the per-feed throttle) and return 304.
-    await db_session.execute(
+    await news_session.execute(
         text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
         {"id": str(feed_id)},
     )
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://example.com/feed.xml").mock(return_value=Response(304))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=asset_id)
+    rows = await _news_rows(news_session, asset_id=asset_id)
     assert len(rows) == 1
 
     health = (
-        await db_session.execute(
+        await news_session.execute(
             text("SELECT consecutive_failures, last_success_at FROM news_feed WHERE id = :id"),
             {"id": str(feed_id)},
         )
@@ -221,10 +279,10 @@ async def test_304_not_modified_recorded_as_success_no_duplicate(db_session: Asy
     assert health[1] is not None
 
 
-async def test_dedupe_on_repoll_of_unchanged_feed(db_session: AsyncSession) -> None:
-    asset_id = await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+async def test_dedupe_on_repoll_of_unchanged_feed(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     feed_id = await _insert_feed(
-        db_session,
+        news_session,
         key="k",
         tier="project",
         asset_symbol="WETH",
@@ -234,32 +292,32 @@ async def test_dedupe_on_repoll_of_unchanged_feed(db_session: AsyncSession) -> N
     body = _atom("same-entry", "Same title", "https://example.com/1")
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://example.com/feed.xml").mock(return_value=Response(200, content=body))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    await db_session.execute(
+    await news_session.execute(
         text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
         {"id": str(feed_id)},
     )
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://example.com/feed.xml").mock(return_value=Response(200, content=body))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    assert len(await _news_rows(db_session, asset_id=asset_id)) == 1
+    assert len(await _news_rows(news_session, asset_id=asset_id)) == 1
 
 
 async def test_feed_failure_increments_health_without_breaking_other_feeds(
-    db_session: AsyncSession,
+    news_session: AsyncSession,
 ) -> None:
-    asset_id = await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     broken_id = await _insert_feed(
-        db_session,
+        news_session,
         key="broken",
         tier="project",
         asset_symbol="WETH",
         url="https://example.com/broken.xml",
     )
     await _insert_feed(
-        db_session,
+        news_session,
         key="working",
         tier="project",
         asset_symbol="WETH",
@@ -273,14 +331,14 @@ async def test_feed_failure_increments_health_without_breaking_other_feeds(
         mock.get("https://example.com/working.xml").mock(
             return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=asset_id)
+    rows = await _news_rows(news_session, asset_id=asset_id)
     assert len(rows) == 1
     assert rows[0]["source"] == "working"
 
     health = (
-        await db_session.execute(
+        await news_session.execute(
             text("SELECT consecutive_failures, last_error FROM news_feed WHERE id = :id"),
             {"id": str(broken_id)},
         )
@@ -289,17 +347,17 @@ async def test_feed_failure_increments_health_without_breaking_other_feeds(
     assert health[1] is not None
 
 
-async def test_feed_scoped_to_unheld_symbol_is_not_polled(db_session: AsyncSession) -> None:
-    await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+async def test_feed_scoped_to_unheld_symbol_is_not_polled(news_session: AsyncSession) -> None:
+    await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     await _insert_feed(
-        db_session,
+        news_session,
         key="weth-feed",
         tier="project",
         asset_symbol="WETH",
         url="https://example.com/weth.xml",
     )
     await _insert_feed(
-        db_session,
+        news_session,
         key="aave-feed",
         tier="project",
         asset_symbol="AAVE",
@@ -311,17 +369,17 @@ async def test_feed_scoped_to_unheld_symbol_is_not_polled(db_session: AsyncSessi
             return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
         )
         aave_route = mock.get("https://example.com/aave.xml").mock(return_value=Response(200))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
     assert weth_route.called
     assert not aave_route.called
 
 
-async def test_press_tier_feed_matches_by_keyword(db_session: AsyncSession) -> None:
-    weth_id = await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
-    await _hold_asset(db_session, symbol="UNI", name="Uniswap")
+async def test_press_tier_feed_matches_by_keyword(news_session: AsyncSession) -> None:
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _hold_asset(news_session, symbol="UNI", name="Uniswap")
     await _insert_feed(
-        db_session, key="press:coindesk", tier="press", url="https://example.com/press.xml"
+        news_session, key="press:coindesk", tier="press", url="https://example.com/press.xml"
     )
 
     with respx.mock(assert_all_called=False) as mock:
@@ -335,17 +393,18 @@ async def test_press_tier_feed_matches_by_keyword(db_session: AsyncSession) -> N
         mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
             return_value=Response(200, json={"articles": []})
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=weth_id)
+    rows = await _news_rows(news_session, asset_id=weth_id)
     assert len(rows) == 1
     assert rows[0]["source"] == "press:coindesk"
 
 
 async def test_gdelt_breadth_tier_used_for_asset_without_native_feed(
-    db_session: AsyncSession,
+    news_session: AsyncSession,
 ) -> None:
-    asset_id = await _hold_asset(db_session, symbol="ZORB", name="Zorbcoin")
+    asset_id = await _hold_asset(news_session, symbol="ZORB", name="Zorbcoin")
+    await _track_asset(news_session, symbol="ZORB")
 
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
@@ -363,18 +422,18 @@ async def test_gdelt_breadth_tier_used_for_asset_without_native_feed(
                 },
             )
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=asset_id)
+    rows = await _news_rows(news_session, asset_id=asset_id)
     assert len(rows) == 1
     assert rows[0]["source"] == "gdelt"
     assert rows[0]["url"] == "https://news.example.com/zorb"
 
 
-async def test_gdelt_not_queried_for_asset_with_native_feed(db_session: AsyncSession) -> None:
-    await _hold_asset(db_session, symbol="WETH", name="Wrapped Ether")
+async def test_gdelt_not_queried_for_asset_with_native_feed(news_session: AsyncSession) -> None:
+    await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
     await _insert_feed(
-        db_session,
+        news_session,
         key="weth-feed",
         tier="project",
         asset_symbol="WETH",
@@ -388,14 +447,145 @@ async def test_gdelt_not_queried_for_asset_with_native_feed(db_session: AsyncSes
         gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
             return_value=Response(200, json={"articles": []})
         )
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
     assert not gdelt_route.called
 
 
-async def test_prune_removes_rows_older_than_90_days(db_session: AsyncSession) -> None:
-    asset_id = await _insert_asset(db_session, symbol="OLD", name="Old Token")
-    await db_session.execute(
+async def test_untracked_symbol_collision_gets_no_press_or_gdelt_news(
+    news_session: AsyncSession,
+) -> None:
+    """Reproduces the staging bug (AUD-515 P1): a held airdrop token's
+    on-chain ticker is literally 'BITCOIN'. It must not vacuum up every
+    Bitcoin headline just because it is held and `match_assets` hits a
+    word-boundary match on its symbol.
+    """
+    bitcoin_meme_id = await _hold_asset(
+        news_session, symbol="BITCOIN", name="HarryPotterObamaSonic10Inu"
+    )
+    await _insert_feed(
+        news_session, key="press:coindesk", tier="press", url="https://example.com/press.xml"
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/press.xml").mock(
+            return_value=Response(
+                200, content=_atom("p1", "Bitcoin hits new high", "https://example.com/p1")
+            )
+        )
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert await _news_rows(news_session, asset_id=bitcoin_meme_id) == []
+    assert not gdelt_route.called
+
+
+async def test_gdelt_tier_capped_at_max_queries_per_run(news_session: AsyncSession) -> None:
+    """70 held assets must not translate into 70 sequential GDELT calls —
+    the staging incident that burned ~13 minutes of a 900s cadence for
+    zero rows (AUD-515 P1).
+    """
+    symbols = [f"ZZ{i}" for i in range(news_module._GDELT_MAX_QUERIES_PER_RUN + 5)]
+    for symbol in symbols:
+        await _hold_asset(news_session, symbol=symbol, name=symbol)
+        await _track_asset(news_session, symbol=symbol)
+
+    with respx.mock(assert_all_called=False) as mock:
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert gdelt_route.call_count == news_module._GDELT_MAX_QUERIES_PER_RUN
+
+
+async def test_gdelt_tier_aborts_after_consecutive_429s(news_session: AsyncSession) -> None:
+    """A run pinned against GDELT rate limits must back off rather than
+    grind through every remaining asset one 429 at a time.
+    """
+    symbols = [f"ZZ{i}" for i in range(news_module._GDELT_MAX_CONSECUTIVE_429 + 3)]
+    for symbol in symbols:
+        await _hold_asset(news_session, symbol=symbol, name=symbol)
+        await _track_asset(news_session, symbol=symbol)
+
+    with respx.mock(assert_all_called=False) as mock:
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(429)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert gdelt_route.call_count == news_module._GDELT_MAX_CONSECUTIVE_429
+
+
+async def test_gdelt_query_is_quoted_and_skips_short_symbols(news_session: AsyncSession) -> None:
+    await _hold_asset(news_session, symbol="T", name="Threshold")
+    await _track_asset(news_session, symbol="T")
+    await _hold_asset(news_session, symbol="ZORB", name="Zorbcoin")
+    await _track_asset(news_session, symbol="ZORB")
+
+    with respx.mock(assert_all_called=False) as mock:
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert gdelt_route.call_count == 1
+    sent = gdelt_route.calls.last.request
+    assert sent.url.params["query"] == '"ZORB"'
+
+
+async def test_feed_polls_durable_when_later_tier_raises(
+    news_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash in the GDELT or Snapshot tier must not roll back feed polls
+    and health counters that already committed (AUD-515 P2) — on staging,
+    `last_polled_at` stayed NULL and `asset_news` stayed empty for the
+    whole run despite feeds having been fetched successfully at the start.
+    """
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    feed_id = await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        asset_symbol="WETH",
+        url="https://example.com/weth.xml",
+    )
+    # A due snapshot space is required so the (monkeypatched) Snapshot tier
+    # actually runs this run — otherwise there is nothing for it to crash on.
+    await news_session.execute(
+        text("INSERT INTO snapshot_space (asset_symbol, space_id) VALUES ('WETH', 'ethereum.eth')")
+    )
+
+    async def _boom(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("simulated crash mid-run")
+
+    monkeypatch.setattr(news_module, "_poll_snapshot_space", _boom)
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/weth.xml").mock(
+            return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
+        )
+        with pytest.raises(RuntimeError, match="simulated crash mid-run"):
+            await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert len(rows) == 1
+
+    health = (
+        await news_session.execute(
+            text("SELECT last_polled_at, last_success_at FROM news_feed WHERE id = :id"),
+            {"id": str(feed_id)},
+        )
+    ).one()
+    assert health[0] is not None
+    assert health[1] is not None
+
+
+async def test_prune_removes_rows_older_than_90_days(news_session: AsyncSession) -> None:
+    asset_id = await _insert_asset(news_session, symbol="OLD", name="Old Token")
+    await news_session.execute(
         text(
             """
             INSERT INTO asset_news
@@ -409,9 +599,9 @@ async def test_prune_removes_rows_older_than_90_days(db_session: AsyncSession) -
         ),
         {"asset_id": str(asset_id)},
     )
-    await db_session.flush()
+    await news_session.flush()
 
-    await handle_news_refresh(db_session, uuid.uuid4())
+    await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=asset_id)
+    rows = await _news_rows(news_session, asset_id=asset_id)
     assert [r["external_id"] for r in rows] == ["boundary"]
