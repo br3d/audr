@@ -511,7 +511,44 @@ describe('DashboardPage', () => {
       await flush()
       expect(container.textContent).not.toMatch(/no on-chain events indexed yet/i)
       expect(container.textContent).not.toMatch(/coming soon/i)
-      expect(container.textContent).toContain('in')
+      // Unknown token (no symbol/decimals): honest fallback, not a raw hash.
+      expect(container.textContent).toContain('Received 1,000,000 units of 0x1234…5678')
+      await unmount(container, root)
+    })
+
+    it('renders a human-readable title for a known, priced event', async () => {
+      mockFetchEvents.mockResolvedValue({
+        total: 1,
+        limit: 7,
+        offset: 0,
+        events: [
+          {
+            id: 'ev2',
+            wallet_id: 'w1',
+            tx_hash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            block_number: 101,
+            log_index: 0,
+            event_type: 'transfer_in',
+            token_address: '0x1234567890abcdef1234567890abcdef12345678',
+            counterparty_address: '0x7a12000000000000000000000000000000c921',
+            raw_amount: '2000000000',
+            indexed_at: '2026-01-01T00:00:00Z',
+            asset_id: 'asset-1',
+            symbol: 'USDC',
+            token_name: 'USD Coin',
+            decimals: 6,
+            amount: '2000',
+            price_usd: '1',
+            value_usd: '2000',
+            wallet_label: 'Main Wallet',
+          },
+        ],
+      })
+      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
+      await flush()
+      expect(container.textContent).toContain('Received 2,000 USDC from 0x7a12…c921')
+      expect(container.textContent).toContain('Main Wallet')
+      expect(container.textContent).toContain('+$2,000.00')
       await unmount(container, root)
     })
 

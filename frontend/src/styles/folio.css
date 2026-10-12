@@ -668,36 +668,75 @@ body {
 }
 
 /* ----------------------------------------------------------------
-   Recent events (compact dashboard list)
+   Event row (shared by the dashboard's Recent Events and the Events page)
    ---------------------------------------------------------------- */
-.recent-events-list {
+.event-list {
   display: flex;
   flex-direction: column;
 }
 
-.recent-events-row {
+.event-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  padding: 10px 0;
+  padding: 14px 0;
   border-bottom: 1px solid var(--border);
 }
 
-.recent-events-row:last-child {
+.event-row:last-child {
   border-bottom: none;
   padding-bottom: 0;
 }
 
-.recent-events-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.event-icon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+}
+
+.event-icon-positive {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.event-icon-negative {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.event-main {
+  flex: 1;
   min-width: 0;
 }
 
-.recent-events-meta {
-  flex-shrink: 0;
+.event-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.event-title-link {
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.event-title-link:hover {
+  text-decoration: underline;
+}
+
+.event-amount {
+  flex: none;
+  white-space: nowrap;
+}
+
+.event-subtitle {
+  margin-top: 2px;
   font-size: var(--text-xs);
   color: var(--text-muted);
 }

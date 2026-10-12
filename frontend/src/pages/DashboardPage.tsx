@@ -12,6 +12,8 @@ import AllocationBar from '../components/AllocationBar'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
 import ScanStatus from '../components/ScanStatus'
+import EventRow from '../components/EventRow'
+import { shortenAddress } from '../portfolio/events'
 
 const RECENT_EVENTS_LIMIT = 7
 
@@ -84,11 +86,6 @@ function formatShortDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-function shortenAddress(address: string): string {
-  if (address.length <= 12) return address
-  return `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
 interface HistoryChange {
@@ -422,21 +419,13 @@ export default function DashboardPage({ setPage }: Props) {
             </div>
             <div className="card">
               {recentEvents.length > 0 ? (
-                <ul className="recent-events-list" role="list">
+                <ul className="event-list" role="list">
                   {recentEvents.map((e) => (
-                    <li key={e.id} className="recent-events-row">
-                      <div className="recent-events-main">
-                        {e.event_type === 'transfer_in' ? (
-                          <span className="badge badge-ok">in</span>
-                        ) : (
-                          <span className="badge badge-neutral">out</span>
-                        )}
-                        <span className="mono" title={e.token_address}>
-                          {shortenAddress(e.token_address)}
-                        </span>
-                      </div>
-                      <span className="recent-events-meta">{formatHuman(e.indexed_at)}</span>
-                    </li>
+                    <EventRow
+                      key={e.id}
+                      event={e}
+                      walletLabel={e.wallet_label ?? shortenAddress(e.wallet_id)}
+                    />
                   ))}
                 </ul>
               ) : (

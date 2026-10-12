@@ -209,6 +209,22 @@ export function IconZap(props: IconProps) {
   )
 }
 
+export function IconArrowDown(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path d="M10 3v12M5 11l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export function IconArrowUp(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path d="M10 17V5M5 9l5-5 5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export function IconRefresh(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
