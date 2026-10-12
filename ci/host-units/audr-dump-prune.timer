@@ -5,10 +5,10 @@
 # was off is still worth replaying, because the disk pressure it relieves is
 # still there when the host comes back.
 [Unit]
-Description=Weekly Paperclip dump prune (AUD-505)
+Description=Daily Paperclip dump prune (AUD-505, cadence widened per AUD-509)
 
 [Timer]
-OnCalendar=Sun 04:00:00
+OnCalendar=04:00:00
 Persistent=true
 RandomizedDelaySec=15m
 Unit=audr-dump-prune.service

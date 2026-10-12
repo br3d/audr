@@ -1,7 +1,11 @@
 [Unit]
-# Weekly GFS prune of the Paperclip DB dump volume on ai-stuff.
-# Authorised by the Chief of Staff on AUD-505 (2026-10-11): a weekly timer
-# running dump-prune.py --apply with the default --days 3. No other scope.
+# Daily GFS prune of the Paperclip DB dump volume on ai-stuff.
+# Authorised by the Chief of Staff on AUD-505 (2026-10-11): a timer running
+# dump-prune.py --apply with the default --days 3. No other scope. The cadence
+# was weekly as first granted and widened to daily on AUD-509 (2026-10-12),
+# because the rule only keeps 3 days of hourlies: at the measured 2.1 GB/day a
+# weekly run let the volume peak near 20 GB on a host with 22 GB free, while a
+# daily run holds it flat at 5-7 GB.
 #
 # The executable is a pinned root-owned copy, NOT /home/codex/git/audr, because
 # that working copy is shared between agents and sits on whatever branch was
