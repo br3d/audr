@@ -4,11 +4,13 @@ Written for AUD-503. The question from the founder: *collect news about the
 crypto projects we hold, with no paid APIs — what are the options, and what do
 they cost us?*
 
-This document maps the option space, states the pros and cons of each option
-honestly, and ends with a staged recommendation. It is an options paper, not a
-decision: the scope decision belongs to the founder (AUD-503), and the
-classification/alerting half of the feature is already specified separately in
-ADR-007 (AUD-337).
+Sections 1–8 map the option space, state the pros and cons of each option
+honestly, and end with a staged recommendation. They were written before the
+scope decision and are kept as-is, because the trade-offs still apply to
+anything added later. **§9 records what actually shipped and how to operate
+it** — read that first if you are adding coverage for a new holding rather
+than re-opening the design question. The classification/alerting half of the
+feature is specified separately in ADR-007 (AUD-337).
 
 ---
 
@@ -323,7 +325,72 @@ Cross-cutting, regardless of option:
 
 ---
 
-## 9. Status
+## 9. What shipped, and how to operate it
 
-Options paper only. Awaiting the founder's scope decision on AUD-503 before any
-implementation issue is created.
+The founder approved stages 1 and 2. Both are merged and running on staging
+with **no API key anywhere in the news path** — the CoinGecko news code is
+deleted, not disabled.
+
+| Stage | Issue | What it does |
+| --- | --- | --- |
+| 1 | AUD-512 | `news_feed` registry + conditional-GET RSS/Atom poller; GDELT breadth tier |
+| 2 | AUD-513 | Snapshot governance proposals for held protocols |
+| 3 | AUD-515 | Relevance allow-list, GDELT throttling, per-tier commits |
+
+Stage 3 was not in the original plan. It exists because the first staging run
+reproduced, in production data, exactly the keyword-ambiguity failure §3
+predicted: 44 of 121 ingested rows landed on a meme token ticked `BITCOIN`
+whose `asset.name` is `HarryPotterObamaSonic10Inu`, and 4 more on a token
+named `ASSET`. Matching headlines against *every held asset* is not viable at
+any portfolio size. The fix is the rule §3 had already stated for Snapshot,
+applied everywhere: **coverage comes from an explicit mapping, never from
+guessing at a symbol.**
+
+### The three registries
+
+Everything the job polls lives in a table, not in code. Adding coverage is an
+INSERT; there is no redeploy.
+
+- **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `asset_symbol`,
+  `url`, `enabled`). `asset_symbol` set ⇒ every item from that feed is
+  attributed to that asset (a project blog or a GitHub `releases.atom`).
+  `asset_symbol` NULL ⇒ a trade-press feed, whose items are matched against
+  the allow-list below. Carries `etag`/`last_modified` for conditional GETs
+  and `consecutive_failures`/`last_error` for health.
+- **`snapshot_space`** — one row per Snapshot space (`asset_symbol`,
+  `space_id`). Governance proposals are attributed by space, never by symbol.
+- **`news_tracked_asset`** — the allow-list of symbols eligible for
+  trade-press matching and for a GDELT query. Seeded with the four symbols
+  `news_feed` already curates: WETH, UNI, AAVE, LINK. **Being held is not
+  enough**; a symbol only becomes eligible when someone opts it in here.
+
+### Adding a new holding to news coverage
+
+In preference order, best signal first:
+
+1. Does the project publish a feed? Add it to `news_feed` with
+   `asset_symbol` set — attribution is then exact and no matching is involved.
+   A GitHub repo always has `https://github.com/<org>/<repo>/releases.atom`.
+2. Is it a governance token with a Snapshot space? Add the space to
+   `snapshot_space`.
+3. Only if neither exists, and only if the ticker is distinctive enough to
+   survive a headline search, add it to `news_tracked_asset`. Check the ticker
+   against `asset.name` first — this is the step that produced the
+   `BITCOIN`/`HarryPotterObamaSonic10Inu` mess.
+
+Short, generic or English-word tickers (`T`, `ETH`, `ASSET`, `COW`) belong in
+1 or 2, never in 3.
+
+### Operational notes
+
+- Retention is 90 days, one constant shared with ADR-007's alert retention.
+- Each tier (feeds, GDELT, Snapshot) commits independently, so a late-tier
+  failure cannot roll back successful polls earlier in the same run.
+- A failing source degrades to skip-and-log and increments its failure
+  counter; it never fails the run. Silent coverage decay is still the dominant
+  failure mode here — watch `consecutive_failures`.
+- GDELT is rate-limited by design: capped query count, request spacing, and an
+  abort after consecutive 429s. It is the breadth tier of last resort, not a
+  primary source.
+- Rows written before the stage-3 allow-list were misattributed by definition
+  and are deleted by migration 0027.
