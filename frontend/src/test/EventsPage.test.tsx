@@ -136,7 +136,7 @@ describe('EventsPage', () => {
     ;({ container, root } = mountPage())
 
     await vi.waitFor(() => {
-      expect(container.querySelector('table[aria-label="On-chain events"]')).toBeTruthy()
+      expect(container.querySelector('ul[aria-label="On-chain events"]')).toBeTruthy()
       expect(container.querySelector('table[aria-label="Token allowances"]')).toBeTruthy()
     })
     expect(container.textContent).toContain('My Cold Wallet')

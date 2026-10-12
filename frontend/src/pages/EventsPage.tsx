@@ -1,13 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { Decimal } from 'decimal.js'
 import {
   fetchEvents,
   fetchAllowances,
   fetchWallets,
   ApiError,
 } from '../api/client'
-import type { OnchainEvent, OnchainEventType, Allowance, WalletItem } from '../api/client'
+import type { OnchainEventType, Allowance, WalletItem } from '../api/client'
 import { boolField, enumField, intField, stringField, useHashQueryState } from '../routing'
+import EventRow from '../components/EventRow'
+import {
+  shortenAddress,
+  formatQuantity,
+  formatIndexedAt,
+  etherscanTxUrl,
+  etherscanAddressUrl,
+} from '../portfolio/events'
 
 const PAGE_SIZE = 50
 
@@ -24,41 +31,18 @@ const EVENTS_SCHEMA = {
   allowancesOffset: intField(0),
 }
 
-function shorten(address: string): string {
-  if (address.length <= 12) return address
-  return `${address.slice(0, 6)}…${address.slice(-4)}`
-}
+const shorten = shortenAddress
 
-function formatIndexedAt(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-// raw_amount is an unscaled uint256 decimal string — we never know the
-// token's decimals here, so it is formatted (thousands separators only,
-// via decimal.js for exactness) and explicitly labeled "raw", never
-// coerced through Number().
+// raw_amount is an unscaled uint256 decimal string — allowances carry no
+// asset enrichment, so this is formatted (thousands separators only, via
+// decimal.js for exactness) and explicitly labeled "raw", never coerced
+// through Number().
 function formatRawAmount(raw: string): string {
   try {
-    return new Decimal(raw).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+    return formatQuantity(raw)
   } catch {
     return raw
   }
-}
-
-function etherscanTxUrl(txHash: string): string {
-  return `https://etherscan.io/tx/${txHash}`
-}
-
-function etherscanAddressUrl(address: string): string {
-  return `https://etherscan.io/address/${address}`
 }
 
 function walletLabelMap(wallets: WalletItem[]): Map<string, string> {
@@ -109,46 +93,6 @@ function Pager({
         </button>
       </div>
     </div>
-  )
-}
-
-function EventRow({ event, walletLabel }: { event: OnchainEvent; walletLabel: string }) {
-  return (
-    <tr>
-      <td>
-        {event.event_type === 'transfer_in' ? (
-          <span className="badge badge-ok">in</span>
-        ) : (
-          <span className="badge badge-neutral">out</span>
-        )}
-      </td>
-      <td className="text-secondary">{walletLabel}</td>
-      <td className="td-mono">
-        <span title={event.token_address}>{shorten(event.token_address)}</span>
-      </td>
-      <td className="td-mono">
-        {event.counterparty_address ? (
-          <span title={event.counterparty_address}>{shorten(event.counterparty_address)}</span>
-        ) : (
-          <span className="text-muted">self</span>
-        )}
-      </td>
-      <td className="td-mono">
-        {formatRawAmount(event.raw_amount)} <span className="text-muted">raw</span>
-      </td>
-      <td className="td-mono">
-        <a
-          href={etherscanTxUrl(event.tx_hash)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={event.tx_hash}
-        >
-          {shorten(event.tx_hash)}
-        </a>
-      </td>
-      <td className="text-secondary td-mono">{event.block_number}</td>
-      <td className="text-secondary">{formatIndexedAt(event.indexed_at)}</td>
-    </tr>
   )
 }
 
@@ -258,8 +202,8 @@ export default function EventsPage() {
   return (
     <div>
       <p className="page-subheading">
-        On-chain activity and approval signals indexed from your tracked addresses. Amounts
-        are shown unscaled ("raw") since token decimals are not part of this data.
+        On-chain activity and approval signals indexed from your tracked addresses. Approval
+        amounts are shown unscaled ("raw") since token decimals are not part of allowance data.
       </p>
 
       <div className="toolbar mb-16">
@@ -335,27 +279,15 @@ export default function EventsPage() {
 
         {eventsQuery.data && events.length > 0 && (
           <>
-            <div className="table-container">
-              <table className="table-folio" aria-label="On-chain events">
-                <thead>
-                  <tr>
-                    <th scope="col">Dir</th>
-                    <th scope="col">Wallet</th>
-                    <th scope="col">Token</th>
-                    <th scope="col">Counterparty</th>
-                    <th scope="col">Amount</th>
-                    <th scope="col">Tx</th>
-                    <th scope="col">Block</th>
-                    <th scope="col">Indexed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((e) => (
-                    <EventRow key={e.id} event={e} walletLabel={labelFor.get(e.wallet_id) ?? shorten(e.wallet_id)} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul className="event-list" role="list" aria-label="On-chain events">
+              {events.map((e) => (
+                <EventRow
+                  key={e.id}
+                  event={e}
+                  walletLabel={e.wallet_label ?? labelFor.get(e.wallet_id) ?? shorten(e.wallet_id)}
+                />
+              ))}
+            </ul>
             <Pager
               offset={eventsOffset}
               limit={eventsQuery.data.limit}
