@@ -31,6 +31,8 @@ def _make_override(factory: async_sessionmaker[AsyncSession]):
 _CLEAN_ORDER = (
     "valuation_line",
     "valuation_snapshot",
+    "quote_observation",
+    "quote_set",
     "balance_observation",
     "monitored_pair",
     "asset",
@@ -161,6 +163,7 @@ async def _seed_asset(
     symbol: str = "TKN",
     decimals: int = 18,
     source: str = "catalog",
+    name: str | None = None,
 ) -> str:
     asset_id = str(uuid.uuid4())
     async with db_session_factory() as session:
@@ -168,17 +171,53 @@ async def _seed_asset(
             await session.execute(
                 text(
                     "INSERT INTO asset (id, token_address, symbol, name, decimals, source)"
-                    " VALUES (:id, :addr, :sym, :sym, :dec, :src)"
+                    " VALUES (:id, :addr, :sym, :name, :dec, :src)"
                 ),
                 {
                     "id": asset_id,
                     "addr": token_address.lower(),
                     "sym": symbol,
+                    "name": name if name is not None else symbol,
                     "dec": decimals,
                     "src": source,
                 },
             )
     return asset_id
+
+
+async def _seed_quote_observation(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    asset_id: str,
+    price_usd: str,
+    fetched_at_sql: str = "now()",
+) -> None:
+    """Insert a complete quote_set/observation pair for *asset_id*.
+
+    *fetched_at_sql* is a raw SQL expression (e.g. "now() - interval '24 hours'")
+    interpolated directly — test-only, never user input.
+    """
+    quote_set_id = str(uuid.uuid4())
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO quote_set (id, provider, fetched_at, status, created_at)"
+                    f" VALUES (:id, 'coinmarketcap', {fetched_at_sql}, 'complete', now())"  # noqa: S608 -- fetched_at_sql is a fixed test-local constant, never user input
+                ),
+                {"id": quote_set_id},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO quote_observation (id, quote_set_id, asset_id, price_usd)"
+                    " VALUES (:id, :qset, :asset, :price)"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "qset": quote_set_id,
+                    "asset": asset_id,
+                    "price": price_usd,
+                },
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -713,3 +752,260 @@ async def test_portfolio_allocations_wallet_filter_scopes_aggregation(
     assert len(allocations) == 1
     assert allocations[0]["wallet_count"] == 1
     assert allocations[0]["value_usd"] == "1.000000000000000000"
+
+
+# ---------------------------------------------------------------------------
+# AUD-523: allocation `name` and `price_change_24h_pct`
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_portfolio_allocation_includes_asset_name(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory, symbol="WETH", name="Wrapped Ether")
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["symbol"] == "WETH"
+    assert alloc["name"] == "Wrapped Ether"
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_null_without_reference(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """No price history at all -> null, not zero (unknown != zero)."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["price_change_24h_pct"] is None
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_rise(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "100.0", fetched_at_sql="now() - interval '24 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "110.0",
+                "value_usd": "110.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["price_change_24h_pct"] == "10.00"
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_fall(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "100.0", fetched_at_sql="now() - interval '24 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "90.0",
+                "value_usd": "90.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["price_change_24h_pct"] == "-10.00"
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_zero_change(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "100.0", fetched_at_sql="now() - interval '24 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["price_change_24h_pct"] == "0.00"
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_outside_tolerance_is_null(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A 30h-old observation is outside the +/-6h tolerance around now()-24h."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "50.0", fetched_at_sql="now() - interval '31 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["price_change_24h_pct"] is None
+
+
+@pytest.mark.integration
+async def test_portfolio_price_change_24h_pct_picks_closest_within_tolerance(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Multiple observations in the window -> the one closest to now()-24h wins."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    # Farther from the now()-24h target.
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "40.0", fetched_at_sql="now() - interval '29 hours'"
+    )
+    # Closest to the target -> this one must be picked.
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "50.0", fetched_at_sql="now() - interval '24 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "100.0",
+                "value_usd": "100.0",
+            }
+        ],
+    )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    # (100 - 50) / 50 * 100 = 100.00, not (100-40)/40*100 = 150.00.
+    assert alloc["price_change_24h_pct"] == "100.00"
+
+
+@pytest.mark.integration
+async def test_portfolio_excluded_asset_unaffected_by_price_change(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Exclusion behaviour (included=false, 0% share) is unchanged by AUD-523."""
+    await _setup_and_get_csrf(http_client)
+    wallet_id = await _seed_wallet(db_session_factory)
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_quote_observation(
+        db_session_factory, asset_id, "100.0", fetched_at_sql="now() - interval '24 hours'"
+    )
+    await _seed_snapshot(
+        db_session_factory,
+        quality="complete",
+        holdings=[
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "price_usd": "110.0",
+                "value_usd": "110.0",
+            }
+        ],
+    )
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("UPDATE asset SET excluded = true WHERE id = :id"), {"id": asset_id}
+            )
+
+    r = await http_client.get(_PORTFOLIO_URL)
+    assert r.status_code == 200
+    alloc = r.json()["allocations"][0]
+    assert alloc["included"] is False
+    assert alloc["percentage"] == "0"
+    assert alloc["price_change_24h_pct"] == "10.00"
