@@ -251,9 +251,11 @@ def main(argv: list[str] | None = None) -> int:
         + (f"; {errors} failures" if errors else "")
     )
     print(
-        "note: this is a stopgap. The durable fix is the retention setting on"
-        " the Paperclip board (AUD-435); without it the volume re-grows"
-        " ~2.1 GB/day and this must run again in about a week."
+        "note: this runs daily from audr-dump-prune.timer (AUD-505/AUD-509), so"
+        " no hand-repeat is due. Paperclip still writes ~2.1 GB/day of dumps that"
+        " this deletes again; reducing that write churn needs the retention"
+        " setting on the Paperclip board (AUD-435), which only a board user can"
+        " change. Disk stays flat either way."
     )
     return 1 if errors else 0
 
