@@ -75,15 +75,30 @@ describe('Layout', () => {
     expect(container.querySelector('.topbar-title')?.textContent).toBe('Assistant (prototype)')
   })
 
-  it('renders the space card, nav section label, and self-hosted status without a Sign out button in the sidebar', () => {
+  it('renders the space card, grouped nav section labels, and self-hosted status without a Sign out button in the sidebar', () => {
     mount(vi.fn(), vi.fn())
     expect(container.querySelector('.space-card')?.textContent).toContain('Personal portfolio')
     expect(container.querySelector('.space-card')?.textContent).toContain('Local space')
-    expect(container.querySelector('.nav-section-label')?.textContent).toBe('Navigation')
+    const groupLabels = Array.from(container.querySelectorAll('.nav-section-label')).map(
+      (el) => el.textContent,
+    )
+    expect(groupLabels).toEqual(['Portfolio', 'System'])
     expect(container.querySelector('.sidebar-footer')?.textContent).toContain(
       'Self-hosted · your data stays yours',
     )
     expect(container.querySelector('.sidebar-footer')?.textContent).not.toContain('Sign out')
+  })
+
+  it('splits the sidebar nav into Portfolio and System groups (AUD-525)', () => {
+    mount(vi.fn(), vi.fn())
+    const groups = Array.from(container.querySelectorAll('.nav-group'))
+    expect(groups).toHaveLength(2)
+    const itemsOf = (group: Element) =>
+      Array.from(group.querySelectorAll('.nav-item')).map((b) => b.textContent)
+    expect(itemsOf(groups[0])).toEqual(['Dashboard', 'Wallets', 'Events'])
+    expect(itemsOf(groups[1])).toEqual(['Schedules', 'Status', 'Connections', 'Account & Data'])
+    expect(groups[1].classList.contains('nav-group-secondary')).toBe(true)
+    expect(groups[0].classList.contains('nav-group-secondary')).toBe(false)
   })
 
   it('renders a user icon on the account menu button instead of a text initial (AUD-416)', () => {

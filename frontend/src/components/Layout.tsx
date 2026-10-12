@@ -51,18 +51,34 @@ export type MainPage = (typeof MAIN_PAGES)[number]
 
 // ---- Nav config ----
 
-const NAV_ITEMS: { page: MainPage; label: string; Icon: React.FC<React.SVGProps<SVGSVGElement>> }[] = [
-  { page: 'dashboard', label: 'Dashboard', Icon: IconGrid },
-  { page: 'wallets', label: 'Wallets', Icon: IconWallet },
-  // AUD-408: Assets is a maintenance registry (exclusions, decimals conflicts,
-  // manual contracts), not a portfolio view. It stays routable at #/assets and
-  // is reached from the Dashboard links, but it no longer takes a nav slot.
-  { page: 'events', label: 'Events', Icon: IconZap },
-  { page: 'schedules', label: 'Schedules', Icon: IconClock },
-  { page: 'status', label: 'Status', Icon: IconActivity },
-  { page: 'connections', label: 'Connections', Icon: IconPlug },
-  { page: 'account', label: 'Account & Data', Icon: IconSettings },
-  // AUD-436: no Assistant entry — see MAIN_PAGES.
+type NavItem = { page: MainPage; label: string; Icon: React.FC<React.SVGProps<SVGSVGElement>> }
+
+type NavGroup = { key: 'portfolio' | 'system'; label: string; items: NavItem[] }
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    key: 'portfolio',
+    label: 'Portfolio',
+    items: [
+      { page: 'dashboard', label: 'Dashboard', Icon: IconGrid },
+      { page: 'wallets', label: 'Wallets', Icon: IconWallet },
+      // AUD-408: Assets is a maintenance registry (exclusions, decimals conflicts,
+      // manual contracts), not a portfolio view. It stays routable at #/assets and
+      // is reached from the Dashboard links, but it no longer takes a nav slot.
+      { page: 'events', label: 'Events', Icon: IconZap },
+    ],
+  },
+  {
+    key: 'system',
+    label: 'System',
+    items: [
+      { page: 'schedules', label: 'Schedules', Icon: IconClock },
+      { page: 'status', label: 'Status', Icon: IconActivity },
+      { page: 'connections', label: 'Connections', Icon: IconPlug },
+      { page: 'account', label: 'Account & Data', Icon: IconSettings },
+      // AUD-436: no Assistant entry — see MAIN_PAGES.
+    ],
+  },
 ]
 
 const PAGE_TITLES: Record<MainPage, string> = {
@@ -198,20 +214,23 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
             <span className="space-card-type">Local space</span>
           </div>
 
-          <span className="nav-section-label">Navigation</span>
-
           <nav className="sidebar-nav">
-            {NAV_ITEMS.map(({ page: p, label, Icon }) => (
-              <button
-                key={p}
-                type="button"
-                className={`nav-item${page === p ? ' active' : ''}`}
-                onClick={() => setPage(p)}
-                aria-current={page === p ? 'page' : undefined}
-              >
-                <Icon className="nav-item-icon" />
-                <span>{label}</span>
-              </button>
+            {NAV_GROUPS.map((group) => (
+              <div key={group.key} className={`nav-group${group.key === 'system' ? ' nav-group-secondary' : ''}`}>
+                <span className="nav-section-label">{group.label}</span>
+                {group.items.map(({ page: p, label, Icon }) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`nav-item${page === p ? ' active' : ''}`}
+                    onClick={() => setPage(p)}
+                    aria-current={page === p ? 'page' : undefined}
+                  >
+                    <Icon className="nav-item-icon" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
