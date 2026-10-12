@@ -78,6 +78,20 @@ function readBadge(status: ReadStatus) {
   }
 }
 
+/** `null` means no current price, or no 24h-ago reference observation in tolerance — a dash, not 0.00% (AUD-527). */
+function Change24h({ pct }: { pct: string | null }) {
+  if (pct === null) {
+    return <span className="allocation-change text-muted">—</span>
+  }
+  const isUp = !new Decimal(pct).isNegative()
+  return (
+    <span className={`allocation-change ${isUp ? 'text-success' : 'text-danger'}`}>
+      {isUp ? '+' : ''}
+      {pct}%
+    </span>
+  )
+}
+
 function AllocationRow({
   item,
   excluding,
@@ -94,21 +108,62 @@ function AllocationRow({
   return (
     <tr>
       <td>
-        <div className="allocation-asset">
-          <AssetEmblem symbol={item.symbol} logoUrl={item.logo_url} />
-          <span className="allocation-symbol">{item.symbol}</span>
-          <span aria-label={`Read status: ${item.read_status}`}>{readBadge(item.read_status)}</span>
+        <div className="allocation-asset-cell">
+          <div className="allocation-asset">
+            <AssetEmblem symbol={item.symbol} logoUrl={item.logo_url} />
+            <div className="allocation-asset-text">
+              <span className="allocation-name">{item.name}</span>
+              <span className="allocation-asset-sub">
+                <span className="allocation-symbol">{item.symbol}</span>
+                <span aria-label={`Read status: ${item.read_status}`}>
+                  {readBadge(item.read_status)}
+                </span>
+              </span>
+            </div>
+          </div>
+          <div className={`allocation-row-actions${error !== null ? ' has-error' : ''}`}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={onExclude}
+              disabled={excluding}
+              aria-label={`Exclude ${item.symbol}`}
+            >
+              Exclude
+            </button>
+          </div>
         </div>
-      </td>
-      <td className="td-mono allocation-quantity">
-        {item.quantity !== null ? item.quantity : <span className="text-muted">unknown</span>}
-      </td>
-      <td className="td-mono allocation-value">
-        {isUnpriced ? (
-          <span className="text-muted">unpriced</span>
-        ) : (
-          <MoneyValue value={item.value_usd} />
+        {error !== null && (
+          <p role="alert" className="text-danger allocation-row-error">
+            {error}
+          </p>
         )}
+      </td>
+      <td className="td-mono allocation-price-cell">
+        <div className="allocation-price-value">
+          {isUnpriced ? (
+            <span className="text-muted">unpriced</span>
+          ) : (
+            <MoneyValue value={item.price_usd} />
+          )}
+        </div>
+        <Change24h pct={item.price_change_24h_pct} />
+      </td>
+      <td className="td-mono allocation-balance-cell">
+        <div className="allocation-value">
+          {isUnpriced ? (
+            <span className="text-muted">unpriced</span>
+          ) : (
+            <MoneyValue value={item.value_usd} />
+          )}
+        </div>
+        <div className="allocation-quantity">
+          {item.quantity !== null ? (
+            `${item.quantity} ${item.symbol}`
+          ) : (
+            <span className="text-muted">unknown</span>
+          )}
+        </div>
       </td>
       <td className="allocation-share">
         {isUnpriced ? (
@@ -117,22 +172,6 @@ function AllocationRow({
           <span className="allocation-pct" aria-label={`${item.percentage} percent`}>
             {item.percentage}%
           </span>
-        )}
-      </td>
-      <td className="allocation-actions">
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost"
-          onClick={onExclude}
-          disabled={excluding}
-          aria-label={`Exclude ${item.symbol}`}
-        >
-          Exclude
-        </button>
-        {error !== null && (
-          <p role="alert" className="text-danger allocation-row-error">
-            {error}
-          </p>
         )}
       </td>
     </tr>
@@ -316,10 +355,9 @@ export default function AllocationList({ items, onToggleExclude }: Props) {
           <thead>
             <tr>
               <th scope="col">Asset</th>
-              <th scope="col">Amount</th>
-              <th scope="col">Value (USD)</th>
+              <th scope="col">Price / 24h</th>
+              <th scope="col">Balance</th>
               <th scope="col">Allocation</th>
-              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>

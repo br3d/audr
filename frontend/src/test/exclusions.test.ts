@@ -27,10 +27,12 @@ function allocation(assetId: string, valueUsd: string | null, pct: string, inclu
   return {
     asset_id: assetId,
     symbol: assetId.toUpperCase(),
+    name: assetId.toUpperCase(),
     value_usd: valueUsd,
     percentage: pct,
     quantity: '1',
     price_usd: valueUsd,
+    price_change_24h_pct: null,
     wallet_count: 1,
     read_status: 'ok',
     included,

@@ -25,10 +25,12 @@ function makeItem(overrides: Partial<AllocationItem> = {}): AllocationItem {
   return {
     asset_id: 'eth',
     symbol: 'ETH',
+    name: 'Ethereum',
     value_usd: '3456.78',
     percentage: '75.50',
     quantity: '1.5',
     price_usd: '2304.52',
+    price_change_24h_pct: null,
     wallet_count: 1,
     read_status: 'ok',
     included: true,
