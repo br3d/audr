@@ -9,13 +9,14 @@ treated as news about a ZOO holding).
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 import pytest
 import respx
 from httpx import Response
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from audr.jobs.news import handle_news_refresh
 from tests.helpers import wallet_address_columns
@@ -45,25 +46,47 @@ def _graphql_response(proposals: list[dict]) -> dict:
     return {"data": {"proposals": proposals}}
 
 
-@pytest.fixture(autouse=True)
-async def _clean_tables(db_session: AsyncSession) -> None:
-    """Mirror test_news_refresh_job.py: start from a clean slate within this
-    test's own rolled-back transaction, clearing both the seeded news_feed
-    and snapshot_space registry rows so other test modules' fixtures and the
-    migration seed can't leak in and make assertions order-dependent.
+async def _purge_tables(session: AsyncSession) -> None:
+    await session.execute(text("DELETE FROM news_feed"))
+    await session.execute(text("DELETE FROM snapshot_space"))
+    await session.execute(text("DELETE FROM asset_news"))
+    await session.execute(text("DELETE FROM balance_observation_invalidation"))
+    await session.execute(text("DELETE FROM balance_observation"))
+
+
+@pytest.fixture()
+async def news_session(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession]:
+    """A session with real commit/rollback — not `db_session`'s rollback-only
+    transaction.
+
+    `handle_news_refresh` commits per tier (AUD-515 P2), and SQLAlchemy
+    raises "Can't operate on closed transaction" if code under test calls
+    `session.commit()` from inside the `session.begin()` block `db_session`
+    wraps around every test (same constraint `test_news_refresh_job.py`'s
+    `news_session` fixture works around, and `test_provider_purge.py` hit
+    first for `quotes.py`'s commit-on-provider-error path). Purge on both
+    setup and teardown, with a real commit, so a committed tier does not
+    leak into the next test or into unrelated files that run later in the
+    suite — a plain rollback cannot undo a commit.
     """
-    await db_session.execute(text("DELETE FROM news_feed"))
-    await db_session.execute(text("DELETE FROM snapshot_space"))
-    await db_session.execute(text("DELETE FROM asset_news"))
-    await db_session.execute(text("DELETE FROM balance_observation_invalidation"))
-    await db_session.execute(text("DELETE FROM balance_observation"))
+    async with db_session_factory() as session:
+        await _purge_tables(session)
+        await session.commit()
+        try:
+            yield session
+        finally:
+            await session.rollback()
+            await _purge_tables(session)
+            await session.commit()
 
 
 async def _insert_space(
-    db_session: AsyncSession, *, asset_symbol: str, space_id: str = "uniswap"
+    session: AsyncSession, *, asset_symbol: str, space_id: str = "uniswap"
 ) -> uuid.UUID:
     row_id = uuid.uuid4()
-    await db_session.execute(
+    await session.execute(
         text(
             """
             INSERT INTO snapshot_space (id, asset_symbol, space_id)
@@ -72,14 +95,14 @@ async def _insert_space(
         ),
         {"id": str(row_id), "asset_symbol": asset_symbol, "space_id": space_id},
     )
-    await db_session.flush()
+    await session.flush()
     return row_id
 
 
-async def _insert_wallet(db_session: AsyncSession, address: str) -> uuid.UUID:
+async def _insert_wallet(session: AsyncSession, address: str) -> uuid.UUID:
     wallet_id = uuid.uuid4()
-    cols = await wallet_address_columns(db_session, wallet_id, address)
-    await db_session.execute(
+    cols = await wallet_address_columns(session, wallet_id, address)
+    await session.execute(
         text(
             "INSERT INTO wallet (id, address_ciphertext, address_bidx, label_ciphertext, status)"
             " VALUES (:id, :addr_ct, :addr_bidx, '', 'active')"
@@ -94,10 +117,10 @@ async def _insert_wallet(db_session: AsyncSession, address: str) -> uuid.UUID:
 
 
 async def _insert_asset(
-    db_session: AsyncSession, *, symbol: str, name: str | None = None
+    session: AsyncSession, *, symbol: str, name: str | None = None
 ) -> uuid.UUID:
     asset_id = uuid.uuid4()
-    await db_session.execute(
+    await session.execute(
         text(
             """
             INSERT INTO asset (id, token_address, symbol, name, decimals, source)
@@ -114,12 +137,10 @@ async def _insert_asset(
     return asset_id
 
 
-async def _hold_asset(
-    db_session: AsyncSession, *, symbol: str, name: str | None = None
-) -> uuid.UUID:
-    wallet_id = await _insert_wallet(db_session, "0x" + uuid.uuid4().hex[:40])
-    asset_id = await _insert_asset(db_session, symbol=symbol, name=name)
-    await db_session.execute(
+async def _hold_asset(session: AsyncSession, *, symbol: str, name: str | None = None) -> uuid.UUID:
+    wallet_id = await _insert_wallet(session, "0x" + uuid.uuid4().hex[:40])
+    asset_id = await _insert_asset(session, symbol=symbol, name=name)
+    await session.execute(
         text(
             "INSERT INTO balance_observation"
             " (id, wallet_id, asset_id, raw_amount, block_number, observed_at)"
@@ -127,19 +148,19 @@ async def _hold_asset(
         ),
         {"id": str(uuid.uuid4()), "wallet": str(wallet_id), "asset": str(asset_id)},
     )
-    await db_session.flush()
+    await session.flush()
     return asset_id
 
 
-async def _force_space_due(db_session: AsyncSession, space_id: uuid.UUID) -> None:
-    await db_session.execute(
+async def _force_space_due(session: AsyncSession, space_id: uuid.UUID) -> None:
+    await session.execute(
         text("UPDATE snapshot_space SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
         {"id": space_id},
     )
 
 
-async def _news_rows(db_session: AsyncSession, *, asset_id: uuid.UUID) -> list[dict]:
-    rows = await db_session.execute(
+async def _news_rows(session: AsyncSession, *, asset_id: uuid.UUID) -> list[dict]:
+    rows = await session.execute(
         text(
             "SELECT source, external_id, title, url FROM asset_news"
             " WHERE asset_id = :id ORDER BY published_at"
@@ -149,18 +170,18 @@ async def _news_rows(db_session: AsyncSession, *, asset_id: uuid.UUID) -> list[d
     return [dict(r) for r in rows.mappings()]
 
 
-async def test_snapshot_proposal_inserted_for_mapped_held_asset(db_session: AsyncSession) -> None:
-    uni_id = await _hold_asset(db_session, symbol="UNI", name="Uniswap")
-    await _insert_space(db_session, asset_symbol="UNI", space_id="uniswap")
+async def test_snapshot_proposal_inserted_for_mapped_held_asset(news_session: AsyncSession) -> None:
+    uni_id = await _hold_asset(news_session, symbol="UNI", name="Uniswap")
+    await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
 
     with respx.mock(assert_all_called=False) as mock:
         mock.post(_SNAPSHOT_URL).mock(
             return_value=Response(200, json=_graphql_response([_proposal()]))
         )
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=uni_id)
+    rows = await _news_rows(news_session, asset_id=uni_id)
     assert len(rows) == 1
     assert rows[0]["source"] == "snapshot"
     assert rows[0]["external_id"] == "0xabc"
@@ -168,61 +189,61 @@ async def test_snapshot_proposal_inserted_for_mapped_held_asset(db_session: Asyn
 
 
 async def test_snapshot_state_transition_updates_in_place_no_duplicate(
-    db_session: AsyncSession,
+    news_session: AsyncSession,
 ) -> None:
-    uni_id = await _hold_asset(db_session, symbol="UNI", name="Uniswap")
-    space_id = await _insert_space(db_session, asset_symbol="UNI", space_id="uniswap")
+    uni_id = await _hold_asset(news_session, symbol="UNI", name="Uniswap")
+    space_id = await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
 
     with respx.mock(assert_all_called=False) as mock:
         mock.post(_SNAPSHOT_URL).mock(
             return_value=Response(200, json=_graphql_response([_proposal(state="active")]))
         )
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    assert len(await _news_rows(db_session, asset_id=uni_id)) == 1
+    assert len(await _news_rows(news_session, asset_id=uni_id)) == 1
 
-    await _force_space_due(db_session, space_id)
+    await _force_space_due(news_session, space_id)
     with respx.mock(assert_all_called=False) as mock:
         mock.post(_SNAPSHOT_URL).mock(
             return_value=Response(200, json=_graphql_response([_proposal(state="closed")]))
         )
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    rows = await _news_rows(db_session, asset_id=uni_id)
+    rows = await _news_rows(news_session, asset_id=uni_id)
     assert len(rows) == 1
     assert rows[0]["title"] == "[closed] Raise the fee"
 
 
-async def test_snapshot_unmapped_asset_yields_nothing(db_session: AsyncSession) -> None:
+async def test_snapshot_unmapped_asset_yields_nothing(news_session: AsyncSession) -> None:
     """A space mapped to a symbol we don't currently hold is not even polled."""
-    zoo_id = await _hold_asset(db_session, symbol="ZOO", name="Zoocoin")
-    await _insert_space(db_session, asset_symbol="UNI", space_id="uniswap")
+    zoo_id = await _hold_asset(news_session, symbol="ZOO", name="Zoocoin")
+    await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
 
     with respx.mock(assert_all_called=False) as mock:
         snapshot_route = mock.post(_SNAPSHOT_URL).mock(
             return_value=Response(200, json=_graphql_response([_proposal()]))
         )
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
     assert not snapshot_route.called
-    assert await _news_rows(db_session, asset_id=zoo_id) == []
+    assert await _news_rows(news_session, asset_id=zoo_id) == []
 
 
-async def test_snapshot_adapter_error_swallowed_and_counted(db_session: AsyncSession) -> None:
-    uni_id = await _hold_asset(db_session, symbol="UNI", name="Uniswap")
-    space_id = await _insert_space(db_session, asset_symbol="UNI", space_id="uniswap")
+async def test_snapshot_adapter_error_swallowed_and_counted(news_session: AsyncSession) -> None:
+    uni_id = await _hold_asset(news_session, symbol="UNI", name="Uniswap")
+    space_id = await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
 
     with respx.mock(assert_all_called=False) as mock:
         mock.post(_SNAPSHOT_URL).mock(return_value=Response(500))
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    assert await _news_rows(db_session, asset_id=uni_id) == []
+    assert await _news_rows(news_session, asset_id=uni_id) == []
     health = (
-        await db_session.execute(
+        await news_session.execute(
             text("SELECT consecutive_failures, last_error FROM snapshot_space WHERE id = :id"),
             {"id": str(space_id)},
         )
@@ -231,13 +252,13 @@ async def test_snapshot_adapter_error_swallowed_and_counted(db_session: AsyncSes
     assert health[1] is not None
 
 
-async def test_snapshot_does_not_use_symbol_keyword_matching(db_session: AsyncSession) -> None:
+async def test_snapshot_does_not_use_symbol_keyword_matching(news_session: AsyncSession) -> None:
     """A proposal title containing the word "zoo" must never attach to the
     ZOO holding — Snapshot matching is by explicit space mapping only.
     """
-    uni_id = await _hold_asset(db_session, symbol="UNI", name="Uniswap")
-    zoo_id = await _hold_asset(db_session, symbol="ZOO", name="Zoocoin")
-    await _insert_space(db_session, asset_symbol="UNI", space_id="uniswap")
+    uni_id = await _hold_asset(news_session, symbol="UNI", name="Uniswap")
+    zoo_id = await _hold_asset(news_session, symbol="ZOO", name="Zoocoin")
+    await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
 
     with respx.mock(assert_all_called=False) as mock:
         mock.post(_SNAPSHOT_URL).mock(
@@ -247,10 +268,10 @@ async def test_snapshot_does_not_use_symbol_keyword_matching(db_session: AsyncSe
             )
         )
         mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
-        await handle_news_refresh(db_session, uuid.uuid4())
+        await handle_news_refresh(news_session, uuid.uuid4())
 
-    uni_rows = await _news_rows(db_session, asset_id=uni_id)
-    zoo_rows = await _news_rows(db_session, asset_id=zoo_id)
+    uni_rows = await _news_rows(news_session, asset_id=uni_id)
+    zoo_rows = await _news_rows(news_session, asset_id=zoo_id)
     assert len(uni_rows) == 1
     assert uni_rows[0]["source"] == "snapshot"
     assert zoo_rows == []

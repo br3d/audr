@@ -8,7 +8,7 @@ import pytest
 import respx
 from httpx import Response
 
-from audr.providers.gdelt import GdeltArticle, GdeltProvider
+from audr.providers.gdelt import GdeltArticle, GdeltProvider, GdeltRateLimited
 
 _BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -87,6 +87,19 @@ async def test_search_news_network_error_returns_empty_list_without_raising() ->
         async with GdeltProvider() as provider:
             items = await provider.search_news("Ethereum")
     assert items == []
+
+
+@pytest.mark.contract
+async def test_search_news_raises_gdelt_rate_limited_on_429() -> None:
+    """A 429 is distinct from every other failure this adapter swallows
+    (AUD-515) — the caller needs to tell "rate limited" apart from "no
+    results" in order to back off instead of burning through every asset.
+    """
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(_BASE).mock(return_value=Response(429))
+        async with GdeltProvider() as provider:
+            with pytest.raises(GdeltRateLimited):
+                await provider.search_news("Ethereum")
 
 
 @pytest.mark.contract

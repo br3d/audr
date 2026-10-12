@@ -18,6 +18,7 @@ source.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -37,6 +38,7 @@ from audr.jobs.news_feed_registry import (
     record_feed_not_modified,
     record_feed_success,
 )
+from audr.jobs.news_tracked_registry import list_tracked_asset_symbols
 from audr.jobs.snapshot_registry import (
     SnapshotSpace,
     list_due_spaces,
@@ -44,7 +46,7 @@ from audr.jobs.snapshot_registry import (
     record_space_success,
 )
 from audr.providers.feed_parser import FeedItem, FeedParseError, parse_feed
-from audr.providers.gdelt import GdeltArticle, GdeltProvider
+from audr.providers.gdelt import GdeltArticle, GdeltProvider, GdeltRateLimited
 from audr.providers.snapshot import SnapshotError, SnapshotProposal, SnapshotProvider
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,16 @@ _HTTP_TIMEOUT = 15.0
 _USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
 _GDELT_SOURCE = "gdelt"
 _SNAPSHOT_SOURCE = "snapshot"
+
+# GDELT breadth-tier throttling (AUD-515) — staging ran ~66 sequential
+# queries per run against a keyless, unrated API and hit near-100% 429s,
+# burning the whole 900s `news_refresh` cadence for zero rows. Bounding the
+# fan-out, spacing calls out, and backing off on a 429 streak keeps a tier
+# that may return nothing from consuming the run.
+_GDELT_MAX_QUERIES_PER_RUN = 10
+_GDELT_MAX_CONSECUTIVE_429 = 3
+_GDELT_MIN_SYMBOL_LEN = 3
+_GDELT_QUERY_DELAY_S = 1.0
 
 # Retention (AUD-512 req. 6): one shared policy with ADR-007 alerting
 # (AUD-337) — do not invent a second number here.
@@ -75,10 +87,12 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     if not assets:
         logger.info("news_refresh skipped — no held assets run_id=%s", run_id)
         await _prune_old_news(session)
+        await session.commit()
         return
 
     due_feeds = await list_due_feeds(session)
     held_symbols = {asset.symbol.upper() for asset in assets}
+    tracked_symbols = await list_tracked_asset_symbols(session)
 
     inserted = 0
     polled = 0
@@ -87,22 +101,68 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
     ) as client:
+        # Commit per feed (AUD-515 P2): a later tier's crash (GDELT, Snapshot)
+        # must not roll back feed polls and health counters that already
+        # succeeded — staging lost 13 minutes of successful feed polling to
+        # exactly that when the GDELT tier ground through 429s mid-run.
         for feed in due_feeds:
             if feed.asset_symbol is not None and feed.asset_symbol.upper() not in held_symbols:
                 continue
             polled += 1
-            inserted += await _poll_feed(session, client=client, feed=feed, assets=assets)
+            inserted += await _poll_feed(
+                session, client=client, feed=feed, assets=assets, tracked_symbols=tracked_symbols
+            )
+            await session.commit()
 
         covered = await covered_asset_symbols(session)
-        gdelt_assets = [a for a in assets if a.symbol.upper() not in covered]
+        gdelt_assets = [
+            a
+            for a in assets
+            if a.symbol.upper() in tracked_symbols
+            and a.symbol.upper() not in covered
+            and len(a.symbol) >= _GDELT_MIN_SYMBOL_LEN
+        ]
         if gdelt_assets:
+            due_now, skipped_this_run = (
+                gdelt_assets[:_GDELT_MAX_QUERIES_PER_RUN],
+                gdelt_assets[_GDELT_MAX_QUERIES_PER_RUN:],
+            )
+            if skipped_this_run:
+                logger.info(
+                    "news_refresh run_id=%s gdelt capped — skipped %d assets this run",
+                    run_id,
+                    len(skipped_this_run),
+                )
             async with GdeltProvider(http_client=client) as gdelt:
-                for asset in gdelt_assets:
-                    articles = await gdelt.search_news(asset.symbol)
+                consecutive_429 = 0
+                for i, asset in enumerate(due_now):
+                    if i > 0:
+                        await asyncio.sleep(_GDELT_QUERY_DELAY_S)
+                    try:
+                        articles = await gdelt.search_news(f'"{asset.symbol}"')
+                    except GdeltRateLimited:
+                        consecutive_429 += 1
+                        logger.info(
+                            "news_refresh run_id=%s gdelt rate-limited symbol=%s consecutive=%d",
+                            run_id,
+                            asset.symbol,
+                            consecutive_429,
+                        )
+                        if consecutive_429 >= _GDELT_MAX_CONSECUTIVE_429:
+                            logger.info(
+                                "news_refresh run_id=%s gdelt aborting tier after %d"
+                                " consecutive 429s",
+                                run_id,
+                                consecutive_429,
+                            )
+                            break
+                        continue
+                    consecutive_429 = 0
                     for article in articles:
                         inserted += await _insert_gdelt_article(
                             session, asset_id=asset.id, article=article
                         )
+                    await session.commit()
 
         due_spaces = await list_due_spaces(session)
         async with SnapshotProvider(http_client=client) as snapshot:
@@ -113,9 +173,10 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
                 inserted += await _poll_snapshot_space(
                     session, snapshot=snapshot, space=space, asset_ids=asset_ids
                 )
+                await session.commit()
 
     pruned = await _prune_old_news(session)
-    await session.flush()
+    await session.commit()
     logger.info(
         "news_refresh run_id=%s feeds_polled=%d inserted=%d pruned=%d",
         run_id,
@@ -151,6 +212,7 @@ async def _poll_feed(
     client: httpx.AsyncClient,
     feed: NewsFeed,
     assets: list[HeldAsset],
+    tracked_symbols: set[str],
 ) -> int:
     headers: dict[str, str] = {}
     if feed.etag:
@@ -188,7 +250,7 @@ async def _poll_feed(
         last_modified=response.headers.get("last-modified"),
     )
 
-    target_asset_ids = _targets_for_feed(feed, assets)
+    target_asset_ids = _targets_for_feed(feed, assets, tracked_symbols)
     inserted = 0
     for item in items:
         for asset_id in target_asset_ids(item):
@@ -206,12 +268,16 @@ async def _poll_feed(
 
 
 def _targets_for_feed(
-    feed: NewsFeed, assets: list[HeldAsset]
+    feed: NewsFeed, assets: list[HeldAsset], tracked_symbols: set[str]
 ) -> Callable[[FeedItem], list[uuid.UUID]]:
     if feed.asset_symbol is not None:
         asset_ids = [a.id for a in assets if a.symbol.upper() == feed.asset_symbol.upper()]
         return lambda _item: asset_ids
-    return lambda item: match_assets(item.title, assets)
+    # Portfolio-wide press feeds (AUD-515 P1) must resolve to the explicit
+    # allow-list, not every held asset — held-ness alone let a meme token
+    # ticked 'BITCOIN' and one named 'ASSET' absorb most trade-press rows.
+    tracked_assets = [a for a in assets if a.symbol.upper() in tracked_symbols]
+    return lambda item: match_assets(item.title, tracked_assets)
 
 
 # ---------------------------------------------------------------------------
