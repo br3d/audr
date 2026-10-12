@@ -725,6 +725,19 @@ export interface OnchainEvent {
   // Raw uint256 as a decimal string — never a float
   raw_amount: string
   indexed_at: string
+  // Everything below is additive enrichment (AUD-522), null wherever the
+  // underlying fact is unknown — an unlisted token or a missing price is
+  // `null`, never 0. `price_usd`/`value_usd` are the *latest known* price
+  // at request time, not a historical price as of the event's block.
+  asset_id: string | null
+  symbol: string | null
+  token_name: string | null
+  decimals: number | null
+  // raw_amount / 10^decimals as an exact decimal string — never a float
+  amount: string | null
+  price_usd: string | null
+  value_usd: string | null
+  wallet_label: string | null
 }
 
 export interface EventsResponse {

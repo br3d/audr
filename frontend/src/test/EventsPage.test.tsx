@@ -52,6 +52,14 @@ const EVENT_1: OnchainEvent = {
   counterparty_address: '0x3333333333333333333333333333333333333333',
   raw_amount: '1000000000000000000',
   indexed_at: '2026-06-01T00:00:00Z',
+  asset_id: null,
+  symbol: null,
+  token_name: null,
+  decimals: null,
+  amount: null,
+  price_usd: null,
+  value_usd: null,
+  wallet_label: null,
 }
 
 const ALLOWANCE_LIMITED: Allowance = {
