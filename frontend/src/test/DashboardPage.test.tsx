@@ -632,7 +632,7 @@ describe('DashboardPage', () => {
       await unmount(container, root)
     })
 
-    it('places the allocation section full-width below the chart/rail grid (AUD-533)', async () => {
+    it('puts the allocation list in the left column, beside the rail (AUD-533)', async () => {
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
@@ -641,9 +641,16 @@ describe('DashboardPage', () => {
       })
       const section = container.querySelector('[aria-label="Asset allocation"]')
       expect(section).toBeTruthy()
-      // Inside .dashboard-grid it would be squeezed into the narrow left column,
-      // which is exactly what the founder reported.
-      expect(section?.closest('.dashboard-grid')).toBeNull()
+      // The founder reads the Allocation summary against the rows it
+      // summarises, so the rail has to sit beside the list — not beside the
+      // chart, which now owns a full-width row of its own above the grid.
+      expect(section?.closest('.dashboard-left')).toBeTruthy()
+      expect(
+        container.querySelector('.dashboard-grid [aria-label="Portfolio value history"]'),
+      ).toBeNull()
+      expect(
+        container.querySelector('.dashboard-right [aria-label="Allocation summary"]'),
+      ).toBeTruthy()
       await unmount(container, root)
     })
 
