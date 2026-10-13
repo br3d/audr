@@ -1079,5 +1079,31 @@ describe('DashboardPage', () => {
 
       await unmount(container, root)
     })
+
+    // AUD-535: the founder asked that Exclude also move the Allocation rail.
+    // The rail is fed the same re-cut payload as the table, so the excluded
+    // asset must leave its legend and the survivors must reweight to 100% —
+    // on the click, with the patch still in flight.
+    it('drops the asset out of the Allocation rail and reweights it', async () => {
+      mockPatchAsset.mockReturnValue(new Promise(() => {}))
+      const { container, root } = mountWithData(TWO_ASSET_PORTFOLIO)
+      await flush()
+
+      const rail = () =>
+        container.querySelector('.dashboard-right [aria-label="Allocation summary"]')!
+      expect(rail().textContent).toContain('OMG')
+      expect(rail().textContent).toContain('25.0%')
+
+      await act(async () => {
+        ;(container.querySelector('[aria-label="Exclude OMG"]') as HTMLButtonElement).click()
+      })
+
+      expect(rail().textContent).not.toContain('OMG')
+      expect(rail().textContent).toContain('ETH')
+      expect(rail().textContent).toContain('100.0%')
+      expect(rail().querySelectorAll('.allocation-summary-segment')).toHaveLength(1)
+
+      await unmount(container, root)
+    })
   })
 })
