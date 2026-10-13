@@ -201,8 +201,11 @@ async def _seed_quote_observation(
         async with session.begin():
             await session.execute(
                 text(
-                    "INSERT INTO quote_set (id, provider, fetched_at, status, created_at)"
-                    f" VALUES (:id, 'coinmarketcap', {fetched_at_sql}, 'complete', now())"  # noqa: S608 -- fetched_at_sql is a fixed test-local constant, never user input
+                    # noqa has to sit on the line the S608 range starts on, which
+                    # is the first fragment of the implicit concatenation, not the
+                    # f-string that triggers it.
+                    "INSERT INTO quote_set (id, provider, fetched_at, status, created_at)"  # noqa: S608 -- fetched_at_sql is a fixed test-local constant, never user input
+                    f" VALUES (:id, 'coinmarketcap', {fetched_at_sql}, 'complete', now())"
                 ),
                 {"id": quote_set_id},
             )

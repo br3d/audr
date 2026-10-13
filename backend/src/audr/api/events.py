@@ -32,7 +32,12 @@ from audr.api.auth import _require_session
 from audr.auth.models import Session
 from audr.db import get_db
 from audr.operations.init_key import get_master_key
-from audr.portfolio.money import DecimalsRangeError, format_decimal, quantity_to_usd, raw_to_quantity
+from audr.portfolio.money import (
+    DecimalsRangeError,
+    format_decimal,
+    quantity_to_usd,
+    raw_to_quantity,
+)
 from audr.wallets.models import Wallet
 from audr.wallets.service import decrypt_label
 
@@ -201,8 +206,7 @@ async def get_events(
         ).all()
         key = await get_master_key(db)
         wallet_labels = {
-            str(wid): decrypt_label(ciphertext, wid, key) or None
-            for wid, ciphertext in wallet_rows
+            str(wid): decrypt_label(ciphertext, wid, key) or None for wid, ciphertext in wallet_rows
         }
 
     events = []
