@@ -354,39 +354,41 @@ export default function DashboardPage({ setPage }: Props) {
       )}
 
       {/*
-        AUD-533: the chart spans the full page width on its own row. The rail
-        below it (Allocation + News) then sits beside the asset list, which is
-        where the owner expects to read the two together — a share bar next to
-        the rows it summarises, not next to the chart.
+        Layout follows the Folio reference shot (AUD-533): one wide left column
+        — chart, then the asset list, then Recent Events — with the Allocation +
+        News rail running down the right of all three. Earlier passes pulled the
+        asset list out of the grid or gave the chart its own full-width row;
+        both drifted from the reference, so keep every section in this grid.
       */}
-      {!historyQuery.isLoading &&
-        !historyQuery.isError &&
-        historyQuery.data &&
-        historyQuery.data.items.length > 0 && (
-          <section aria-label="Portfolio value history" className="card mb-20">
-            <div className="card-header">
-              <div className="card-title card-title-chart">Portfolio value</div>
-              <div className="range-switcher" role="group" aria-label="History range">
-                {RANGE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className="range-switcher-btn"
-                    aria-pressed={historyPeriod === opt.value}
-                    onClick={() => setHistoryPeriod(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <HistoryQualityNotices points={historyQuery.data.items} />
-            <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
-          </section>
-        )}
-
       <div className="dashboard-grid">
         <div className="dashboard-left">
+          {/* Portfolio value history */}
+          {!historyQuery.isLoading &&
+            !historyQuery.isError &&
+            historyQuery.data &&
+            historyQuery.data.items.length > 0 && (
+              <section aria-label="Portfolio value history" className="card mb-20">
+                <div className="card-header">
+                  <div className="card-title card-title-chart">Portfolio value</div>
+                  <div className="range-switcher" role="group" aria-label="History range">
+                    {RANGE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className="range-switcher-btn"
+                        aria-pressed={historyPeriod === opt.value}
+                        onClick={() => setHistoryPeriod(opt.value)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <HistoryQualityNotices points={historyQuery.data.items} />
+                <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
+              </section>
+            )}
+
           {/* Asset allocation — directly under the chart, left of the rail */}
           {data.allocations.length > 0 ? (
             <section aria-label="Asset allocation" className="card mb-20">
