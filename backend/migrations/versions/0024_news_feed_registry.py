@@ -47,7 +47,12 @@ _SEED_FEEDS: list[tuple[str, str, str | None, str]] = [
         "WETH",
         "https://github.com/ethereum/go-ethereum/releases.atom",
     ),
-    ("release:uniswap-v3-core", "release", "UNI", "https://github.com/Uniswap/v3-core/releases.atom"),
+    (
+        "release:uniswap-v3-core",
+        "release",
+        "UNI",
+        "https://github.com/Uniswap/v3-core/releases.atom",
+    ),
     (
         "release:aave-v3-core",
         "release",

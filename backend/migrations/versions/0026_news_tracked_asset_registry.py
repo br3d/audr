@@ -89,9 +89,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(
-        sa.text(
-            "UPDATE news_feed SET url = :url WHERE key = :key"
-        ).bindparams(
+        sa.text("UPDATE news_feed SET url = :url WHERE key = :key").bindparams(
             url="https://mirror.xyz/uniswap.eth/feed/atom",
             key=_DEAD_FEED_KEY,
         )
