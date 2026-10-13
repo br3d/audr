@@ -180,6 +180,15 @@ and `backend-tests`, runs pytest, then runs `npm ci` and Vitest, teeing output
 to `.test-backend.log` and `.test-frontend.log`, and tears everything down on
 exit.
 
+Teardown runs from an `EXIT` trap, which a `SIGKILL` skips — so a run killed
+mid-suite leaks its whole stack: a running postgres and WireMock, two ~550MB
+images and a `node_modules` volume. Six of those took the shared agent host to
+89% disk, so every run now reaps the previous casualties at startup. It only
+ever touches auto-named `audr-test-<pid>` projects (never a pinned
+`AUDR_TEST_PROJECT`) whose newest container is older than six hours
+(`AUDR_TEST_REAP_AGE_H`) and which have no running `*-tests-*` container, so a
+concurrent live suite is never torn down.
+
 ### Individual suites
 
 ```bash
