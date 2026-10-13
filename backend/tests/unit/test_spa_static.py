@@ -114,6 +114,37 @@ def test_missing_hashed_asset_404s_rather_than_returning_html(client):
     assert '<div id="root"' not in response.text
 
 
+def test_index_is_revalidated_on_every_navigation(client):
+    """Without this a browser applies heuristic freshness to the shell.
+
+    `index.html` carries `Last-Modified` and no `Cache-Control`, which licenses
+    a browser to reuse it for a fraction of its age — so a deploy can land and
+    the user keeps seeing the previous build (AUD-533).
+    """
+    response = client.get("/")
+    assert response.headers["cache-control"] == "no-cache"
+    # Revalidation has to be cheap, which needs a validator to still be present.
+    assert response.headers.get("etag")
+
+
+def test_client_route_fallback_is_also_revalidated(client):
+    """`/folio` is served by index.html, so it takes the shell's rules."""
+    assert client.get("/folio").headers["cache-control"] == "no-cache"
+
+
+def test_hashed_assets_are_immutable(client):
+    """Content-hashed filenames make an unbounded cache safe, and keep the
+    conditional requests `no-cache` adds on the shell from spreading to the
+    bundles."""
+    response = client.get("/assets/index-abc123.js")
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_unhashed_root_files_are_revalidated(client):
+    """`/favicon.ico` keeps its name across builds, so it must not be pinned."""
+    assert client.get("/favicon.ico").headers["cache-control"] == "no-cache"
+
+
 def test_mount_is_skipped_when_the_directory_is_absent(tmp_path):
     """The dev/test case: no build output, so nothing is mounted and / is a 404."""
     app = FastAPI()
