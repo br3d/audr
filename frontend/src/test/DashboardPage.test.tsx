@@ -632,6 +632,21 @@ describe('DashboardPage', () => {
       await unmount(container, root)
     })
 
+    it('places the allocation section full-width below the chart/rail grid (AUD-533)', async () => {
+      const { container, root } = mountWithData({
+        ...EMPTY_PORTFOLIO,
+        total_usd: '4000.00',
+        priced_subtotal_usd: '4000.00',
+        allocations: [ETH_ALLOCATION],
+      })
+      const section = container.querySelector('[aria-label="Asset allocation"]')
+      expect(section).toBeTruthy()
+      // Inside .dashboard-grid it would be squeezed into the narrow left column,
+      // which is exactly what the founder reported.
+      expect(section?.closest('.dashboard-grid')).toBeNull()
+      await unmount(container, root)
+    })
+
     it('does not render the allocation list when allocations are empty', async () => {
       const { container, root } = mountWithData(EMPTY_PORTFOLIO)
       expect(container.querySelector('[aria-label="Asset allocation"]')).toBeNull()

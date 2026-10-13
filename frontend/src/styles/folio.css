@@ -1059,9 +1059,15 @@ body {
   color: var(--text-muted);
 }
 
+/*
+  Always visible (AUD-533). Hover-reveal hid the only way to exclude an asset
+  from the dashboard — it reads as a missing feature, and it is unreachable on
+  touch. Dimmed at rest so it stays secondary to the row data, full strength on
+  hover/focus.
+*/
 .allocation-row-actions {
   flex: none;
-  opacity: 0;
+  opacity: 0.65;
   transition: opacity 0.1s;
 }
 

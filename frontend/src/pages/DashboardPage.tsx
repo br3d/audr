@@ -382,27 +382,6 @@ export default function DashboardPage({ setPage }: Props) {
               </section>
             )}
 
-          {/* Allocation table */}
-          {data.allocations.length > 0 ? (
-            <section aria-label="Asset allocation" className="card mb-20">
-              <div className="card-header">
-                <div className="card-title">Asset Allocation</div>
-                <div className="btn-group">
-                  <ScanStatus runId={null} kind="balances" label="Refresh balances" />
-                  <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
-                </div>
-              </div>
-              <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
-            </section>
-          ) : (
-            hasHoldings && (
-              <p role="note" className="alert alert-info mb-16">
-                No priced holdings — allocation unavailable. Configure a quote provider in
-                Connections.
-              </p>
-            )
-          )}
-
           {/* Recent events */}
           <section aria-label="Recent events" className="mb-20">
             <div className="row-between mb-12">
@@ -457,6 +436,32 @@ export default function DashboardPage({ setPage }: Props) {
           )}
         </div>
       </div>
+
+      {/*
+        Allocation table spans the full page width below the chart/rail grid
+        (AUD-533): it carries four data columns plus an inline action, and the
+        narrow left column squeezed them. Keeping it out of .dashboard-grid is
+        what makes it full-bleed on every breakpoint.
+      */}
+      {data.allocations.length > 0 ? (
+        <section aria-label="Asset allocation" className="card mb-20">
+          <div className="card-header">
+            <div className="card-title">Asset Allocation</div>
+            <div className="btn-group">
+              <ScanStatus runId={null} kind="balances" label="Refresh balances" />
+              <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
+            </div>
+          </div>
+          <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
+        </section>
+      ) : (
+        hasHoldings && (
+          <p role="note" className="alert alert-info mb-16">
+            No priced holdings — allocation unavailable. Configure a quote provider in
+            Connections.
+          </p>
+        )
+      )}
     </div>
   )
 }
