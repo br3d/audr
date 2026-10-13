@@ -1060,21 +1060,25 @@ body {
 }
 
 /*
-  Always visible (AUD-533). Hover-reveal hid the only way to exclude an asset
-  from the dashboard — it reads as a missing feature, and it is unreachable on
-  touch. Dimmed at rest so it stays secondary to the row data, full strength on
-  hover/focus.
+  Exclude has its own column, headed and at full strength (AUD-535). The two
+  earlier placements inside the asset cell — hover-reveal, then 0.65 opacity —
+  both read as a missing feature to the founder, and hover-reveal was
+  unreachable on touch entirely.
 */
-.allocation-row-actions {
-  flex: none;
-  opacity: 0.65;
-  transition: opacity 0.1s;
+.allocation-actions-col,
+.allocation-actions-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
 }
 
-.table-folio tbody tr:hover .allocation-row-actions,
-.allocation-row-actions:focus-within,
-.allocation-row-actions.has-error {
-  opacity: 1;
+.allocation-exclude-btn {
+  color: var(--text-primary);
+}
+
+.allocation-exclude-btn:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .allocation-price-cell,

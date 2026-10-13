@@ -374,6 +374,24 @@ describe('AllocationList', () => {
       expect(mockPatchAsset).not.toHaveBeenCalled()
       await unmount(container, root)
     })
+
+    // AUD-535: the founder reported the button missing twice while it sat
+    // inside the asset cell — first hover-revealed, then dimmed. It belongs in
+    // a headed column of its own, rendered at rest with no hover state needed.
+    it('gives Exclude its own headed column, not a corner of the asset cell', async () => {
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ symbol: 'ETH' })]} />,
+      )
+      const headers = Array.from(container.querySelectorAll('thead th')).map((th) =>
+        th.textContent?.trim(),
+      )
+      expect(headers).toEqual(['Asset', 'Price / 24h', 'Balance', 'Allocation', 'Actions'])
+
+      const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
+      expect(button.closest('td')?.className).toContain('allocation-actions-cell')
+      expect(button.closest('.allocation-asset-cell')).toBeNull()
+      await unmount(container, root)
+    })
   })
 
   describe('search box', () => {

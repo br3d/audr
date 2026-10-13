@@ -121,23 +121,7 @@ function AllocationRow({
               </span>
             </div>
           </div>
-          <div className={`allocation-row-actions${error !== null ? ' has-error' : ''}`}>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={onExclude}
-              disabled={excluding}
-              aria-label={`Exclude ${item.symbol}`}
-            >
-              Exclude
-            </button>
-          </div>
         </div>
-        {error !== null && (
-          <p role="alert" className="text-danger allocation-row-error">
-            {error}
-          </p>
-        )}
       </td>
       <td className="td-mono allocation-price-cell">
         <div className="allocation-price-value">
@@ -172,6 +156,29 @@ function AllocationRow({
           <span className="allocation-pct" aria-label={`${item.percentage} percent`}>
             {item.percentage}%
           </span>
+        )}
+      </td>
+      {/*
+        AUD-535: Exclude lives in its own column with a header, always at full
+        strength. It spent two redesigns inline in the asset cell — first
+        hover-only, then at 0.65 opacity — and both times the founder reported
+        it as missing. A control that drops an asset out of the total needs to
+        look like a control at rest.
+      */}
+      <td className="allocation-actions-cell">
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost allocation-exclude-btn"
+          onClick={onExclude}
+          disabled={excluding}
+          aria-label={`Exclude ${item.symbol}`}
+        >
+          {excluding ? 'Excluding…' : 'Exclude'}
+        </button>
+        {error !== null && (
+          <p role="alert" className="text-danger allocation-row-error">
+            {error}
+          </p>
         )}
       </td>
     </tr>
@@ -358,6 +365,9 @@ export default function AllocationList({ items, onToggleExclude }: Props) {
               <th scope="col">Price / 24h</th>
               <th scope="col">Balance</th>
               <th scope="col">Allocation</th>
+              <th scope="col" className="allocation-actions-col">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
