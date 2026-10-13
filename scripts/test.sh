@@ -46,6 +46,95 @@ teardown() {
 }
 trap teardown EXIT
 
+# Reap stale per-run stacks left behind by hard-killed runs (AUD-529).
+#
+# `trap teardown EXIT` covers a normal exit, Ctrl-C and a failing suite, but it
+# does NOT fire when the process is SIGKILLed — which is exactly what happens
+# when an agent run is terminated mid-suite. Those runs leak a whole compose
+# project: a running postgres and wiremock, two ~550MB images and a
+# node_modules volume, none of which anything ever reclaims. Six such orphans
+# (up to six days old) had taken the shared agent host to 89% disk.
+#
+# So each run cleans up after the previous casualties. Two guards keep this from
+# ever touching a live stack:
+#   * only auto-generated `audr-test-<pid>` names, never a pinned
+#     AUDR_TEST_PROJECT — that opts into a long-lived stack somebody owns;
+#   * only projects whose newest container is older than AUDR_TEST_REAP_AGE_H
+#     (default 6h, an order of magnitude past the suite's runtime) and which
+#     have no running `*-tests-*` container, i.e. no suite currently executing.
+REAP_AGE_H="${AUDR_TEST_REAP_AGE_H:-6}"
+
+reap_stale_projects() {
+  local cutoff now p names n created newest state running left
+  now="$(date +%s)"
+  cutoff=$(( now - REAP_AGE_H * 3600 ))
+
+  for p in $(docker ps -a --filter 'label=com.docker.compose.project' \
+      --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
+      | grep -E '^audr-test-[0-9]+$' | grep -vFx "${PROJECT}" | sort -u); do
+    names="$(docker ps -a --filter "label=com.docker.compose.project=${p}" \
+      --format '{{.Names}}' 2>/dev/null)"
+    [[ -z "${names}" ]] && continue
+
+    newest=0
+    running=0
+    for n in ${names}; do
+      created="$(docker inspect -f '{{.Created}}' "${n}" 2>/dev/null)" || continue
+      created="$(date -d "${created}" +%s 2>/dev/null)" || continue
+      (( created > newest )) && newest="${created}"
+      state="$(docker inspect -f '{{.State.Running}}' "${n}" 2>/dev/null)" || continue
+      [[ "${state}" == "true" && "${n}" == *-tests-* ]] && running=1
+    done
+
+    # `newest == 0` means every inspect failed — the containers went away under
+    # us, or the daemon is unhappy. Either way we cannot prove the stack is
+    # idle, so leave it alone rather than tear down on an unknown age.
+    if (( running == 1 )) || (( newest == 0 )) || (( newest > cutoff )); then continue; fi
+
+    echo "==> Reaping stale test stack ${p} (idle >${REAP_AGE_H}h)"
+    docker compose -p "${p}" -f "${COMPOSE_TEST}" \
+      --profile backend --profile frontend down -v --remove-orphans --rmi local \
+      >/dev/null 2>&1 || true
+
+    # `compose down` only removes containers it still recognises as its own:
+    # a stack whose compose metadata the current Compose no longer understands
+    # survives the call entirely, silently. Those are exactly the oldest leaks,
+    # so force-remove whatever still carries the project label — the stack is
+    # already proven idle by the guards above.
+    left="$(docker ps -aq --filter "label=com.docker.compose.project=${p}" 2>/dev/null)" || left=""
+    if [[ -n "${left}" ]]; then
+      # shellcheck disable=SC2086  # intentional word splitting: one id per arg
+      docker rm -f ${left} >/dev/null 2>&1 || true
+      docker network rm "${p}_test-net" >/dev/null 2>&1 || true
+    fi
+  done
+
+  # Image-only leftovers: the project's containers are long gone (so the loop
+  # above never sees it) but the tags it built survive.
+  for n in $(docker images --format '{{.Repository}}' 2>/dev/null \
+      | grep -E '^audr-test-[0-9]+-(backend-tests|migrate-test|benchmark)$' \
+      | grep -vE "^${PROJECT}-" | sort -u); do
+    created="$(docker inspect -f '{{.Created}}' "${n}:latest" 2>/dev/null)" || continue
+    created="$(date -d "${created}" +%s 2>/dev/null)" || continue
+    (( created > cutoff )) && continue
+    [[ -n "$(docker ps -aq --filter "ancestor=${n}:latest" 2>/dev/null)" ]] && continue
+    echo "==> Reaping orphan test image ${n}:latest"
+    docker rmi -f "${n}:latest" >/dev/null 2>&1 || true
+  done
+
+  # Named frontend volumes outlive `down` when the run was killed before it.
+  for n in $(docker volume ls -f dangling=true --format '{{.Name}}' 2>/dev/null \
+      | grep -E '^audr-test-[0-9]+_frontend_node_modules$' \
+      | grep -vE "^${PROJECT}_"); do
+    echo "==> Reaping orphan test volume ${n}"
+    docker volume rm "${n}" >/dev/null 2>&1 || true
+  done
+}
+
+if [[ -z "${AUDR_TEST_PROJECT:-}" ]]; then
+  reap_stale_projects || true
+fi
+
 echo "==> Starting test environment (db-test, waiting for healthcheck)"
 "${COMPOSE[@]}" up -d --wait db-test
 
