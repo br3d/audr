@@ -52,9 +52,37 @@ _NO_FALLBACK_PREFIXES = ("assets/",)
 
 _INDEX = "index.html"
 
+# nginx never set `Cache-Control` either, and neither does `StaticFiles`, so
+# across a deploy a browser was free to apply *heuristic* freshness to
+# `index.html` (no `Cache-Control`, but a `Last-Modified`) and keep rendering
+# the pre-deploy page — reported on AUD-533 as "the deploy did not land" when
+# the new bundle was in fact live. The shell must therefore be revalidated on
+# every navigation; the hashed bundles it points at can be cached forever,
+# because a content change changes their filename.
+_ASSETS_PREFIX = "assets/"
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_REVALIDATE_CACHE_CONTROL = "no-cache"
+
 
 def _is_reserved(path: str) -> bool:
     return any(path == p or path.startswith(f"{p}/") for p in _RESERVED_PREFIXES)
+
+
+def _with_cache_control(response: Response, served_path: str) -> Response:
+    """Tag a served static file as either immutable or always-revalidate.
+
+    `served_path` is the file actually read off disk, not the requested URL: a
+    client-side route such as `/folio` is served by `index.html` and has to get
+    the shell's caching rules, not its own.
+
+    `Last-Modified`/`ETag` are left as `StaticFiles` set them, so `no-cache`
+    costs a conditional request that normally answers 304, not a re-download.
+    """
+    immutable = served_path.startswith(_ASSETS_PREFIX)
+    response.headers["cache-control"] = (
+        _IMMUTABLE_CACHE_CONTROL if immutable else _REVALIDATE_CACHE_CONTROL
+    )
+    return response
 
 
 class SpaStaticFiles(StaticFiles):
@@ -80,14 +108,15 @@ class SpaStaticFiles(StaticFiles):
         # some branches rather than raise, so cover both shapes.
         if response.status_code == 404:
             return await self._index_fallback(path, scope)
-        return response
+        return _with_cache_control(response, path)
 
     async def _index_fallback(self, path: str, scope: Scope) -> Response:
         if path.startswith(_NO_FALLBACK_PREFIXES):
             raise StarletteHTTPException(status_code=404)
         # Not recursive: a missing index.html raises straight out of here,
         # which is the right answer for an image built without a frontend.
-        return await super().get_response(_INDEX, scope)
+        # Cached as the shell regardless of the client-side route requested.
+        return _with_cache_control(await super().get_response(_INDEX, scope), _INDEX)
 
 
 def mount_spa(app: FastAPI, directory: Path | str) -> bool:
