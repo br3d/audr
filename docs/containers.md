@@ -24,17 +24,23 @@ The release version lives in exactly one place in `compose.yaml` — the
 failing the build if it ever drifts from `VERSION`.
 
 The `api` health check is `python -m audr.operations.healthcheck`, a command
-inside the image rather than a Python program embedded in YAML. Why it probes
-`/health/live` and not `/health/ready`, why it catches its own exceptions, and
-why it is not `curl` are documented in that module's docstring.
+inside the image rather than a Python program embedded in YAML. `worker` has
+the same module's `--worker` mode (AUD-539): it has no HTTP server to probe,
+so instead it checks that a local beacon file the worker's poll loop ticks
+every 5s is still fresh. Why both probe liveness and not readiness, why they
+catch their own exceptions, and why neither is `curl` are documented in that
+module's docstring.
 
-`compose.yaml` is the one exception today: it inlines an equivalent of that
-module rather than calling it. Because it pins a *published* tag, and the
-published `0.1.1` predates the module, calling it there raised
-`ModuleNotFoundError` and showed `api` as `unhealthy` on a clean clone. It
-reverts to `python -m` once a tag carrying the module is published (AUD-442).
-`compose.dev.yaml` and `compose.deploy.yaml` inherit the check but build from
-source, so they were never affected.
+`compose.yaml` inlines an equivalent of the module for both checks rather than
+calling it, because it pins a *published* tag that lags main: `0.1.1` predated
+the liveness module entirely (AUD-442), and `0.1.2` predates `--worker`
+(AUD-539). Calling the module straight away in either case made the container
+clone's healthcheck misreport — `ModuleNotFoundError` for the first, a
+spurious HTTP probe for the second. Each inline copy reverts to `python -m`
+automatically once a tag carrying the corresponding code is published;
+`scripts/release.sh` does the revert, `backend/tests/unit/test_healthcheck.py`
+checks it stays wired up. `compose.dev.yaml` and `compose.deploy.yaml` inherit
+both checks but build from source, so neither was ever affected.
 
 ## What `compose.yaml` defines
 
@@ -51,7 +57,7 @@ So `docker ps` on a healthy deployment shows **three** containers, plus
 `migrate` sitting in `Exited (0)`:
 
 ```
-audr-worker-1   audr-backend    Up
+audr-worker-1   audr-backend    Up (healthy)
 audr-api-1      audr-backend    Up (healthy)
 audr-db-1       postgres:16     Up (healthy)
 audr-migrate-1  audr-backend    Exited (0)

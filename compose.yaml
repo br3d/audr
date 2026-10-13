@@ -90,6 +90,44 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # Inlined (worker), and only until the next publish — then this goes back
+    # to `test: ["CMD", "python", "-m", "audr.operations.healthcheck",
+    # "--worker"]` (AUD-539), for the same reason the api check above was
+    # inlined under AUD-442: this file pins a published tag, and the published
+    # 0.1.2 predates `--worker` support. Calling the module here would not
+    # raise `ModuleNotFoundError` (the module already exists) — it would fall
+    # through to the old `main()`'s unconditional HTTP probe against a
+    # container with nothing listening on :8000, reporting `unhealthy` for no
+    # real reason. Inline a stdlib-only equivalent instead, which no tag can
+    # fail to provide: read the beacon file `audr.jobs.__main__`'s poll loop
+    # ticks every 5s on its own schedule, and fail only once it has gone 15s
+    # (3x the tick) without moving. A file, not a DB query, for the same
+    # reason `/health/live` skips `/health/ready`: a database outage the
+    # worker cannot fix by restarting must never show up here. Keep the path
+    # and threshold in step with WORKER_HEARTBEAT_PATH / WORKER_STALE_SECONDS
+    # in backend/src/audr/operations/healthcheck.py — this reverts to the
+    # module form automatically on the next release (scripts/release.sh);
+    # backend/tests/unit/test_healthcheck.py checks the two stay in sync.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, time
+          try:
+              last_beat = float(open("/app/worker-heartbeat").read())
+          except Exception as exc:
+              print(exc)
+              sys.exit(1)
+          age = time.time() - last_beat
+          if age > 15:
+              print(f"worker heartbeat is {age:.1f}s old, over the 15s limit")
+          sys.exit(0 if age <= 15 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - internal
 
