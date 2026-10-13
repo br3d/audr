@@ -632,22 +632,37 @@ describe('DashboardPage', () => {
       await unmount(container, root)
     })
 
-    it('puts the allocation list in the left column, beside the rail (AUD-533)', async () => {
+    it('stacks chart, allocation and events in the left column beside the rail (AUD-533)', async () => {
+      // The Folio reference shot: one wide left column (chart → assets →
+      // events) with the Allocation + News rail running down its right.
+      mockFetchHistory.mockResolvedValue({
+        period: '30d' as const,
+        items: [historyPoint({ total_value_usd: '4000.00' })],
+        next_cursor: null,
+        request_id: 'req-1',
+        generated_at: '2026-01-01T00:00:00Z',
+      })
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
         allocations: [ETH_ALLOCATION],
       })
-      const section = container.querySelector('[aria-label="Asset allocation"]')
-      expect(section).toBeTruthy()
-      // The founder reads the Allocation summary against the rows it
-      // summarises, so the rail has to sit beside the list — not beside the
-      // chart, which now owns a full-width row of its own above the grid.
-      expect(section?.closest('.dashboard-left')).toBeTruthy()
-      expect(
-        container.querySelector('.dashboard-grid [aria-label="Portfolio value history"]'),
-      ).toBeNull()
+      await vi.waitFor(() => {
+        expect(container.querySelector('[aria-label="Portfolio value history"]')).toBeTruthy()
+      })
+      const left = container.querySelector('.dashboard-left')
+      expect(left).toBeTruthy()
+      const order = Array.from(
+        left!.querySelectorAll(
+          ':scope > [aria-label="Portfolio value history"],:scope > [aria-label="Asset allocation"],:scope > [aria-label="Recent events"]',
+        ),
+      ).map((el) => el.getAttribute('aria-label'))
+      expect(order).toEqual([
+        'Portfolio value history',
+        'Asset allocation',
+        'Recent events',
+      ])
       expect(
         container.querySelector('.dashboard-right [aria-label="Allocation summary"]'),
       ).toBeTruthy()
