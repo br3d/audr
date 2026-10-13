@@ -165,12 +165,12 @@ INLINE_HEALTHCHECK = re.compile(
 )
 
 compose = root / "compose.yaml"
-compose_text = compose.read_text()
-restored, n = INLINE_HEALTHCHECK.subn(
+original_compose_text = compose.read_text()
+compose_text = original_compose_text
+compose_text, n = INLINE_HEALTHCHECK.subn(
     "    healthcheck:\n" + MODULE_HEALTHCHECK, compose_text, count=1
 )
 if n == 1:
-    compose.write_text(restored)
     print("==> compose.yaml: api healthcheck restored to `python -m audr.operations.healthcheck`")
 elif "audr.operations.healthcheck" not in compose_text:
     sys.exit(
@@ -180,6 +180,44 @@ elif "audr.operations.healthcheck" not in compose_text:
         "Someone edited it into a third shape — reconcile it with "
         "backend/src/audr/operations/healthcheck.py before cutting a release."
     )
+
+# Same dance, same reason, for the worker's `--worker` beacon check (AUD-539):
+# 0.1.2 predates that flag, so compose.yaml inlines a stdlib equivalent until
+# the tag this script is cutting ships it. Anchor and regex shape mirror the
+# api block above; only the anchor text and module invocation differ.
+INLINE_WORKER_HEALTHCHECK_ANCHOR = "# Inlined (worker), and only until the next publish"
+MODULE_WORKER_HEALTHCHECK = (
+    '      test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]\n'
+)
+INLINE_WORKER_HEALTHCHECK = re.compile(
+    r"(?:^    " + re.escape(INLINE_WORKER_HEALTHCHECK_ANCHOR) + r"[^\n]*\n)"
+    r"(?:^    #[^\n]*\n)*"
+    r"^    healthcheck:\n"
+    r"^      test:\n"
+    r"(?:^(?: {8}[^\n]*)?\n)+"
+    r"(?=^      interval:)",
+    re.M,
+)
+
+compose_text, worker_n = INLINE_WORKER_HEALTHCHECK.subn(
+    "    healthcheck:\n" + MODULE_WORKER_HEALTHCHECK, compose_text, count=1
+)
+if worker_n == 1:
+    print(
+        "==> compose.yaml: worker healthcheck restored to "
+        "`python -m audr.operations.healthcheck --worker`"
+    )
+elif MODULE_WORKER_HEALTHCHECK not in compose_text:
+    sys.exit(
+        "FATAL: compose.yaml's worker healthcheck is neither the module form "
+        '(test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]) '
+        f"nor the inline block marked {INLINE_WORKER_HEALTHCHECK_ANCHOR!r} that this "
+        "script reverts. Someone edited it into a third shape — reconcile it with "
+        "backend/src/audr/operations/healthcheck.py before cutting a release."
+    )
+
+if compose_text != original_compose_text:
+    compose.write_text(compose_text)
 
 # [project] version — the first `version = "..."` in pyproject is the project's;
 # dependency pins use `==` inside the dependencies list, never this spelling.

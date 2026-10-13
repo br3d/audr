@@ -8,6 +8,7 @@ import asyncio
 import logging
 import signal
 import socket
+import time
 import uuid
 
 import sqlalchemy as sa
@@ -34,6 +35,7 @@ from audr.jobs.store import (
 from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
 from audr.jobs.worker import Worker
 from audr.operations.cleanup import cleanup_expired_auth_rows
+from audr.operations.healthcheck import WORKER_BEAT_INTERVAL_S, WORKER_HEARTBEAT_PATH
 from audr.portfolio.balances import record_balance
 from audr.portfolio.discovery import (
     discover_tokens,
@@ -378,6 +380,34 @@ async def _record_worker_status(
         logger.warning("worker status heartbeat failed worker_id=%s", worker_id)
 
 
+def _write_liveness_beat() -> None:
+    """Touch the container healthcheck's beacon file (AUD-539).
+
+    A plain local file rather than `worker_status`: this must stay readable
+    "my loop is beating" even while the database it talks to is unreachable,
+    the same readiness-probe lesson that keeps /health/live off the DB.
+    """
+    try:
+        WORKER_HEARTBEAT_PATH.write_text(str(time.time()))
+    except OSError:
+        logger.warning("liveness beat write failed", exc_info=True)
+
+
+async def _beat_liveness_forever(stop: asyncio.Event) -> None:
+    """Tick the liveness beacon on its own schedule, independent of job length.
+
+    A balance scan or discovery run can legitimately take far longer than one
+    poll cycle; ticking from a dedicated task rather than once per outer loop
+    iteration keeps the healthcheck from reading that as a dead loop.
+    """
+    while not stop.is_set():
+        _write_liveness_beat()
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=WORKER_BEAT_INTERVAL_S)
+        except TimeoutError:
+            pass
+
+
 async def _bootstrap_catalog(factory: async_sessionmaker[AsyncSession]) -> None:
     """Import the vendored token catalog at startup (idempotent).
 
@@ -443,6 +473,11 @@ async def _main() -> None:
     process_worker_id = socket.gethostname()
     await _record_worker_status(factory, process_worker_id, "idle")
 
+    # Idle-safe liveness beacon for the container healthcheck (AUD-539): ticks
+    # on its own schedule rather than once per outer loop iteration, so it
+    # keeps beating through a job that runs longer than one poll cycle.
+    liveness_task = asyncio.create_task(_beat_liveness_forever(stop), name="liveness-beat")
+
     discovery_worker = Worker(factory, kind=JobKind.DISCOVERY, handler=handle_discovery)
     balance_worker = Worker(factory, kind=JobKind.BALANCE_SCAN, handler=handle_balance_scan)
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
@@ -506,6 +541,7 @@ async def _main() -> None:
             except TimeoutError:
                 pass
 
+    await liveness_task
     await _record_worker_status(factory, process_worker_id, "stopped")
     logger.info("worker stopped")
 
