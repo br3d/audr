@@ -353,34 +353,60 @@ export default function DashboardPage({ setPage }: Props) {
         </p>
       )}
 
+      {/*
+        AUD-533: the chart spans the full page width on its own row. The rail
+        below it (Allocation + News) then sits beside the asset list, which is
+        where the owner expects to read the two together — a share bar next to
+        the rows it summarises, not next to the chart.
+      */}
+      {!historyQuery.isLoading &&
+        !historyQuery.isError &&
+        historyQuery.data &&
+        historyQuery.data.items.length > 0 && (
+          <section aria-label="Portfolio value history" className="card mb-20">
+            <div className="card-header">
+              <div className="card-title card-title-chart">Portfolio value</div>
+              <div className="range-switcher" role="group" aria-label="History range">
+                {RANGE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="range-switcher-btn"
+                    aria-pressed={historyPeriod === opt.value}
+                    onClick={() => setHistoryPeriod(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <HistoryQualityNotices points={historyQuery.data.items} />
+            <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
+          </section>
+        )}
+
       <div className="dashboard-grid">
         <div className="dashboard-left">
-          {/* Portfolio value history */}
-          {!historyQuery.isLoading &&
-            !historyQuery.isError &&
-            historyQuery.data &&
-            historyQuery.data.items.length > 0 && (
-              <section aria-label="Portfolio value history" className="card mb-20">
-                <div className="card-header">
-                  <div className="card-title card-title-chart">Portfolio value</div>
-                  <div className="range-switcher" role="group" aria-label="History range">
-                    {RANGE_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        className="range-switcher-btn"
-                        aria-pressed={historyPeriod === opt.value}
-                        onClick={() => setHistoryPeriod(opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
+          {/* Asset allocation — directly under the chart, left of the rail */}
+          {data.allocations.length > 0 ? (
+            <section aria-label="Asset allocation" className="card mb-20">
+              <div className="card-header">
+                <div className="card-title">Asset Allocation</div>
+                <div className="btn-group">
+                  <ScanStatus runId={null} kind="balances" label="Refresh balances" />
+                  <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
                 </div>
-                <HistoryQualityNotices points={historyQuery.data.items} />
-                <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
-              </section>
-            )}
+              </div>
+              <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
+            </section>
+          ) : (
+            hasHoldings && (
+              <p role="note" className="alert alert-info mb-16">
+                No priced holdings — allocation unavailable. Configure a quote provider in
+                Connections.
+              </p>
+            )
+          )}
 
           {/* Recent events */}
           <section aria-label="Recent events" className="mb-20">
@@ -436,32 +462,6 @@ export default function DashboardPage({ setPage }: Props) {
           )}
         </div>
       </div>
-
-      {/*
-        Allocation table spans the full page width below the chart/rail grid
-        (AUD-533): it carries four data columns plus an inline action, and the
-        narrow left column squeezed them. Keeping it out of .dashboard-grid is
-        what makes it full-bleed on every breakpoint.
-      */}
-      {data.allocations.length > 0 ? (
-        <section aria-label="Asset allocation" className="card mb-20">
-          <div className="card-header">
-            <div className="card-title">Asset Allocation</div>
-            <div className="btn-group">
-              <ScanStatus runId={null} kind="balances" label="Refresh balances" />
-              <ScanStatus runId={null} kind="discovery" label="Discover tokens" />
-            </div>
-          </div>
-          <AllocationList items={data.allocations} onToggleExclude={handleToggleExclude} />
-        </section>
-      ) : (
-        hasHoldings && (
-          <p role="note" className="alert alert-info mb-16">
-            No priced holdings — allocation unavailable. Configure a quote provider in
-            Connections.
-          </p>
-        )
-      )}
     </div>
   )
 }
