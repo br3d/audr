@@ -27,6 +27,13 @@ pytestmark = pytest.mark.integration
 _MATIC_ADDRESS = "0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0"
 _MATIC_CMC_ID = 28321
 
+# ERC-20 "Jupiter Project" — pinned in cmc_catalog._PINS because CMC's map
+# carries two "JUP" coins and gives neither an Ethereum platform address
+# (AUD-384).
+_JUP_ADDRESS = "0x4b1e80cac91e2216eeb63e29b957eb91ae9c2be8"
+_JUP_CMC_ID = 1503
+_JUP_SOLANA_CMC_ID = 29210
+
 # An address with no asset row and no map entry — must stay unresolved.
 _UNKNOWN_ADDRESS = "0x" + "9" * 40
 
@@ -83,6 +90,26 @@ async def test_pinned_address_resolves_without_map_lookup(
     resolved = await resolve_cmc_ids(db_session, [_MATIC_ADDRESS])
 
     assert resolved.get(_MATIC_ADDRESS) == _MATIC_CMC_ID
+
+
+@pytest.mark.integration
+async def test_jup_resolves_to_the_erc20_jupiter_not_the_solana_one(
+    db_session: AsyncSession,
+) -> None:
+    """Regression (AUD-384): "JUP" is two coins in CMC's map (1503 Jupiter
+    Project on Ethereum, 29210 Jupiter on Solana) and neither carries an
+    Ethereum platform address, so without a pin this real holding resolves to
+    nothing and sits unpriced. Guarding the *value* matters as much as the
+    presence: 29210 quotes ~1300x higher, so a wrong pin here would not fail
+    loudly, it would silently inflate the portfolio."""
+    await import_cmc_map(db_session)
+    await _insert_asset(db_session, address=_JUP_ADDRESS, symbol="JUP")
+    await db_session.flush()
+
+    resolved = await resolve_cmc_ids(db_session, [_JUP_ADDRESS])
+
+    assert resolved.get(_JUP_ADDRESS) == _JUP_CMC_ID
+    assert resolved.get(_JUP_ADDRESS) != _JUP_SOLANA_CMC_ID
 
 
 @pytest.mark.integration
