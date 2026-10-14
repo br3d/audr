@@ -82,9 +82,10 @@ def test_compose_image_tag_matches() -> None:
     Trailing is bounded on both sides: it can never exceed VERSION (the
     `manifest unknown` case this replaces), and `promote-image.py` closes the
     gap as soon as the publish has happened. Note what is deliberately *not*
-    asserted here — that the tag is really in GHCR. That is the property actually worth having, but it needs a
-    network call, and a unit suite that goes red when the registry is
-    unreachable reports a broken registry as a broken build. This is the offline
+    asserted here — that the tag is really in GHCR. That is the property
+    actually worth having, but it needs a network call, and a unit suite that
+    goes red when the registry is unreachable reports a broken registry as a
+    broken build. This is the offline
     half; `scripts/promote-image.py` owns the online one, and is the only thing
     that writes this line.
     """

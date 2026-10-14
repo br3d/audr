@@ -292,3 +292,36 @@ def test_worker_inline_copy_obeys_the_modules_rules() -> None:
     assert str(int(healthcheck.WORKER_STALE_SECONDS)) in block, (
         "staleness threshold has drifted from WORKER_STALE_SECONDS"
     )
+
+
+def test_worker_inline_copy_passes_when_the_beacon_was_never_written() -> None:
+    """The one place the inline copy must NOT mirror the module (AUD-544).
+
+    `_check_worker` exits 1 on a missing beacon file and is right to: it only
+    ever runs against a tag `scripts/promote-image.py` has proven carries the
+    writer in `audr.jobs.__main__`, so for it a missing file means the worker
+    died before its first beat.
+
+    The inline copy has no such guarantee. It runs against whatever published
+    tag `x-backend-image` names, and every tag published so far (0.1.1, v0.1.2)
+    predates that writer, so the file is simply never created — reading it
+    strictly reported a live worker as `unhealthy` on every fresh clone. A
+    probe that cannot tell "this image has no beacon" from "the beacon
+    stopped" must not fail the first case. Once the file exists, staleness is
+    judged exactly as the module judges it.
+    """
+    block = _worker_healthcheck_test()
+    if WORKER_MODULE_FORM in block:
+        pytest.skip("compose.yaml calls the module directly; the guarantee holds")
+    assert "os.path.exists" in block, (
+        "the inline worker probe must test for the beacon file before reading it — "
+        "without that, a published tag whose image has no beacon writer reports "
+        "`unhealthy` forever against a perfectly live worker (AUD-544)."
+    )
+    # The absent-file branch must be the *first* exit in the probe, and a
+    # success one. Ordering matters: a `sys.exit(1)` reached first is the bug.
+    first_exit = block[block.index("sys.exit") :].splitlines()[0]
+    assert first_exit.strip() == "sys.exit(0)", (
+        f"the first exit in the inline worker probe is {first_exit.strip()!r}; it must "
+        "be the `sys.exit(0)` guarding a beacon file that was never written."
+    )

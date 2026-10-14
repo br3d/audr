@@ -54,8 +54,12 @@ def test_is_idempotent() -> None:
 
 def test_rejects_a_file_with_no_anchor() -> None:
     try:
-        pi.rewrite_compose("services:\n  api:\n    image: nginx\n", "1.0.0",
-                           restore_api=False, restore_worker=False)
+        pi.rewrite_compose(
+            "services:\n  api:\n    image: nginx\n",
+            "1.0.0",
+            restore_api=False,
+            restore_worker=False,
+        )
     except pi.Refused as exc:
         check("x-backend-image" in str(exc), f"unhelpful message: {exc}")
         return

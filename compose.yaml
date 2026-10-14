@@ -154,23 +154,42 @@ services:
     # carries *both* the `--worker` flag and the beacon writer in
     # jobs/__main__.py. Against 0.1.1 or v0.1.2 it carries neither, so the
     # probe stays inlined and the false `unhealthy` cannot recur.)
-    # Inline a stdlib-only equivalent instead, which no tag can
-    # fail to provide: read the beacon file `audr.jobs.__main__`'s poll loop
-    # ticks every 5s on its own schedule, and fail only once it has gone 15s
-    # (3x the tick) without moving. A file, not a DB query, for the same
-    # reason `/health/live` skips `/health/ready`: a database outage the
-    # worker cannot fix by restarting must never show up here. Keep the path
-    # and threshold in step with WORKER_HEARTBEAT_PATH / WORKER_STALE_SECONDS
-    # in backend/src/audr/operations/healthcheck.py — this reverts to the
-    # module form automatically on the next promotion (scripts/promote-image.py);
-    # backend/tests/unit/test_healthcheck.py checks the two stay in sync.
+    # Inline a stdlib-only equivalent instead: read the beacon file
+    # `audr.jobs.__main__`'s poll loop ticks every 5s on its own schedule, and
+    # fail only once it has gone 15s (3x the tick) without moving. A file, not
+    # a DB query, for the same reason `/health/live` skips `/health/ready`: a
+    # database outage the worker cannot fix by restarting must never show up
+    # here.
+    #
+    # It diverges from the module in exactly one case, and that divergence is
+    # the whole point: **a beacon file that was never created is a pass here,
+    # and a failure in the module.** The module only ever runs against a tag
+    # scripts/promote-image.py has proven contains the writer, so for it a
+    # missing file means the worker died before its first beat. The inline
+    # copy has no such guarantee — it runs against whatever tag the anchor at
+    # the top of this file names, and every tag published so far (0.1.1,
+    # v0.1.2) predates the writer in jobs/__main__.py, so the file is never
+    # created and a strict read reports a perfectly live worker as
+    # `unhealthy`. That was AUD-544, observed on a fresh clone. A probe that
+    # cannot distinguish "this image has no beacon" from "the beacon stopped"
+    # must not fail on the first; once it *has* beaten once, staleness is
+    # judged normally.
+    #
+    # Keep the path and threshold in step with WORKER_HEARTBEAT_PATH /
+    # WORKER_STALE_SECONDS in backend/src/audr/operations/healthcheck.py —
+    # this reverts to the module form automatically on the next promotion
+    # (scripts/promote-image.py), which is also the moment the divergence
+    # above stops mattering; backend/tests/unit/test_healthcheck.py checks the
+    # two stay in sync.
     healthcheck:
       test:
         - CMD
         - python
         - -c
         - |
-          import sys, time
+          import os, sys, time
+          if not os.path.exists("/app/worker-heartbeat"):
+              sys.exit(0)
           try:
               last_beat = float(open("/app/worker-heartbeat").read())
           except Exception as exc:

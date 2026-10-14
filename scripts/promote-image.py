@@ -219,16 +219,12 @@ def release_commit(root: pathlib.Path, version: str) -> str:
 # that guard, rewording the comment would turn the revert into a silent no-op
 # and the inline copies would outlive the tag that forced them.
 
-ANCHOR_RE = re.compile(
-    r"^x-backend-image: &backend_image ghcr\.io/br3d/audr-backend:(\S+)$", re.M
-)
+ANCHOR_RE = re.compile(r"^x-backend-image: &backend_image ghcr\.io/br3d/audr-backend:(\S+)$", re.M)
 
 API_INLINE_ANCHOR = "# Inlined, and only until the next publish"
 API_MODULE_FORM = 'test: ["CMD", "python", "-m", "audr.operations.healthcheck"]'
 WORKER_INLINE_ANCHOR = "# Inlined (worker), and only until the next publish"
-WORKER_MODULE_FORM = (
-    'test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]'
-)
+WORKER_MODULE_FORM = 'test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]'
 
 
 def _inline_block_re(anchor: str) -> re.Pattern[str]:
@@ -300,9 +296,7 @@ def rewrite_compose(
     if restore_worker:
         text, changed = restore_healthcheck(text, WORKER_INLINE_ANCHOR, WORKER_MODULE_FORM)
         if changed:
-            changes.append(
-                "worker healthcheck -> python -m audr.operations.healthcheck --worker"
-            )
+            changes.append("worker healthcheck -> python -m audr.operations.healthcheck --worker")
 
     return text, changes
 
