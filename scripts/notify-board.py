@@ -311,6 +311,28 @@ def main(argv: list[str]) -> int:
             except OSError:
                 pass
             return 0
+        # 409 is run ownership, not a failure to reach the board: an agent run
+        # has the alert issue checked out, and only that run may move its
+        # status. The recovery note still has to arrive, so post it as a
+        # comment and let the assignee — who is awake precisely because this
+        # issue woke them — close it as part of handling the alert. Recovery
+        # delivered is success; reporting it as "no channel accepted the alert"
+        # would turn a recovered stand into a fake alerting outage.
+        if status_code == 409:
+            comment_code, _ = request(
+                cfg, "POST", f"/api/issues/{existing}/comments", {"body": message}
+            )
+            if comment_code in (200, 201):
+                log(f"issue {existing} is run-owned (409) — recovery posted as a comment")
+                # Keep the state file: the issue is still open, so a new alert
+                # for this key should comment on it, not open a duplicate.
+                return 0
+            log(
+                f"could not close issue {existing} (HTTP {status_code}) "
+                f"and the recovery comment also failed (HTTP {comment_code})",
+                err=True,
+            )
+            return 1
         # Leave the state file in place: the issue is still open, so the next
         # alert should keep commenting on it rather than open a second one.
         log(f"could not close issue {existing} (HTTP {status_code})", err=True)

@@ -252,6 +252,31 @@ class BoardSinkTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(api.calls, [])
 
+    def test_run_owned_issue_takes_the_recovery_as_a_comment(self):
+        # 409 is Paperclip's run-ownership conflict: an agent run has the alert
+        # issue checked out, so only that run may move its status. Observed for
+        # real on AUD-541 — the alert is assigned to an agent precisely so it
+        # wakes them, which is what makes it run-owned. The recovery note must
+        # still land, and a delivered recovery is success.
+        self.configure()
+        self.run_sink("--key", "stand-down", "--", "down")
+        api = FakeApi({("PATCH", "/api/issues/"): (409, {})})
+        code, api = self.run_sink("--key", "stand-down", "--resolve", "--", "recovered", api=api)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(api.comments()), 1)
+        self.assertEqual(api.comments()[0][2], {"body": "recovered"})
+        # The issue is still open, so keep the record: the next alert for this
+        # key must comment on it rather than open a duplicate `critical`.
+        self.assertEqual(self.recorded(), "issue-new-1")
+
+    def test_run_owned_close_whose_comment_also_fails_reports_1(self):
+        self.configure()
+        self.run_sink("--key", "stand-down", "--", "down")
+        api = FakeApi({("PATCH", "/api/issues/"): (409, {}), ("POST", "/comments"): (500, {})})
+        code, api = self.run_sink("--key", "stand-down", "--resolve", "--", "recovered", api=api)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.recorded(), "issue-new-1")
+
     def test_failed_close_keeps_the_record_so_repeats_still_dedupe(self):
         self.configure()
         self.run_sink("--key", "stand-down", "--", "down")
