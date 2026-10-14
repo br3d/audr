@@ -57,13 +57,31 @@ def test_package_json_matches() -> None:
 
 
 def test_compose_image_tag_matches() -> None:
-    """`docker compose up -d` on a checkout must pull that checkout's version.
+    """`docker compose up -d` on a checkout must pull an image that exists.
 
     compose.yaml names the published image literally (AUD-418, AUD-439) so an
     operator can see what will be downloaded, which makes it a fifth version
     carrier: scripts/release.sh rewrites the `x-backend-image` anchor the three
-    backend services share, and a stale number here would hand new users an
-    older release than the repository they cloned.
+    backend services share.
+
+    This used to assert `pin == VERSION` outright, to stop a stale number
+    handing new users an older release than the repository they cloned. That
+    turned out to be the weaker of two competing goods: publishing is two steps
+    (cut the tag, then dispatch `release.yml`), only the second creates the
+    image, and the second needs a human in the GitHub UI. Between them the pin
+    named a tag that did not exist and a fresh clone died at `docker compose up
+    -d` with `manifest unknown`; v0.1.2 sat that way for nine days (AUD-442). An
+    install that cannot start at all is worse than one running the previous
+    release, so the rule is now **the pin may trail VERSION, never lead it**
+    (CEO ruling, AUD-545).
+
+    Trailing is bounded on both sides: it can never exceed VERSION (the
+    `manifest unknown` case this replaces), and `release.sh` rewrites the anchor
+    on the next cut. Note what is deliberately *not* asserted — that the tag is
+    really in GHCR. That is the property actually worth having, but it needs a
+    network call, and a unit suite that goes red when the registry is
+    unreachable reports a broken registry as a broken build. This is the offline
+    half; the publish step owns the rest.
     """
     compose = (REPO_ROOT / "compose.yaml").read_text()
     tags = re.findall(
@@ -76,9 +94,29 @@ def test_compose_image_tag_matches() -> None:
         "ghcr.io/br3d/audr-backend:<version>` line — scripts/release.sh "
         "rewrites exactly that spelling."
     )
-    assert set(tags) == {__version__}, (
-        f"compose.yaml pulls audr-backend:{sorted(set(tags))}, "
-        f"audr.version says {__version__} — bump with scripts/release.sh."
+    assert len(set(tags)) == 1, (
+        f"compose.yaml names more than one backend tag ({sorted(set(tags))}); "
+        "the three backend services must share one `x-backend-image` anchor."
+    )
+    pinned = tags[0]
+    # A release tag, not a floating or sha-suffixed one: a clone has to pull
+    # something whose meaning is fixed. Stricter than SEMVER_RE on purpose —
+    # `<version>-g<sha12>` builds exist in the registry but are not releases.
+    assert re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$", pinned), (
+        f"compose.yaml pins audr-backend:{pinned!r}, which is not a plain "
+        "MAJOR.MINOR.PATCH release tag."
+    )
+    pinned_parts = tuple(int(n) for n in pinned.split("."))
+    # Compare on the semver core only: SEMVER_RE admits `-rc.1`/`+build`
+    # suffixes, and a pre-release VERSION must not make this raise ValueError.
+    version_core = re.split(r"[-+]", __version__, maxsplit=1)[0]
+    version_parts = tuple(int(n) for n in version_core.split("."))
+    assert pinned_parts <= version_parts, (
+        f"compose.yaml pins audr-backend:{pinned}, which is ahead of VERSION "
+        f"({__version__}). A pin may trail VERSION while a release is cut but "
+        "not yet published, never lead it — leading it means a fresh clone "
+        "pulls a tag that does not exist and `docker compose up -d` fails with "
+        "`manifest unknown` (AUD-442/AUD-545)."
     )
     assert "${BACKEND_TAG" not in compose and "${AUDR_REGISTRY" not in compose, (
         "BACKEND_TAG/AUDR_REGISTRY belong to compose.deploy.yaml — a plain "

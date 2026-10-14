@@ -53,7 +53,7 @@ kind — nothing validates them against `VERSION`:
 
 | File | Why it moves |
 |---|---|
-| `compose.yaml` | `x-backend-image` names the published image literally, so a checkout of `v1.4.2` pulls `audr-backend:1.4.2` (AUD-439). **This one names an image that does not exist yet** — see [Publishing is two steps](#publishing-is-two-steps-and-main-is-broken-between-them). |
+| `compose.yaml` | `x-backend-image` names the published image literally, so a checkout of `v1.4.2` pulls `audr-backend:1.4.2` (AUD-439). The release commit points it at a tag that **does not exist in the registry yet**; if step 2 does not follow, this line must go back to the last *published* tag or `main` is uninstallable — see [Publishing is two steps](#publishing-is-two-steps-and-main-is-broken-between-them). |
 | `frontend/package-lock.json` | Mirrors `package.json`'s version in two places; `npm ci` aborts if they disagree, and the Dockerfile's frontend stage runs `npm ci`. |
 
 One more edit lands in the release commit, and it is a one-off that will stop
@@ -99,6 +99,31 @@ registry — `release.yml` is `workflow_dispatch` only, and it publishes the bar
 ref gets `X.Y.Z-g<sha12>`, which a clone of `main` will not pull). So in the
 window between the two steps, a fresh clone of `main` fails
 `docker compose up -d` with `manifest unknown`.
+
+**If step 2 cannot follow, close the window instead of leaving it open.** Step 2
+is a GitHub-UI dispatch, so whoever cut the tag may not be able to run it — and
+the window is not self-healing: it stays open until the next release. `v0.1.2`
+was cut 2026-10-05 and sat unpublished for nine days exactly this way
+(AUD-442), so the two-command quickstart was dead for nine days. When the
+dispatch is not going to follow promptly, put `main` back to the last published
+release:
+
+- point `x-backend-image` at the newest tag that is actually in GHCR, and
+- re-inline the `api` healthcheck if that tag predates
+  `audr.operations.healthcheck` (the inline form and the anchor `release.sh`
+  matches on are described above).
+
+`VERSION` and the git tag stay where they are — only the image anchor moves
+back, because it is the one carrier that names something outside the repository.
+`backend/tests/unit/test_version.py::test_compose_image_tag_matches` enforces
+the rule this follows: **the pin may trail `VERSION`, never lead it.**
+`release.sh` rewrites the anchor on the next cut, so this corrects itself once
+publishing catches up — but **after a late dispatch finally publishes `X.Y.Z`,
+bump the anchor to it**, because nothing automated does that.
+
+This is the interim half of the CEO ruling on AUD-545. The permanent fix is to
+stop landing the pin bump on `main` until the image exists, so the window never
+opens; until that ships, the rule above is what keeps `main` installable.
 
 Our own deploy host is unaffected either way: `compose.deploy.yaml` overrides
 the `x-backend-image` anchor with
