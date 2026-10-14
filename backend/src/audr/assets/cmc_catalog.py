@@ -62,6 +62,16 @@ _PINS: dict[str, int] = {
     # Augur v2's REPv2 contract isn't separately listed by CMC — "REP"
     # (id 1104) is the only Augur entry in the map and tracks the v2 token.
     "0x221657776846890989a759ba2973e427dff5c9bb": 1104,  # REPv2 -> REP (Augur)
+    # "JUP" is two unrelated coins in CMC's map and neither carries an
+    # Ethereum platform address, so both the address match and the
+    # unique-symbol fallback go silent — this holding has had no price since
+    # 2026-10-03 (AUD-384). Verified by hand against the live keyless
+    # endpoints on 2026-10-14: CMC 1503 ("Jupiter", rank 5677, no platform)
+    # quotes $0.00025887, and CoinGecko's record for *this exact contract*
+    # ("Jupiter Project") quotes $0.00024398 — a 6% spread, i.e. the same
+    # asset. The other candidate, CMC 29210 (Solana's Jupiter), quotes
+    # $0.31710 — ~1300x off, so this is not a coin toss between the two.
+    "0x4b1e80cac91e2216eeb63e29b957eb91ae9c2be8": 1503,  # JUP (Jupiter Project, ERC-20)
 }
 
 
