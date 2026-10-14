@@ -183,11 +183,32 @@ exit.
 Teardown runs from an `EXIT` trap, which a `SIGKILL` skips — so a run killed
 mid-suite leaks its whole stack: a running postgres and WireMock, two ~550MB
 images and a `node_modules` volume. Six of those took the shared agent host to
-89% disk, so every run now reaps the previous casualties at startup. It only
-ever touches auto-named `audr-test-<pid>` projects (never a pinned
-`AUDR_TEST_PROJECT`) whose newest container is older than six hours
-(`AUDR_TEST_REAP_AGE_H`) and which have no running `*-tests-*` container, so a
-concurrent live suite is never torn down.
+89% disk, so every run reaps the previous casualties at startup.
+
+A leftover is recognised by its **`com.docker.compose.service` label** landing in
+`compose.test.yaml`'s service set — `db-test`, `provider-mock`, `migrate-test`,
+`backend-tests`, `benchmark`, `frontend-tests` — not by the shape of its project
+name. Those names never collide with the dev stack (`web`, `init`, `api`,
+`worker`, `db`) or the deploy host, so this is narrower than a name prefix while
+catching every project name. Compose labels the images and volumes it builds the
+same way, so both of those sweeps key off the same set; the image sweep
+additionally requires the repository be exactly `<project>-<service>`, because a
+*pulled* image keeps the labels of whatever service last used it and a
+registry-namespaced tag must never be a reap candidate.
+
+Three guards keep a live stack safe: the current `$PROJECT` is always exempt; a
+project is reaped only once its newest container is older than six hours
+(`AUDR_TEST_REAP_AGE_H`) and no `*-tests-*` container of it is running, so a
+concurrent suite is never torn down; and a stack whose age cannot be established
+is left alone rather than removed on an unknown age.
+
+Pinned `AUDR_TEST_PROJECT` stacks are reaped on the same terms as auto-named
+ones. Exempting them (the original behaviour) meant nothing *ever* reclaimed
+one — not its own run, since `teardown` deliberately drops `--rmi local` when the
+project is pinned, and not any later run — so each ad-hoc pinned name cost about
+1GB permanently. If you keep a pinned stack to reuse on a cycle longer than six
+hours, raise `AUDR_TEST_REAP_AGE_H` past your reuse interval; the only cost of a
+reap is the rebuild, served from the BuildKit cache.
 
 ### Individual suites
 

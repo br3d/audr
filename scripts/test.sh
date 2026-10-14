@@ -55,23 +55,59 @@ trap teardown EXIT
 # node_modules volume, none of which anything ever reclaims. Six such orphans
 # (up to six days old) had taken the shared agent host to 89% disk.
 #
-# So each run cleans up after the previous casualties. Two guards keep this from
-# ever touching a live stack:
-#   * only auto-generated `audr-test-<pid>` names, never a pinned
-#     AUDR_TEST_PROJECT — that opts into a long-lived stack somebody owns;
+# So each run cleans up after the previous casualties.
+#
+# A stack is ours to reap when its containers carry a `com.docker.compose.service`
+# label from compose.test.yaml's service set — NOT when its project name matches a
+# shape (AUD-548). The original name gate (`^audr-test-<pid>$`, and the reaper only
+# running at all when AUDR_TEST_PROJECT was unset) rested on "a pinned name opts
+# into a long-lived stack somebody owns". In practice a pinned name is an ad-hoc
+# per-issue label — `audr-aud522-156759`, `audr-ruff-$$` — whose owner finished
+# days ago, and nothing reclaimed it: not its own run (`teardown` drops
+# `--rmi local` when pinned, so even a *clean* exit leaks two ~550MB tags), and not
+# any later run. Fifteen such images — ~7GB of tags across nine dead projects —
+# plus a 35h-idle postgres+wiremock pair were found on the shared host at 86% disk.
+#
+# Matching on the service label is also strictly safer than the prefix it replaces:
+# the dev stack's services (`web`, `init`, `api`, `worker`, `db`, `migrate`) and the
+# deploy host's do not intersect this set, so no project name can be reaped by
+# accident, whatever it is called.
+#
+# Three guards keep this from ever touching a live stack, all unchanged from
+# AUD-529:
+#   * never the current ${PROJECT} — a pinned stack is exempt *while in use*;
 #   * only projects whose newest container is older than AUDR_TEST_REAP_AGE_H
 #     (default 6h, an order of magnitude past the suite's runtime) and which
-#     have no running `*-tests-*` container, i.e. no suite currently executing.
+#     have no running `*-tests-*` container, i.e. no suite currently executing;
+#   * never a stack whose age cannot be established (see `newest == 0` below).
+#
+# What this does cost: a pinned stack reused on a cycle longer than the age gate is
+# now torn down between uses, so the next run rebuilds it. Nothing is lost — the
+# suite brings its own stack up (`up -d --wait db-test`) and migrate-test re-runs
+# from scratch, so the price is build time, paid from the BuildKit cache. Raise
+# AUDR_TEST_REAP_AGE_H past the reuse interval if that trade is wrong for a stack.
 REAP_AGE_H="${AUDR_TEST_REAP_AGE_H:-6}"
 
+# compose.test.yaml's service names, as a grep alternation. Keep in step with that
+# file; a service missing here is a service whose leftovers nothing reclaims.
+TEST_SERVICES='db-test|provider-mock|migrate-test|backend-tests|benchmark|frontend-tests'
+# The images and volumes Compose builds carry the same two labels its containers
+# do, so they are matched the same way — a project-name prefix would not do here
+# either. The leaks found on the shared host at 86% disk were
+# `aud388v-backend-tests`, `aud446n-backend-tests`,
+# `aud442-ut-3451816-migrate-test` and six more: real compose.test.yaml images
+# whose project name does not begin with `audr` at all.
+
 reap_stale_projects() {
-  local cutoff now p names n created newest state running left
+  local cutoff now p names n created newest state running left meta iproj isvc vproj
   now="$(date +%s)"
   cutoff=$(( now - REAP_AGE_H * 3600 ))
 
   for p in $(docker ps -a --filter 'label=com.docker.compose.project' \
-      --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
-      | grep -E '^audr-test-[0-9]+$' | grep -vFx "${PROJECT}" | sort -u); do
+      --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}' \
+      2>/dev/null \
+      | grep -E "\|(${TEST_SERVICES})\$" | cut -d'|' -f1 \
+      | grep -vFx "${PROJECT}" | sort -u); do
     names="$(docker ps -a --filter "label=com.docker.compose.project=${p}" \
       --format '{{.Names}}' 2>/dev/null)"
     [[ -z "${names}" ]] && continue
@@ -110,30 +146,55 @@ reap_stale_projects() {
   done
 
   # Image-only leftovers: the project's containers are long gone (so the loop
-  # above never sees it) but the tags it built survive.
-  for n in $(docker images --format '{{.Repository}}' 2>/dev/null \
-      | grep -E '^audr-test-[0-9]+-(backend-tests|migrate-test|benchmark)$' \
-      | grep -vE "^${PROJECT}-" | sort -u); do
-    created="$(docker inspect -f '{{.Created}}' "${n}:latest" 2>/dev/null)" || continue
+  # above never sees it) but the tags it built survive. This is also the only
+  # thing that ever reclaims a *pinned* project's images, since `teardown` skips
+  # `--rmi local` for those by design (AUD-548).
+  for n in $(docker images --filter 'label=com.docker.compose.service' \
+      --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort -u); do
+    meta="$(docker inspect -f \
+      '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
+      "${n}" 2>/dev/null)" || continue
+    iproj="${meta%%|*}"
+    isvc="${meta##*|}"
+    [[ "${isvc}" =~ ^(${TEST_SERVICES})$ ]] || continue
+    [[ "${iproj}" == "${PROJECT}" ]] && continue
+    # Only the tag Compose itself built for that project. A *pulled* image keeps
+    # the labels of whatever Compose service it was last used by — the dev
+    # stack's nginx is on this host as `192.168.1.90:8085/audr-frontend:latest`
+    # labelled `service=web` — so insist the repository is exactly
+    # `<project>-<service>` before removing anything. That also excludes every
+    # registry-namespaced tag, ours and the other tenant's alike.
+    [[ "${n}" == "${iproj}-${isvc}:latest" ]] || continue
+    created="$(docker inspect -f '{{.Created}}' "${n}" 2>/dev/null)" || continue
     created="$(date -d "${created}" +%s 2>/dev/null)" || continue
     (( created > cutoff )) && continue
-    [[ -n "$(docker ps -aq --filter "ancestor=${n}:latest" 2>/dev/null)" ]] && continue
-    echo "==> Reaping orphan test image ${n}:latest"
-    docker rmi -f "${n}:latest" >/dev/null 2>&1 || true
+    [[ -n "$(docker ps -aq --filter "ancestor=${n}" 2>/dev/null)" ]] && continue
+    echo "==> Reaping orphan test image ${n}"
+    docker rmi -f "${n}" >/dev/null 2>&1 || true
   done
 
   # Named frontend volumes outlive `down` when the run was killed before it.
-  for n in $(docker volume ls -f dangling=true --format '{{.Name}}' 2>/dev/null \
-      | grep -E '^audr-test-[0-9]+_frontend_node_modules$' \
-      | grep -vE "^${PROJECT}_"); do
+  # `dangling=true` already proves no container holds it, and the age gate keeps
+  # a pinned stack's cache alive between two runs inside the window.
+  for n in $(docker volume ls -f dangling=true \
+      --filter 'label=com.docker.compose.volume=frontend_node_modules' \
+      --format '{{.Name}}' 2>/dev/null); do
+    vproj="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "${n}" 2>/dev/null)" || continue
+    [[ "${vproj}" == "${PROJECT}" ]] && continue
+    created="$(docker volume inspect -f '{{.CreatedAt}}' "${n}" 2>/dev/null)" || continue
+    created="$(date -d "${created}" +%s 2>/dev/null)" || continue
+    (( created > cutoff )) && continue
     echo "==> Reaping orphan test volume ${n}"
     docker volume rm "${n}" >/dev/null 2>&1 || true
   done
 }
 
-if [[ -z "${AUDR_TEST_PROJECT:-}" ]]; then
-  reap_stale_projects || true
-fi
+# Always, including when AUDR_TEST_PROJECT is pinned (AUD-548). Skipping the reaper
+# for pinned runs was the reason a pinned stack was reaped by nobody: the only run
+# that would have cleaned it up is the one that also opted out of cleaning. The
+# current ${PROJECT} is exempt inside the function, which is the narrow exemption a
+# pinned name actually needs.
+reap_stale_projects || true
 
 echo "==> Starting test environment (db-test, waiting for healthcheck)"
 "${COMPOSE[@]}" up -d --wait db-test
