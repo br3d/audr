@@ -48,27 +48,41 @@ runtime — the runtime image contains neither the repo root nor an installed
 `scripts/release.sh` rewrites all four together. `backend/tests/unit/test_version.py`
 fails the build if they ever disagree, so drift cannot reach `main`.
 
-It moves two more files in the same commit, which are carriers of a different
-kind — nothing validates them against `VERSION`:
+It moves one more file in the same commit, a carrier of a different kind —
+nothing validates it against `VERSION`:
 
 | File | Why it moves |
 |---|---|
-| `compose.yaml` | `x-backend-image` names the published image literally, so a checkout of `v1.4.2` pulls `audr-backend:1.4.2` (AUD-439). The release commit points it at a tag that **does not exist in the registry yet**; if step 2 does not follow, this line must go back to the last *published* tag or `main` is uninstallable — see [Publishing is two steps](#publishing-is-two-steps-and-main-is-broken-between-them). |
 | `frontend/package-lock.json` | Mirrors `package.json`'s version in two places; `npm ci` aborts if they disagree, and the Dockerfile's frontend stage runs `npm ci`. |
 
-One more edit lands in the release commit, and it is a one-off that will stop
-happening: `compose.yaml`'s `api` healthcheck currently inlines a copy of
-`audr.operations.healthcheck` because the tag it pins (`0.1.1`) predates that
-module, so calling it would report a clean clone's `api` as `unhealthy`
-(AUD-442). Cutting a release is the moment that stops being true, so
-`release.sh` replaces the inline block with
-`test: ["CMD", "python", "-m", "audr.operations.healthcheck"]` as part of the
-same commit. It aborts if the healthcheck is in neither shape, and
-`backend/tests/unit/test_healthcheck.py` fails the build if the two files stop
-agreeing on the comment the rewrite anchors on — otherwise the revert would
-quietly become a no-op and the inline copy would outlive its reason. Once a
-release has gone out, this row disappears: the swap is idempotent and the
-following release finds nothing to do.
+### The one file `release.sh` does *not* touch
+
+`compose.yaml`'s `x-backend-image` names the published image literally, so a
+checkout of `v1.4.2` pulls `audr-backend:1.4.2` and an operator can read the tag
+without resolving a variable (AUD-439). That makes it look like a sixth version
+carrier, and `release.sh` used to rewrite it with the rest — but it is a
+different kind of statement. Every file above is a claim about *this
+repository* and is true the instant the commit is made. The anchor is a claim
+about an *external registry*, and at cut time it is false: the image does not
+exist until somebody dispatches `release.yml`.
+
+So the anchor moves in a separate, later commit, written by
+[`scripts/promote-image.py`](#publishing-is-three-steps-and-main-works-after-each)
+only once it has proven the image is there. The consequence worth stating
+plainly: **`main` is installable at every commit.** A clone taken between the
+cut and the publish gets the previous release, not a `manifest unknown`
+failure (AUD-546).
+
+The same applies to the two healthchecks `compose.yaml` currently inlines.
+`api`'s is a copy of `audr.operations.healthcheck` and `worker`'s is a copy of
+its `--worker` mode, inlined because the pinned tag predates them and calling
+the module would report a clean clone as `unhealthy` (AUD-442, AUD-539). Those
+reverts are also claims about what is in the published image, so they happen in
+`promote-image.py` too, each gated on its own check of the release commit's
+contents. `backend/tests/unit/test_healthcheck.py` fails the build if
+`compose.yaml` and `promote-image.py` stop agreeing on the comment the rewrite
+anchors on — otherwise the revert would quietly become a no-op and the inline
+copies would outlive their reason.
 
 ## Cutting a release
 
@@ -77,55 +91,78 @@ following release finds nothing to do.
 ./scripts/release.sh --show         # print the current version
 ```
 
-It refuses to run on a dirty tree or off `main`, rewrites all six files above,
+It refuses to run on a dirty tree or off `main`, rewrites the five files above,
 commits `Release vX.Y.Z` and creates the annotated tag. Nothing is pushed until
 you add `--push`, because **pushing the tag is what deploys**:
 `ci/gitea-overlay/workflows/deploy.yaml` triggers on `v*`.
 
 Undo before pushing: `git tag -d vX.Y.Z && git reset --hard HEAD~1`.
 
-### Publishing is two steps, and `main` is broken between them
+### Publishing is three steps, and `main` works after each
 
-Pushing the tag is **not** the whole release. Do not start unless you can
-finish both steps in one sitting:
+```bash
+./scripts/release.sh patch --push        # 1. cut:     tag + version files
+#    GitHub -> Actions -> release        # 2. publish: the image (manual)
+./scripts/promote-image.py --push        # 3. promote: point compose.yaml at it
+```
 
-1. `./scripts/release.sh patch --push`
-2. **GitHub → Actions → release → Run workflow**, ref `vX.Y.Z`
+**Step 1 — cut.** Pushes the version bump and the `vX.Y.Z` tag, which is what
+triggers our own deploy (`ci/gitea-overlay/workflows/deploy.yaml`). `main` now
+says `VERSION=X.Y.Z` while `compose.yaml` still pins the previous release.
 
-Step 1's release commit points `compose.yaml` at
-`ghcr.io/br3d/audr-backend:X.Y.Z`. Step 2 is what puts that tag in the
-registry — `release.yml` is `workflow_dispatch` only, and it publishes the bare
-`:X.Y.Z` tag only when the commit it builds *is* the `vX.Y.Z` tag (any other
-ref gets `X.Y.Z-g<sha12>`, which a clone of `main` will not pull). So in the
-window between the two steps, a fresh clone of `main` fails
-`docker compose up -d` with `manifest unknown`.
+**Step 2 — publish.** [Actions → release → Run
+workflow](https://github.com/br3d/audr/actions/workflows/release.yml), ref
+`vX.Y.Z`. This is what puts `ghcr.io/br3d/audr-backend:X.Y.Z` in the registry.
+It is a human action in a browser and cannot be automated from here:
+`release.yml` is `workflow_dispatch`-only because the GitHub → Gitea mirror
+replays tags verbatim, so a `tags:` trigger would run this workflow on our
+self-hosted runner alongside Gitea's own deploy.
 
-**If step 2 cannot follow, close the window instead of leaving it open.** Step 2
-is a GitHub-UI dispatch, so whoever cut the tag may not be able to run it — and
-the window is not self-healing: it stays open until the next release. `v0.1.2`
-was cut 2026-10-05 and sat unpublished for nine days exactly this way
-(AUD-442), so the two-command quickstart was dead for nine days. When the
-dispatch is not going to follow promptly, put `main` back to the last published
-release:
+Note what it publishes: the bare `:X.Y.Z` tag **only** when the commit it builds
+*is* the `vX.Y.Z` tag. Any other ref gets `X.Y.Z-g<sha12>`, which a clone of
+`main` will not pull.
 
-- point `x-backend-image` at the newest tag that is actually in GHCR, and
-- re-inline the `api` healthcheck if that tag predates
-  `audr.operations.healthcheck` (the inline form and the anchor `release.sh`
-  matches on are described above).
+**Step 3 — promote.** `./scripts/promote-image.py --push` is the only thing that
+moves the `compose.yaml` pin. Before touching the file it checks, against the
+real registry:
 
-`VERSION` and the git tag stay where they are — only the image anchor moves
-back, because it is the one carrier that names something outside the repository.
-`backend/tests/unit/test_version.py::test_compose_image_tag_matches` enforces
-the rule this follows: **the pin may trail `VERSION`, never lead it.**
-`release.sh` rewrites the anchor on the next cut, so this corrects itself once
-publishing catches up — but **after a late dispatch finally publishes `X.Y.Z`,
-bump the anchor to it**, because nothing automated does that.
+- `ghcr.io/br3d/audr-backend:X.Y.Z` has a manifest — and asks with the full
+  `Accept` header, because GHCR answers `404` for tags that exist when asked
+  without it;
+- that image's `org.opencontainers.image.revision` label is the commit `vX.Y.Z`
+  points at, so a tag built from some other ref is refused by name rather than
+  silently promoted;
+- whether that commit carries `audr.operations.healthcheck`, its `--worker`
+  flag, and the beacon writer in `audr.jobs.__main__` — each inline healthcheck
+  is swapped for the module form only if its own answer is yes (AUD-544).
 
-This is the interim half of the CEO ruling on AUD-545. The permanent fix is to
-stop landing the pin bump on `main` until the image exists, so the window never
-opens; until that ships, the rule above is what keeps `main` installable.
+Run it before step 2 and it refuses, printing the dispatch URL. Run it twice and
+the second run finds nothing to do. `python3 scripts/test_promote_image.py`
+covers the rewrite offline.
 
-Our own deploy host is unaffected either way: `compose.deploy.yaml` overrides
+#### Why it is split this way
+
+Steps 1 and 2 cannot be made atomic — step 2 needs a human — so the question is
+only what `main` says in between. It used to say "pull `X.Y.Z`" before that tag
+existed, which meant a fresh clone failed `docker compose up -d` with `manifest
+unknown`; `v0.1.2` was cut 2026-10-05 and sat unpublished for nine days exactly
+that way (AUD-442), so the two-command quickstart was dead for nine days. The
+window was not self-healing and the instruction that was supposed to prevent it
+— "do not start unless you can finish both steps in one sitting" — is not a
+mechanism.
+
+Moving the pin bump out of the release commit removes the window instead of
+asking anyone to close it, which is the CEO ruling on AUD-545. The invariant it
+buys, asserted offline by
+`backend/tests/unit/test_version.py::test_compose_image_tag_matches`: **the pin
+may trail `VERSION`, never lead it.** An install running one release behind is
+strictly better than one that cannot start.
+
+If step 3 is skipped or forgotten, nothing breaks — new users get the previous
+release until someone runs it. That is a visible-but-harmless state, unlike the
+one it replaces.
+
+Our own deploy host is unaffected by all three: `compose.deploy.yaml` overrides
 the `x-backend-image` anchor with
 `${AUDR_REGISTRY}/audr-backend:${BACKEND_TAG}`, so it never reads GHCR.
 

@@ -8,7 +8,7 @@
 #
 # What it does, in order:
 #   1. refuses to run unless the tree is clean and HEAD is on main
-#   2. rewrites the version in all six files that carry it
+#   2. rewrites the version in all five in-repo files that carry it
 #   3. commits that as "Release vX.Y.Z"
 #   4. creates the annotated tag vX.Y.Z
 #   5. with --push: pushes main and the tag, which is what triggers the guarded
@@ -19,16 +19,23 @@
 # Pushing is opt-in because a pushed tag deploys. Everything before that step is
 # local and reversible with `git tag -d` + `git reset --hard HEAD~1`.
 #
-# Pushing is NOT the last step, and this script cannot perform the one that is.
-# The release commit rewrites compose.yaml's `x-backend-image` to
-# ghcr.io/br3d/audr-backend:<version>, which does not exist in the registry
-# until someone runs GitHub -> Actions -> release -> Run workflow against the
-# new tag — that workflow is `workflow_dispatch`-only by design (AUD-409), and
-# it publishes the bare `:<version>` tag only for the `v<version>` commit.
-# Between the push and that dispatch, a fresh clone of main fails
-# `docker compose up -d` with `manifest unknown`. Our own deploy host is
-# unaffected: compose.deploy.yaml overrides the anchor with the private
-# registry. See docs/releases.md "Cutting a release".
+# Pushing is NOT the last step, and this script cannot perform either of the
+# two that follow. Publishing is a manual GitHub dispatch (release.yml is
+# `workflow_dispatch`-only by design, AUD-409: a `tags:` trigger would be
+# replayed by the GitHub -> Gitea mirror onto our self-hosted runner), and only
+# once that has published the image does the compose.yaml pin move —
+# `scripts/promote-image.py`, which verifies the tag is really in the registry
+# before rewriting anything.
+#
+# What this script deliberately does NOT touch is compose.yaml. It used to, and
+# that was the bug (AUD-546): every file below is a claim about the repository
+# and is true the moment the commit is made, but `x-backend-image` is a claim
+# about an external registry and was false until the dispatch ran. In between,
+# main named an image that did not exist and a fresh clone died on
+# `docker compose up -d` with `manifest unknown` — v0.1.2 sat that way for nine
+# days (AUD-442). Cutting a release now leaves main installable at every
+# commit; the pin trails VERSION until promote-image.py catches it up.
+# See docs/releases.md "Cutting a release".
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,7 +43,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${ROOT}/scripts/lib/version.sh"
 
 usage() {
-  sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 BUMP=""
@@ -135,90 +142,6 @@ def sub_once(path: pathlib.Path, pattern: str, repl: str) -> None:
     path.write_text(new)
 
 
-# compose.yaml names the published image literally — one `x-backend-image`
-# anchor the three backend services share — so a checkout of v1.4.2 pulls
-# audr-backend:1.4.2 and an operator can read the tag without resolving a
-# variable (AUD-439).
-sub_once(
-    root / "compose.yaml",
-    r"^x-backend-image: &backend_image ghcr\.io/br3d/audr-backend:\S+$",
-    f"x-backend-image: &backend_image ghcr.io/br3d/audr-backend:{nxt}",
-)
-
-# compose.yaml's api healthcheck is inlined only because the pinned tag predates
-# `audr.operations.healthcheck` (AUD-442): 0.1.1 was cut 2026-10-04, the module
-# landed 2026-10-05. Cutting a release is exactly the moment that stops being
-# true — the tag this script is writing carries the module — so the revert
-# happens here rather than in somebody's memory. The anchor is the first line of
-# the comment block compose.yaml uses to mark the inline form as temporary;
-# backend/tests/unit/test_healthcheck.py asserts the two files still agree on it.
-INLINE_HEALTHCHECK_ANCHOR = "# Inlined, and only until the next publish"
-MODULE_HEALTHCHECK = '      test: ["CMD", "python", "-m", "audr.operations.healthcheck"]\n'
-INLINE_HEALTHCHECK = re.compile(
-    r"(?:^    " + re.escape(INLINE_HEALTHCHECK_ANCHOR) + r"[^\n]*\n)"
-    r"(?:^    #[^\n]*\n)*"
-    r"^    healthcheck:\n"
-    r"^      test:\n"
-    r"(?:^(?: {8}[^\n]*)?\n)+"
-    r"(?=^      interval:)",
-    re.M,
-)
-
-compose = root / "compose.yaml"
-original_compose_text = compose.read_text()
-compose_text = original_compose_text
-compose_text, n = INLINE_HEALTHCHECK.subn(
-    "    healthcheck:\n" + MODULE_HEALTHCHECK, compose_text, count=1
-)
-if n == 1:
-    print("==> compose.yaml: api healthcheck restored to `python -m audr.operations.healthcheck`")
-elif "audr.operations.healthcheck" not in compose_text:
-    sys.exit(
-        "FATAL: compose.yaml's api healthcheck is neither the module form "
-        '(test: ["CMD", "python", "-m", "audr.operations.healthcheck"]) nor the '
-        f"inline block marked {INLINE_HEALTHCHECK_ANCHOR!r} that this script reverts. "
-        "Someone edited it into a third shape — reconcile it with "
-        "backend/src/audr/operations/healthcheck.py before cutting a release."
-    )
-
-# Same dance, same reason, for the worker's `--worker` beacon check (AUD-539):
-# 0.1.2 predates that flag, so compose.yaml inlines a stdlib equivalent until
-# the tag this script is cutting ships it. Anchor and regex shape mirror the
-# api block above; only the anchor text and module invocation differ.
-INLINE_WORKER_HEALTHCHECK_ANCHOR = "# Inlined (worker), and only until the next publish"
-MODULE_WORKER_HEALTHCHECK = (
-    '      test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]\n'
-)
-INLINE_WORKER_HEALTHCHECK = re.compile(
-    r"(?:^    " + re.escape(INLINE_WORKER_HEALTHCHECK_ANCHOR) + r"[^\n]*\n)"
-    r"(?:^    #[^\n]*\n)*"
-    r"^    healthcheck:\n"
-    r"^      test:\n"
-    r"(?:^(?: {8}[^\n]*)?\n)+"
-    r"(?=^      interval:)",
-    re.M,
-)
-
-compose_text, worker_n = INLINE_WORKER_HEALTHCHECK.subn(
-    "    healthcheck:\n" + MODULE_WORKER_HEALTHCHECK, compose_text, count=1
-)
-if worker_n == 1:
-    print(
-        "==> compose.yaml: worker healthcheck restored to "
-        "`python -m audr.operations.healthcheck --worker`"
-    )
-elif MODULE_WORKER_HEALTHCHECK not in compose_text:
-    sys.exit(
-        "FATAL: compose.yaml's worker healthcheck is neither the module form "
-        '(test: ["CMD", "python", "-m", "audr.operations.healthcheck", "--worker"]) '
-        f"nor the inline block marked {INLINE_WORKER_HEALTHCHECK_ANCHOR!r} that this "
-        "script reverts. Someone edited it into a third shape — reconcile it with "
-        "backend/src/audr/operations/healthcheck.py before cutting a release."
-    )
-
-if compose_text != original_compose_text:
-    compose.write_text(compose_text)
-
 # [project] version — the first `version = "..."` in pyproject is the project's;
 # dependency pins use `==` inside the dependencies list, never this spelling.
 sub_once(
@@ -291,7 +214,7 @@ git -C "${ROOT}" --no-pager diff --stat
 # ---- Commit and tag -----------------------------------------------------
 
 git -C "${ROOT}" add VERSION backend/pyproject.toml backend/src/audr/version.py \
-  frontend/package.json frontend/package-lock.json compose.yaml
+  frontend/package.json frontend/package-lock.json
 git -C "${ROOT}" commit -m "Release ${TAG}"
 git -C "${ROOT}" tag -a "${TAG}" -m "audr ${TAG}"
 echo "==> committed and tagged ${TAG}"
@@ -301,30 +224,41 @@ if [ "${PUSH}" -eq 1 ]; then
   git -C "${ROOT}" push origin main
   git -C "${ROOT}" push origin "${TAG}"
   cat <<EOF
-==> pushed ${TAG} — the release is NOT finished yet
+==> pushed ${TAG} — two steps remain, and neither is automatic
 
-REQUIRED NEXT STEP: GitHub -> Actions -> release -> Run workflow, ref ${TAG}
+  2. PUBLISH  GitHub -> Actions -> release -> Run workflow, ref ${TAG}
+     https://github.com/br3d/audr/actions/workflows/release.yml
+     This is what puts ghcr.io/br3d/audr-backend:${NEXT} in the registry.
+     It is workflow_dispatch-only on purpose and publishes the bare :${NEXT}
+     tag only for the ${TAG} commit itself.
 
-The release commit you just pushed points compose.yaml at
-ghcr.io/br3d/audr-backend:${NEXT}, and that tag does not exist in the registry
-until the run above publishes it (release.yml is workflow_dispatch only, and it
-publishes the bare :${NEXT} tag only for the ${TAG} commit itself). Until then
-a fresh clone of main fails \`docker compose up -d\` with \`manifest unknown\`.
+  3. PROMOTE  ./scripts/promote-image.py --push
+     Points compose.yaml at :${NEXT} once step 2 has actually produced it.
+     Run it before step 2 and it refuses, naming the dispatch — that refusal
+     is the point: the pin never leads the registry (AUD-546).
 
-Our own deploy host is unaffected: compose.deploy.yaml overrides the anchor
-with \${AUDR_REGISTRY}/audr-backend:\${BACKEND_TAG}, so it never reads GHCR.
+main is installable right now and stays that way if you stop here: compose.yaml
+still names the last published image, so a fresh clone gets the previous
+release rather than \`manifest unknown\` (AUD-442/AUD-545). Steps 2 and 3 are
+what make ${NEXT} the one a new user gets.
+
+Our own deploy host is already on its way and needs none of this:
+compose.deploy.yaml overrides the anchor with
+\${AUDR_REGISTRY}/audr-backend:\${BACKEND_TAG}, so it never reads GHCR.
 EOF
 else
   cat <<EOF
 
-Nothing has been pushed. Publishing a release is two steps, and main is broken
-for fresh clones between them — do not start unless you can finish:
+Nothing has been pushed. A full release is three steps; each one leaves main in
+a state that works, so you can stop between any of them:
 
   1. git push origin main && git push origin ${TAG}   (this triggers the deploy)
-  2. GitHub -> Actions -> release -> Run workflow, ref ${TAG}
+  2. GitHub -> Actions -> release -> Run workflow, ref ${TAG}   (publishes the image)
+  3. ./scripts/promote-image.py --push                (points compose.yaml at it)
 
-Step 1 points compose.yaml at ghcr.io/br3d/audr-backend:${NEXT}; step 2 is what
-puts that tag in the registry. See docs/releases.md.
+Step 3 verifies the image from step 2 is really in the registry before touching
+compose.yaml, so stopping after 1 or 2 leaves a clone installing the previous
+release rather than failing outright. See docs/releases.md.
 
 To undo locally:
 
