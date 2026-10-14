@@ -48,6 +48,13 @@ _MAP_TTL = timedelta(days=1)
 # do not add an entry here without checking the live id yourself; a wrong
 # pin silently mispríces a real holding, which is worse than leaving it
 # unresolved.
+#
+# Not every unpriced address belongs here. A contract that migrated to a new
+# address, or was delisted without replacement, and has no market venue at all
+# is **excluded** (`asset.excluded = true`), never pinned to its successor's
+# id: identity is not price equivalence — the two contracts are separate
+# supplies and the quote covers only the successor's counted supply. See
+# "Unpriceable assets: pin, or exclude" in docs/architecture.md (AUD-554).
 _PINS: dict[str, int] = {
     # Polygon's token migrated MATIC -> POL (1:1 swap). CMC's map now only
     # lists the new POL contract as the Ethereum platform address, so the

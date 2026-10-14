@@ -253,6 +253,36 @@ their adapter — there is no arbitrary-proxy setting.
 is stored and `"coinmarketcap"` otherwise. Only **held** assets are priced, so
 cost scales with the portfolio rather than with the catalog.
 
+### Unpriceable assets: pin, or exclude
+
+Three different situations look identical from the snapshot (`price_usd IS
+NULL`) and must not be treated the same way:
+
+| Situation | What to do |
+|---|---|
+| The provider knows the token but our resolver cannot match it (ambiguous ticker, missing platform address) | Add a **hand-verified** entry to `cmc_catalog._PINS`, with a regression test asserting the resolved **id**. Verify against at least two independent sources before pinning — a wrong same-ticker pin does not fail loudly, it silently misprices the portfolio. |
+| The token has a live market but no provider we use carries it under our contract | Leave it unpriced. `quality` is honestly `gaps`; the fix is a provider or a key, not an accounting change. |
+| The contract **migrated to a new address**, or was **delisted without replacement**, and has **no market venue at all** | **Exclude it** — `asset.excluded = true`. Do not pin it to the successor contract, and do not leave it as a permanent `unknown`. |
+
+The third rule is a decision of record (AUD-554, 2026-10-14; applied to the
+legacy Rubic contract `0xa4eed63d…`). The reasoning: a migrated or delisted
+contract has a market value of zero and a zero chance of ever acquiring a
+price, so holding it inside the valuation set permanently pins the quality
+indicator to `gaps` and destroys the one signal that is supposed to tell the
+owner whether the total can be trusted. Excluding it is honest rather than
+cosmetic — there is no real balance being dropped from view.
+
+Pinning a legacy address to its successor's id is specifically **forbidden**:
+identity is not price equivalence. The legacy and successor contracts are
+separate supplies, and the provider's quote is computed over the successor's
+counted supply only, so the pinned price would be fiction.
+
+Exclusion is a valuation filter, not a deletion: `portfolio/snapshot.py` still
+writes a `valuation_line` for every holding and keeps the asset reachable via
+`held=true&excluded=true`, but computes `quality` and the total over the
+included holdings only (AUD-448). Nothing is hidden and the decision is
+reversible from the UI.
+
 ---
 
 ## 6. Authentication, sessions and secrets
