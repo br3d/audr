@@ -131,13 +131,17 @@ def test_worker_mode_does_not_probe_http(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert healthcheck.main(["--worker"]) == 0
 
 
-# --- compose.yaml / release.sh coupling (AUD-442) -------------------------
+# --- compose.yaml / promote-image.py coupling (AUD-442) -------------------
 #
 # The inline copy in compose.yaml is temporary by construction, and the thing
-# that ends it is `scripts/release.sh`, which rewrites the block when it cuts a
-# tag that carries this module. Both files are anchored on one comment line, so
-# rewording that comment would silently turn the revert into a no-op and ship
-# the inline copy forever. These three tests are what notices.
+# that ends it is `scripts/promote-image.py`, which rewrites the block once the
+# tag it is pointing compose.yaml at is verified to be in the registry and
+# built from that release commit. (It was `scripts/release.sh` until AUD-546 —
+# doing it at cut time assumed the new tag shipped immediately, which is the
+# same assumption that left `main` naming a nonexistent image for nine days.)
+# Both files are anchored on one comment line, so rewording that comment would
+# silently turn the revert into a no-op and ship the inline copy forever.
+# These three tests are what notices.
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INLINE_ANCHOR = "# Inlined, and only until the next publish"
@@ -148,8 +152,8 @@ def _compose() -> str:
     return (REPO_ROOT / "compose.yaml").read_text()
 
 
-def _release() -> str:
-    return (REPO_ROOT / "scripts/release.sh").read_text()
+def _promote() -> str:
+    return (REPO_ROOT / "scripts/promote-image.py").read_text()
 
 
 def _api_healthcheck_test() -> str:
@@ -175,33 +179,33 @@ def test_compose_healthcheck_is_one_of_the_two_accepted_forms() -> None:
     assert inline != module, (
         "compose.yaml's api healthcheck must be either the module form "
         f"({MODULE_FORM}) or an inline `python -c` probe — found "
-        f"inline={inline}, module={module}. scripts/release.sh only knows how "
+        f"inline={inline}, module={module}. scripts/promote-image.py only knows how "
         f"to convert the second into the first.\n{block}"
     )
 
 
-def test_release_script_restores_the_module_form() -> None:
-    """The next release must drop the inline copy without anyone remembering to."""
-    release = _release()
+def test_promote_script_restores_the_module_form() -> None:
+    """The next promotion must drop the inline copy without anyone remembering to."""
+    promote = _promote()
     if MODULE_FORM in _api_healthcheck_test():
-        assert "audr.operations.healthcheck" in release, (
-            "compose.yaml already calls the module, but scripts/release.sh "
-            "dropped the guard that fails the release if that line goes missing."
+        assert "audr.operations.healthcheck" in promote, (
+            "compose.yaml already calls the module, but scripts/promote-image.py "
+            "dropped the guard that fails the promotion if that line goes missing."
         )
         return
     assert INLINE_ANCHOR in _compose(), (
         "compose.yaml inlines the probe but no longer marks it with "
-        f"{INLINE_ANCHOR!r} — that comment is the anchor scripts/release.sh "
+        f"{INLINE_ANCHOR!r} — that comment is the anchor scripts/promote-image.py "
         "matches on, so the release-time revert would silently become a no-op."
     )
-    assert INLINE_ANCHOR in release, (
+    assert INLINE_ANCHOR in promote, (
         "compose.yaml marks its api healthcheck as temporary but "
-        f"scripts/release.sh no longer anchors on {INLINE_ANCHOR!r}, so cutting "
-        "a release would leave the inline copy in place against a tag that "
+        f"scripts/promote-image.py no longer anchors on {INLINE_ANCHOR!r}, so "
+        "promoting would leave the inline copy in place against a tag that "
         "does carry the module."
     )
-    assert MODULE_FORM in release, (
-        "scripts/release.sh anchors on the inline block but does not write "
+    assert MODULE_FORM in promote, (
+        "scripts/promote-image.py anchors on the inline block but does not write "
         f"{MODULE_FORM} in its place."
     )
 
@@ -218,7 +222,7 @@ def test_inline_copy_obeys_the_modules_rules() -> None:
     assert "print(" in block, "print one line; a traceback floods .State.Health.Log"
 
 
-# --- compose.yaml / release.sh coupling, worker (AUD-539) ------------------
+# --- compose.yaml / promote-image.py coupling, worker (AUD-539) ------------
 #
 # Same dance as the api block above, for the same reason: compose.yaml pins a
 # published tag (0.1.2) that predates `--worker`, so it inlines a stdlib
@@ -245,33 +249,33 @@ def test_compose_worker_healthcheck_is_one_of_the_two_accepted_forms() -> None:
     assert inline != module, (
         "compose.yaml's worker healthcheck must be either the module form "
         f"({WORKER_MODULE_FORM}) or an inline `python -c` probe — found "
-        f"inline={inline}, module={module}. scripts/release.sh only knows how "
+        f"inline={inline}, module={module}. scripts/promote-image.py only knows how "
         f"to convert the second into the first.\n{block}"
     )
 
 
-def test_release_script_restores_the_worker_module_form() -> None:
-    """The next release must drop the inline copy without anyone remembering to."""
-    release = _release()
+def test_promote_script_restores_the_worker_module_form() -> None:
+    """The next promotion must drop the inline copy without anyone remembering to."""
+    promote = _promote()
     if WORKER_MODULE_FORM in _worker_healthcheck_test():
-        assert WORKER_MODULE_FORM in release, (
-            "compose.yaml already calls the module, but scripts/release.sh "
-            "dropped the guard that fails the release if that line goes missing."
+        assert WORKER_MODULE_FORM in promote, (
+            "compose.yaml already calls the module, but scripts/promote-image.py "
+            "dropped the guard that fails the promotion if that line goes missing."
         )
         return
     assert WORKER_INLINE_ANCHOR in _compose(), (
         "compose.yaml inlines the worker probe but no longer marks it with "
-        f"{WORKER_INLINE_ANCHOR!r} — that comment is the anchor scripts/release.sh "
+        f"{WORKER_INLINE_ANCHOR!r} — that comment is the anchor scripts/promote-image.py "
         "matches on, so the release-time revert would silently become a no-op."
     )
-    assert WORKER_INLINE_ANCHOR in release, (
+    assert WORKER_INLINE_ANCHOR in promote, (
         "compose.yaml marks its worker healthcheck as temporary but "
-        f"scripts/release.sh no longer anchors on {WORKER_INLINE_ANCHOR!r}, so cutting "
-        "a release would leave the inline copy in place against a tag that "
+        f"scripts/promote-image.py no longer anchors on {WORKER_INLINE_ANCHOR!r}, so "
+        "promoting would leave the inline copy in place against a tag that "
         "does carry `--worker`."
     )
-    assert WORKER_MODULE_FORM in release, (
-        "scripts/release.sh anchors on the inline block but does not write "
+    assert WORKER_MODULE_FORM in promote, (
+        "scripts/promote-image.py anchors on the inline block but does not write "
         f"{WORKER_MODULE_FORM} in its place."
     )
 

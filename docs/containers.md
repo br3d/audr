@@ -19,9 +19,13 @@ recipe and our internal deploy config at once.
 | `compose.encrypted-volume.yaml` | installers who want the DB on an encrypted disk | Overlay binding the `db_data` volume to `${AUDR_DB_DATA_PATH}` on an unlocked LUKS/ZFS mount. Required variable, so a missing path fails the start rather than falling back to the unencrypted default. Only takes effect on a volume Docker is creating for the first time — see [operations.md](operations.md#encrypting-the-database-volume). |
 
 The release version lives in exactly one place in `compose.yaml` — the
-`x-backend-image` anchor the three backend services share — and
-`scripts/release.sh` rewrites it, with `backend/tests/unit/test_version.py`
-failing the build if it ever drifts from `VERSION`.
+`x-backend-image` anchor the three backend services share. It names the last
+image actually *published*, which is not always this tree's `VERSION`, and
+`scripts/promote-image.py` is the only thing that moves it: it bumps the anchor
+after proving the new tag is in the registry, so `main` never names an image
+that does not exist (AUD-546). `backend/tests/unit/test_version.py` enforces the
+rule offline — the pin may trail `VERSION`, never lead it. See
+[releases.md](releases.md).
 
 The `api` health check is `python -m audr.operations.healthcheck`, a command
 inside the image rather than a Python program embedded in YAML. `worker` has
@@ -38,8 +42,9 @@ the liveness module entirely (AUD-442), and `0.1.2` predates `--worker`
 clone's healthcheck misreport — `ModuleNotFoundError` for the first, a
 spurious HTTP probe for the second. Each inline copy reverts to `python -m`
 automatically once a tag carrying the corresponding code is published;
-`scripts/release.sh` does the revert, `backend/tests/unit/test_healthcheck.py`
-checks it stays wired up. `compose.dev.yaml` and `compose.deploy.yaml` inherit
+`scripts/promote-image.py` does the revert — gated on the same registry check
+that moves the pin, and on that tag really containing the code the probe calls —
+and `backend/tests/unit/test_healthcheck.py` checks it stays wired up. `compose.dev.yaml` and `compose.deploy.yaml` inherit
 both checks but build from source, so neither was ever affected.
 
 ## What `compose.yaml` defines

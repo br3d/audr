@@ -14,12 +14,15 @@ name: audr
 # Deploying from a private registry:  see compose.deploy.yaml
 
 # The newest tag that actually exists in the registry, which is not necessarily this
-# tree's VERSION. Publishing is two steps (cut the tag, then dispatch `release.yml`
-# to build it) and only the second puts a tag in GHCR, so while that window is open
-# this anchor must keep naming the last *published* release or a fresh clone fails
-# `docker compose up -d` with `manifest unknown`. VERSION says 0.1.2, whose dispatch
-# has not run (AUD-442); CEO ruling on AUD-545 is to pin the published tag meanwhile.
-# See docs/releases.md.
+# tree's VERSION. Publishing a release is three steps — cut the tag, dispatch
+# `release.yml` to build it, then `scripts/promote-image.py` to move this line — and
+# only the second puts a tag in GHCR. Nothing else may touch this anchor: it is the
+# one line in the repository that names something outside it, so a tag written here
+# before the registry has it makes a fresh clone fail `docker compose up -d` with
+# `manifest unknown` (AUD-442). The rule, enforced offline by
+# backend/tests/unit/test_version.py::test_compose_image_tag_matches and online by
+# promote-image.py, is that this pin may trail VERSION but never lead it (AUD-545,
+# AUD-546). VERSION says 0.1.2, whose dispatch has not run. See docs/releases.md.
 x-backend-image: &backend_image ghcr.io/br3d/audr-backend:0.1.1
 
 services:
@@ -80,10 +83,14 @@ services:
       - "${AUDR_HTTP_PORT:-80}:8000"
     # Inlined, and only until the next publish — then this goes back to
     # `test: ["CMD", "python", "-m", "audr.operations.healthcheck"]` (AUD-442).
-    # That revert is automatic — scripts/release.sh rewrites this block in the
-    # release commit, matching on the first line of this comment, and
-    # backend/tests/unit/test_healthcheck.py fails the build if the two files
-    # stop agreeing on it. Reword that line and the revert becomes a no-op.
+    # That revert is automatic — scripts/promote-image.py rewrites this block
+    # when it moves the pin above, matching on the first line of this comment,
+    # and backend/tests/unit/test_healthcheck.py fails the build if the two
+    # files stop agreeing on it. Reword that line and the revert becomes a
+    # no-op. It happens at promotion rather than at the cut (AUD-546) because
+    # only then is the tag proven to be in the registry and built from the
+    # release commit, which is what makes "this tag carries the module" a fact
+    # instead of a hope.
     # That module is the tested reference implementation of the logic below
     # (backend/src/audr/operations/healthcheck.py, backend/tests/unit/
     # test_healthcheck.py) and is the better form: a command in the image, not a
@@ -142,11 +149,11 @@ services:
     # carrying the module but not the flag it is still wrong: it falls through
     # to the old `main()`'s unconditional HTTP probe against a container with
     # nothing listening on :8000, reporting `unhealthy` for no real reason.)
-    # KNOWN GAP (AUD-544): the beacon read below is written by
-    # jobs/__main__.py, which landed after both 0.1.1 and v0.1.2 — so against
-    # any *currently published* tag this probe fails and `worker` reports
-    # `unhealthy` while being alive (`/health/ready` says `worker: running`).
-    # Fixing it needs a third accepted shape here and in scripts/release.sh.
+    # (AUD-544, closed by AUD-546: the swap to the module form now happens in
+    # scripts/promote-image.py, which only makes it against a tag it has proven
+    # carries *both* the `--worker` flag and the beacon writer in
+    # jobs/__main__.py. Against 0.1.1 or v0.1.2 it carries neither, so the
+    # probe stays inlined and the false `unhealthy` cannot recur.)
     # Inline a stdlib-only equivalent instead, which no tag can
     # fail to provide: read the beacon file `audr.jobs.__main__`'s poll loop
     # ticks every 5s on its own schedule, and fail only once it has gone 15s
@@ -155,7 +162,7 @@ services:
     # worker cannot fix by restarting must never show up here. Keep the path
     # and threshold in step with WORKER_HEARTBEAT_PATH / WORKER_STALE_SECONDS
     # in backend/src/audr/operations/healthcheck.py — this reverts to the
-    # module form automatically on the next release (scripts/release.sh);
+    # module form automatically on the next promotion (scripts/promote-image.py);
     # backend/tests/unit/test_healthcheck.py checks the two stay in sync.
     healthcheck:
       test:

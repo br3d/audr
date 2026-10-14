@@ -60,9 +60,13 @@ def test_compose_image_tag_matches() -> None:
     """`docker compose up -d` on a checkout must pull an image that exists.
 
     compose.yaml names the published image literally (AUD-418, AUD-439) so an
-    operator can see what will be downloaded, which makes it a fifth version
-    carrier: scripts/release.sh rewrites the `x-backend-image` anchor the three
-    backend services share.
+    operator can see what will be downloaded, which makes it look like a fifth
+    version carrier: the `x-backend-image` anchor the three backend services
+    share. It is not one. Every other carrier is a claim about this repository
+    and is true the moment the commit is made; this one is a claim about an
+    external registry, so it is moved by `scripts/promote-image.py` in a
+    separate commit, only after that script has proven the tag is really there
+    (AUD-546). `scripts/release.sh` deliberately leaves it alone.
 
     This used to assert `pin == VERSION` outright, to stop a stale number
     handing new users an older release than the repository they cloned. That
@@ -76,12 +80,13 @@ def test_compose_image_tag_matches() -> None:
     (CEO ruling, AUD-545).
 
     Trailing is bounded on both sides: it can never exceed VERSION (the
-    `manifest unknown` case this replaces), and `release.sh` rewrites the anchor
-    on the next cut. Note what is deliberately *not* asserted — that the tag is
-    really in GHCR. That is the property actually worth having, but it needs a
+    `manifest unknown` case this replaces), and `promote-image.py` closes the
+    gap as soon as the publish has happened. Note what is deliberately *not*
+    asserted here — that the tag is really in GHCR. That is the property actually worth having, but it needs a
     network call, and a unit suite that goes red when the registry is
     unreachable reports a broken registry as a broken build. This is the offline
-    half; the publish step owns the rest.
+    half; `scripts/promote-image.py` owns the online one, and is the only thing
+    that writes this line.
     """
     compose = (REPO_ROOT / "compose.yaml").read_text()
     tags = re.findall(
@@ -91,7 +96,7 @@ def test_compose_image_tag_matches() -> None:
     )
     assert tags, (
         "compose.yaml has no `x-backend-image: &backend_image "
-        "ghcr.io/br3d/audr-backend:<version>` line — scripts/release.sh "
+        "ghcr.io/br3d/audr-backend:<version>` line — scripts/promote-image.py "
         "rewrites exactly that spelling."
     )
     assert len(set(tags)) == 1, (

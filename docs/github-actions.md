@@ -78,7 +78,8 @@ summary rather than a bare `exit code 1` (AUD-414):
 This workflow does not create tags — it publishes what a tag already names. The
 sequence is `./scripts/release.sh patch --push` (see
 [releases.md](releases.md)), then **Actions → release → Run workflow** against
-the new tag. Note that pushing a `v*` tag is also what triggers the guarded
+the new tag, then `./scripts/promote-image.py --push` to point `compose.yaml` at
+the image this run just published. Note that pushing a `v*` tag is also what triggers the guarded
 Gitea deploy, so cutting a release deploys the instance; that step needs the
 founder's approval, the GHCR publish on its own does not.
 

@@ -260,6 +260,7 @@ change caused it.
 
 ```bash
 python3 scripts/test_registry_prune.py    # no dependencies
+python3 scripts/test_promote_image.py     # no dependencies, no network
 ```
 
 These cannot live in the pytest suite because the backend test container mounts
