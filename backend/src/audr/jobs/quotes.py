@@ -149,6 +149,7 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
     unchanged. If nothing is stale, the provider is never called this run.
     """
     token_addresses = await _get_held_asset_addresses(session)
+    await _clear_price_availability_for_unheld(session, token_addresses)
     if not token_addresses:
         logger.info("quote_refresh skipped — no held assets run_id=%s", run_id)
         return
@@ -361,6 +362,25 @@ async def _get_asset_id_map(
         {"addrs": token_addresses},
     )
     return {row[1]: uuid.UUID(str(row[0])) for row in result}
+
+
+async def _clear_price_availability_for_unheld(session: AsyncSession, held: list[str]) -> None:
+    """Clear price_unavailable_since for assets that have stopped being held (AUD-553).
+
+    The flag means "the provider was asked about this holding and couldn't
+    price it" — once an asset's balance drops to zero it falls out of
+    ``held`` and _update_price_availability never sees its address again, so
+    a flag set while it was still held would otherwise stick forever. A bare
+    ``token_address <> ALL(:held)`` also clears every flagged row when
+    ``held`` is empty, which is what the no-held-assets early return needs.
+    """
+    await session.execute(
+        sa.text(
+            "UPDATE asset SET price_unavailable_since = NULL"
+            " WHERE price_unavailable_since IS NOT NULL AND token_address <> ALL(:held)"
+        ),
+        {"held": held},
+    )
 
 
 async def _update_price_availability(

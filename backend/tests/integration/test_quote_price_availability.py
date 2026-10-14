@@ -77,15 +77,20 @@ async def _insert_asset(
 
 
 async def _insert_balance(
-    session: AsyncSession, *, wallet_id: uuid.UUID, asset_id: uuid.UUID
+    session: AsyncSession, *, wallet_id: uuid.UUID, asset_id: uuid.UUID, raw_amount: int = 10**18
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO balance_observation"
             " (id, wallet_id, asset_id, raw_amount, block_number, observed_at)"
-            " VALUES (:id, :wallet, :asset, 1000000000000000000, 100, now())"
+            " VALUES (:id, :wallet, :asset, :raw_amount, 100, now())"
         ),
-        {"id": str(uuid.uuid4()), "wallet": str(wallet_id), "asset": str(asset_id)},
+        {
+            "id": str(uuid.uuid4()),
+            "wallet": str(wallet_id),
+            "asset": str(asset_id),
+            "raw_amount": raw_amount,
+        },
     )
 
 
@@ -174,3 +179,66 @@ async def test_quote_refresh_clears_flag_once_resolved(db_session: AsyncSession)
             await handle_quote_refresh(db_session, run_id)
 
     assert await _price_unavailable_since(db_session, asset_id) is None
+
+
+@pytest.mark.integration
+async def test_quote_refresh_clears_flag_once_balance_drops_to_zero(
+    db_session: AsyncSession,
+) -> None:
+    """A flagged asset that stops being held gets the flag cleared (AUD-553).
+
+    Once an asset's balance goes to zero it drops out of the held set that
+    _get_held_asset_addresses returns, so _update_price_availability never
+    sees its address again — without this, the flag set while it was still
+    held and unpriceable would stick around forever and overcount "no price"
+    in operational queries, even though the asset no longer affects the
+    portfolio at all.
+    """
+    run_id = uuid.uuid4()
+    wallet_id = await _insert_wallet(db_session, "0xface" + "2" * 36)
+    held_addr = "0x" + "d4" * 20
+    zeroed_addr = "0x" + "e5" * 20
+    held_id = await _insert_asset(db_session, token_address=held_addr, symbol="HELD")
+    zeroed_id = await _insert_asset(
+        db_session, token_address=zeroed_addr, symbol="ZEROED", price_unavailable=True
+    )
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=held_id)
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=zeroed_id, raw_amount=0)
+    await _setup_fencing(db_session, run_id)
+    await db_session.flush()
+
+    assert await _price_unavailable_since(db_session, zeroed_id) is not None
+
+    with patch(
+        "audr.jobs.quotes.get_coingecko_api_key",
+        new=AsyncMock(return_value="fake-key"),
+    ):
+        with respx.mock(assert_all_called=False) as mock_router:
+            # The provider is never asked about the zeroed-out asset — it
+            # isn't held — so only the still-held address is in the response.
+            mock_router.get(url__regex=r"coingecko").mock(
+                return_value=httpx.Response(200, json={held_addr: {"usd": "2.0"}})
+            )
+            await handle_quote_refresh(db_session, run_id)
+
+    assert await _price_unavailable_since(db_session, zeroed_id) is None
+
+
+@pytest.mark.integration
+async def test_quote_refresh_clears_flag_when_no_assets_held(db_session: AsyncSession) -> None:
+    """The flag is cleared even on the no-held-assets early-return path (AUD-553)."""
+    run_id = uuid.uuid4()
+    wallet_id = await _insert_wallet(db_session, "0xface" + "3" * 36)
+    zeroed_addr = "0x" + "f6" * 20
+    zeroed_id = await _insert_asset(
+        db_session, token_address=zeroed_addr, symbol="ALLGONE", price_unavailable=True
+    )
+    await _insert_balance(db_session, wallet_id=wallet_id, asset_id=zeroed_id, raw_amount=0)
+    await _setup_fencing(db_session, run_id)
+    await db_session.flush()
+
+    assert await _price_unavailable_since(db_session, zeroed_id) is not None
+
+    await handle_quote_refresh(db_session, run_id)
+
+    assert await _price_unavailable_since(db_session, zeroed_id) is None
