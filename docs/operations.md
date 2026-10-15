@@ -395,23 +395,116 @@ before taking your first backup. To use a recipient key you manage elsewhere
 (e.g. a hardware key, a key held outside this host) instead of the
 auto-generated one, set `AUDR_BACKUP_RECIPIENT` to its `age1...` public key.
 
-**`secrets/master_key.hex` is copied separately**, as `master_key-<ts>.hex`
-next to the dump, and is deliberately **not** bundled into the encrypted
-archive — the whole point of keeping the KEK outside the database is that
-compromising one does not compromise the other. Back this file up with the
-same discipline you'd apply to `secrets/master_key.hex` itself (see
+**The KEK is copied separately**, as `master_key-<ts>.hex` next to the dump,
+and is deliberately **not** bundled into the encrypted archive — the whole
+point of keeping the KEK outside the database is that compromising one does not
+compromise the other. Back this file up with the same discipline you'd apply to
+`secrets/master_key.hex` itself (see
 [Key-loss behavior](#key-loss-behavior)). **A dump without it is not fully
 recoverable**: the data restores fine, but every RPC URL and quote-provider
-API key stored in `integration.encrypted_blob` stays permanently unreadable.
+API key stored in `integration.encrypted_blob` — and, since AUD-490, every
+wallet address — stays permanently unreadable.
 
-### Retention
+The KEK is read from `secrets/master_key.hex`, or, when that file does not
+exist, from `SECRET_KEY` in `.env` (override the location with
+`AUDR_ENV_FILE`). Both hold the same 64 hex characters;
+`setup-secrets.sh` writes both, but **the deploy path renders only `.env`**, so
+on the owner stand `secrets/master_key.hex` is absent by design. Before AUD-562
+the script looked only at the file and so reported "provider credentials cannot
+be recovered" on every backup taken there — a warning naming a path that was
+never going to exist on that host, about a key that was in fact present.
 
-There is no automated pruning. Treat `age`-encrypted dumps as cheap (a few
-hours of data loss, at most) and keep a simple rotation — e.g. daily for a
-week, weekly for a month — pruned by a cron job or your backup storage's own
-lifecycle rules. Each `master_key-<ts>.hex` is identical as long as the key
-hasn't been rotated, so only the most recent one needs to be kept offsite,
-but it costs nothing to keep one per dump.
+Set `AUDR_BACKUP_SKIP_KEY_COPY=1` to suppress the copy and print where the KEK
+actually lives instead. The scheduled on-host path sets it; see
+[what the schedule does and does not protect against](#what-the-schedule-does-and-does-not-protect-against)
+for why a KEK file beside the dump it decrypts is worth less than nothing.
+
+### The scheduled backup on the owner stand (AUD-562)
+
+The owner stand takes one encrypted dump a day from a systemd timer. Install or
+update it from a clone:
+
+```bash
+./scripts/install-backup.sh            # install/update, take a first dump, show status
+./scripts/install-backup.sh --check    # report what is installed; change nothing
+```
+
+That installs `audr-backup.timer` → `audr-backup.service` →
+`scripts/backup-run.sh`, which per run takes a dump, **decrypts its own output**
+and checks it starts like a `pg_dump`, prunes to retention, and alerts through
+[`notify.sh`](deploy-runbook.md#alerting-how-you-find-out-the-stand-is-down)
+if any of that failed. A run that fails leaves a flag
+and the next success stands the alert down, so a backup that silently stops
+being taken is itself an alertable condition — that was the actual AUD-562 gap,
+not missing tooling.
+
+As with the watchdog, the scripts on the host are **pinned copies** under
+`~/.local/share/audr-backup/`, not a git checkout: the only checkout on that
+host belongs to the CI runner, which rewrites it on every deploy. Changing
+`backup.sh`, `backup-run.sh` or `dump-prune.py` in this repo does not reach the
+host until `install-backup.sh` runs again.
+
+#### What the schedule does and does not protect against
+
+**Covered**: loss of the `db_data` volume, a bad migration, an accidental
+`docker compose down -v`, a table dropped by hand — the cases that are noticed
+within hours or days.
+
+**Not covered: loss of the host.** The dumps sit on the same machine as the
+database they came from, and the KEK that makes their wallet addresses and
+provider credentials readable (`.env`'s `SECRET_KEY`) also exists only on that
+machine. Fire, theft, a dead disk or a wiped host loses both halves at once.
+
+That is a deliberate scope, not an oversight. The scheduled path explicitly
+does **not** write a KEK copy next to the dumps (`AUDR_BACKUP_SKIP_KEY_COPY=1`):
+AUD-426 removed a plaintext `SECRET_KEY` duplicate from this very directory,
+and a key file beside the archive it decrypts is that same duplicate with the
+encryption cancelled out — it hands both halves to anyone who can read the host.
+
+**Closing the host-loss gap is an owner action** and cannot be automated from
+the stand without putting an off-host credential on the stand. It means copying
+two things somewhere else, *stored apart from each other*:
+
+1. the newest `~/audr/backups/audr-*.sql.age`, and
+2. the `SECRET_KEY` value from `~/audr/.env` (equivalently
+   `secrets/master_key.hex` — the same 64 hex characters), plus
+   `secrets/backup_key.txt`, the `age` identity that decrypts the dump itself.
+
+Without (2) a restore from (1) succeeds and still cannot show a single wallet
+address — see [Key-loss behavior](#key-loss-behavior) and AUD-490.
+
+#### Retention
+
+`scripts/dump-prune.py` applies one GFS rule to both dump families we own
+(Paperclip's archive and audr's own) through `--prefix`, rather than there
+being a second pruner to keep in step. On the stand the scheduled path runs:
+
+```bash
+python3 dump-prune.py --dir ~/audr/backups --prefix audr --days 7 --weeks 4 --apply
+```
+
+A dump survives if it is from the last 7 days, **or** is the newest dump of one
+of the 4 most recent older ISO weeks. The newest dump in the directory is
+protected unconditionally, so neither a clock skew nor a stalled timer can
+empty it, and files that are not dumps — including any `master_key-<ts>.hex`
+left by a manual backup — are never candidates.
+
+Sizing, measured rather than guessed: one dump of the live database is **282
+MiB** (`age` does not compress, and neither does plain-text `pg_dump`), so
+steady state is 11 files, **~3.1 GiB**, on a root filesystem with ~11 GiB free.
+
+The `--weeks` cap is the part that must not be dropped. Without it the weekly
+tier grows forever at one 282 MiB dump a week — ~14.7 GiB/year, which fills
+that disk in roughly eight months. A host that runs out of space because of its
+own backups is a worse outage than the one they prevent, and it arrives
+silently. The cap is affordable because these dumps are a *recovery point, not
+an archive*: the live database holds the full valuation history, and restoring
+a two-month-old snapshot of a portfolio tracker is close to useless anyway.
+
+For a manual dump taken to carry off the host, leave `AUDR_BACKUP_SKIP_KEY_COPY`
+unset — there you *want* the `master_key-<ts>.hex` beside it, because the two
+are about to be separated from the host rather than left on it. Each copy is
+identical as long as the KEK has not been rotated.
 
 ### Searching a dump for a particular value
 
@@ -458,11 +551,21 @@ depends on `migrate`'s completion.
 
 ### Restore drill
 
-A full backup → `docker compose down -v` (total volume loss) → restore → API
-health → data-intact cycle has been run against a throwaway Compose stack; see
-[verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390)
-for the steps, which double as a template for rehearsing a restore on your own
-instance.
+Two drills are on record, and the distinction between them is the point:
+
+- **AUD-390** proved the *scripts*. A full backup → `docker compose down -v`
+  (total volume loss) → restore → API health → data-intact cycle against a
+  throwaway Compose stack, on synthetic data created through the real API. See
+  [verification-history.md](verification-history.md#verification-encrypted-backuprestore-drill-aud-390).
+- **AUD-562** proved an *artefact*. The actual dump the timer wrote on the
+  owner stand was restored into an isolated throwaway stack and checked row by
+  row against the live database, then decrypted with the live host's KEK. See
+  [verification-history.md](verification-history.md#verification-scheduled-backup-and-a-live-artefact-restore-drill-aud-562).
+
+Working scripts and a restorable backup are not the same claim, and only the
+second one is what you have at 3am. Either write-up doubles as a template for
+rehearsing a restore on your own instance; prefer the AUD-562 shape, because
+"the file currently on disk restores" is the property worth re-checking.
 
 ---
 

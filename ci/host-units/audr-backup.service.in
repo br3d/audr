@@ -1,0 +1,50 @@
+# Template — scripts/install-backup.sh substitutes @INSTALL_DIR@ and
+# @REMOTE_DIR@ and installs the result as /etc/systemd/system/audr-backup.service.
+# The paths stay out of the tracked file for the same reasons as
+# audr-watchdog.service.in: they are host layout, this repository is public, and
+# a second host must not inherit the first one's directories by accident.
+#
+# Scope (AUD-562): one encrypted dump of the live database per day, verified by
+# decrypting it, then pruned to retention. The dump is written on the same host
+# it came from, so it covers volume loss, a bad migration and an accidental
+# delete — NOT loss of the host. Carrying dumps off-host is an owner action and
+# is documented in docs/operations.md#backups.
+#
+# No KEK is written beside the dumps (AUDR_BACKUP_SKIP_KEY_COPY=1, set by
+# backup-run.sh): AUD-426 removed a plaintext SECRET_KEY duplicate from this
+# exact directory, and a key file next to the archive it decrypts is that same
+# duplicate with the encryption cancelled out.
+[Unit]
+Description=audr encrypted database backup (AUD-562)
+Documentation=https://github.com/br3d/audr/blob/main/docs/operations.md#backups
+After=network-online.target docker.service
+Wants=network-online.target
+# No point dumping a database whose compose project is not on this host.
+ConditionPathExists=@REMOTE_DIR@/compose.yaml
+
+[Service]
+Type=oneshot
+User=codex
+# The live stack's compose.yaml, .env and secrets/ — backup.sh is a pinned copy
+# outside this directory, so it is told where to look rather than guessing.
+Environment=AUDR_REMOTE_DIR=@REMOTE_DIR@
+Environment=AUDR_BACKUP_DIR=@REMOTE_DIR@/backups
+# Retention, sized against the first real run rather than guessed: one dump of
+# the live database measured 282 MiB (age does not compress, and pg_dump plain
+# text does not either). 7 days + at most 4 older weekly survivors is 11 files,
+# ~3.1 GiB, on a root filesystem with ~11 GiB free.
+#
+# A week of daily recovery points rather than three days: the cases this covers
+# — a bad migration, a table dropped by hand — are the kind that get noticed
+# late, and 2 GiB of headroom buys the difference.
+#
+# The --weeks cap is the part that must not be removed: without it the weekly
+# tier grows forever at one 282 MiB dump a week, ~14.7 GiB/year, and fills this
+# disk in about eight months. A host that runs out of space because of its own
+# backups is a worse outage than the one they prevent, and it arrives silently.
+Environment=AUDR_BACKUP_DAYS=7
+Environment=AUDR_BACKUP_WEEKS=4
+ExecStart=@INSTALL_DIR@/scripts/backup-run.sh
+# pg_dump of a live stand competes with the worker for the same database.
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,19 @@
+# Installed by scripts/install-backup.sh as
+# /etc/systemd/system/audr-backup.timer. No substitution needed.
+[Unit]
+Description=Daily audr encrypted database backup (AUD-562)
+
+[Timer]
+# 03:20 UTC: after the nightly job churn has settled and well clear of
+# audr-dump-prune.timer's 04:00 on the other host, so the two never contend for
+# the same disk if they ever share one.
+OnCalendar=03:20:00
+# Persistent=true, like audr-dump-prune.timer and unlike audr-watchdog.timer: a
+# backup missed while the host was off is still worth taking when it comes back
+# — the data it would have captured is still there to capture.
+Persistent=true
+RandomizedDelaySec=10m
+Unit=audr-backup.service
+
+[Install]
+WantedBy=timers.target
