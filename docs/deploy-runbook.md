@@ -167,6 +167,7 @@ cover deliberately different failure shapes:
 |---|---|---|---|
 | CI failure step | a deploy fails **and** leaves `/health/ready` not-ok | none — immediate | `ci/gitea-overlay/workflows/deploy.yaml` |
 | `audr-watchdog.timer` | `/health/ready` fails 5 probes in a row, deploy or no deploy | ~5 min sustained | `scripts/stand-watchdog.sh` on the host |
+| `audr-backup.timer` | the daily dump fails, or its own decrypt-check says the archive is unreadable | one run — immediate | `scripts/backup-run.sh` on the host |
 
 The watchdog is the one that matters most, because the CI step structurally
 cannot see an outage that no deploy caused — an OOM kill, a reboot, Postgres
@@ -359,6 +360,45 @@ To silence it during planned maintenance, `sudo systemctl stop
 audr-watchdog.timer` — and start it again afterwards. Stopping the timer is
 better than raising the threshold, because the counter file resets on the first
 healthy probe either way.
+
+## Installing and inspecting the scheduled backup
+
+The second timer on this host, installed the same way and for the same reason
+(pinned copies, not the runner's checkout). Full operator documentation is in
+[`operations.md#backups`](operations.md#backups); this is the host-side view.
+
+```bash
+scripts/install-backup.sh            # install or update, take a first dump, show status
+scripts/install-backup.sh --check    # units, timer, dumps on disk, engine, KEK presence
+```
+
+```bash
+systemctl list-timers audr-backup.timer        # next/last dump (03:20 UTC daily)
+sudo systemctl start audr-backup.service       # dump right now
+ls -la ~/audr/backups/                         # the dumps themselves, mode 600
+sudo journalctl -u audr-backup.service -n 50   # per-run log: dump, decrypt check, prune
+```
+
+Each run takes a dump, **decrypts its own output** to prove the archive is
+readable, prunes to `--days 7 --weeks 4`, and alerts through the same
+`notify.sh` sinks as the watchdog on any failure — with a flag file at
+`~/audr/backups/.last-run-failed` so the next success stands the alert down.
+A backup that quietly stops being taken was the actual AUD-562 gap, so it is
+itself an alertable condition rather than something you notice during a
+restore.
+
+Two things worth knowing before you touch it:
+
+- **The dumps are on the same host as the database.** They cover volume loss, a
+  bad migration and an accidental `down -v`; they do **not** cover loss of the
+  host, and the schedule deliberately writes no KEK copy beside them. Getting a
+  dump and the `SECRET_KEY` off-host is an owner action — see
+  [operations.md](operations.md#what-the-schedule-does-and-does-not-protect-against).
+- **`--weeks 4` is load-bearing.** A dump is 282 MiB; without the cap the weekly
+  tier grows ~14.7 GiB/year and fills `/` in about eight months.
+
+As with the watchdog, editing `backup.sh`, `backup-run.sh` or `dump-prune.py`
+in this repo does not reach the host until `install-backup.sh` runs again.
 
 ## Recovering a schema/image mismatch by hand
 

@@ -693,3 +693,116 @@ were closed are not: an encrypting migration leaves the plaintext in the heap
 until the table is rewritten (fixed on the stand, documented as an operator
 step), and `onchain_event` still writes the owner's address in plaintext on
 every indexed event (backlog item 3c).
+
+---
+
+# Verification: Scheduled backup, and a live-artefact restore drill (AUD-562)
+
+**Date**: 2026-10-15
+**Branch**: fix/aud-562-scheduled-backups
+**Author**: infraLead
+**Host**: the owner stand, 192.168.1.228
+
+## Scope
+
+AUD-562 installed a daily encrypted dump on the owner stand, which until that
+day had never been backed up at all: no `backups/` directory, no dump anywhere
+on the host, no timer, `crontab` not even installed. The `db_data` volume was
+the only copy of a live portfolio with its full valuation history and — since
+AUD-490 — wallet addresses that exist nowhere else in plaintext.
+
+AUD-390 had already proved the *scripts* worked, in a throwaway stack on
+synthetic data. This drill proves something the earlier one could not: that
+**the specific file the timer wrote, on the real host, restores the real
+database**. Working tooling and a restorable backup are different claims.
+
+## What was installed
+
+| Piece | Where |
+|---|---|
+| `audr-backup.timer` → `audr-backup.service` | `/etc/systemd/system/`, rendered from `ci/host-units/audr-backup.service.in` |
+| `backup-run.sh`, `backup.sh`, `dump-prune.py`, `restore.sh`, `notify.sh`, `notify-board.py` | pinned copies in `~/.local/share/audr-backup/scripts/` |
+| `age` 1.0.0 | `apt install age` — the host had only `gpg`, so dumps would otherwise have taken the fallback path |
+
+`OnCalendar=03:20:00`, `Persistent=true`, `RandomizedDelaySec=10m`, retention
+`--days 7 --weeks 4`. Installed by `scripts/install-backup.sh`, which is
+idempotent, has a `--check` mode, and runs the real unit once at the end so the
+install either produces a verified dump or fails where someone is watching.
+
+## The artefact
+
+The first run was the systemd unit itself, not a hand-typed command:
+
+```
+$ sudo systemctl start audr-backup.service
+Backup written: /home/codex/audr/backups/audr-20261015-142732.sql.age
+KEK not copied (AUDR_BACKUP_SKIP_KEY_COPY=1); it stays only in /home/codex/audr/.env (SECRET_KEY).
+[backup-run] verifying ... decrypts (295260620 bytes)
+[backup-run] decrypt OK — header looks like pg_dump output
+```
+
+295,260,620 bytes (282 MiB), `sha256 2639c965fec3df3f…`, mode `600`. Note the
+KEK line: before this change `backup.sh` printed `WARNING: secrets/master_key.hex
+not found — provider credentials cannot be recovered`, naming a path that is
+absent by design on a deploy-style host while the key sat in `.env` all along.
+
+## Steps and results
+
+| Step | Command | Result |
+|---|---|---|
+| 1. Exact live counts | `query_to_xml` over every `public` table | 35 tables. `pg_stat_user_tables.n_live_tup` was **not** used — it is a statistics estimate and read `0` for `owner`, `key_state`, `integration` and `alembic_version`, all of which have rows |
+| 2. Isolated target | `docker compose -p audr-restore-drill up -d --wait` | `db` only, `postgres:16-alpine`, own project, own volume (`audr-restore-drill_drill_db_data`), own network, **no published port**. Target confirmed empty: `0` tables in `public` |
+| 3. Restore the artefact | `AUDR_COMPOSE_PROJECT=audr-restore-drill restore.sh <dump>` | Exit 0, **zero** `ERROR:` lines from `psql`. No `--force` needed, so this was a restore into a genuinely empty database, not over a migrated schema |
+| 4. Row counts | same query against the restored DB, plus live counts again afterwards | **34 of 35 tables matched the live database exactly.** `job_run` restored 901,310 against 901,313 live-before / 901,314 live-after |
+| 5. KEK-wrapped ciphertext | `md5(string_agg(...))` over `key_state.wrapped_key`, `wallet.{address,label,bidx}`, `integration.encrypted_blob` | Byte-identical, live vs restored, in all three |
+| 6. Real decrypt | app's own `get_master_key` / `decrypt_address` in the backend image, `SECRET_KEY` taken from the host's `.env`, pointed at the restored DB | Master key unwrapped (32 bytes); both wallets' addresses and labels decrypted to their real values; `balance_observation` 121,653 rows; latest `history_point.total_value_usd` = 127598.540250440065728237 |
+| 7. Pruner | `dump-prune.py --prefix audr --days 7 --weeks 4 --apply` | `1 file, 0.27 GiB, keep 1, delete 0` — correct for a directory holding one dump |
+
+### On the one table that did not match
+
+`job_run` is append-only and the worker writes to it continuously. The drill
+captured live counts **before and after** the restore specifically to tell drift
+from loss: 901,310 restored ≤ 901,313 before ≤ 901,314 after. The dump is a
+consistent `pg_dump` snapshot taken at 14:27:32 and the live table has only
+grown since. Every other table, including every table holding owner data, was
+identical.
+
+Step 6 is the one that matters most and the one AUD-390 could not perform: it
+proves the KEK resolution this change added — `.env`'s `SECRET_KEY`, on a host
+with no `secrets/master_key.hex` — is the *right* key for this artefact. A
+restore that returns rows nobody can decrypt is not a recovery.
+
+## Sizing, and why the weekly tier is capped
+
+One dump is 282 MiB: `age` does not compress and neither does plain-text
+`pg_dump`. The host has ~11 GiB free on `/`.
+
+`dump-prune.py`'s weekly tier was **unbounded** — the newest dump of every older
+ISO week, kept forever. At 95 MB/dump on the Paperclip archive that was
+tolerable; at 282 MiB a week it adds ~14.7 GiB/year and fills this disk in
+roughly eight months. A host that runs out of space because of its own backups
+is a worse outage than the one they prevent, and it arrives silently. So
+`--weeks` was added (default uncapped, so the Paperclip timer is unchanged) and
+the stand runs `--days 7 --weeks 4`: 11 files, ~3.1 GiB, flat.
+
+## Cleanup
+
+`docker compose -p audr-restore-drill down -v --remove-orphans` removed the
+drill container, volume and network; `/tmp/aud562` was deleted. The live stack
+was never a target of any command in this drill: `audr-db-1` stayed up
+throughout (8 days at the time), `audr_db_data` was untouched, and the only
+reads against it were `pg_dump` and the count/checksum queries above.
+
+## Conclusion
+
+The owner stand now has a scheduled, pruned, self-verifying encrypted backup,
+and one dump of the live database has been proven restorable end to end —
+including decryptable, which is the half that a row count alone would have
+missed.
+
+What this does **not** cover is loss of the host, and that is deliberate: the
+dumps and the key that makes them readable both live on the stand, and the
+scheduled path writes no KEK copy beside the dump (AUD-426 removed exactly such
+a duplicate from this directory). Carrying a dump and the `SECRET_KEY` off-host,
+stored apart, remains an owner action; `docs/operations.md#backups` states the
+boundary rather than implying a green timer covers it.

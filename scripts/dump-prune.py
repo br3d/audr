@@ -30,7 +30,10 @@ RETENTION RULE (a dump survives if EITHER applies)
     per day;
   * it is the NEWEST dump of its ISO week, among dumps older than that window.
     This is the GFS weekly promotion the server's own prune performs, and it is
-    why pruning never leaves a week with no recoverable dump.
+    why pruning never leaves a week with no recoverable dump. `--weeks N` caps
+    how many of those survivors are kept, newest weeks first; uncapped by
+    default, because that is the AUD-435 rule for this archive. Any directory a
+    timer keeps writing to wants the cap — see the note on it in `plan()`.
 
 Everything else is deleted. Measured against the live directory the rule holds
 ~6-7 GB in steady state (5 weekly survivors ~0.7 GB + 3 days of hourlies
@@ -57,6 +60,22 @@ USAGE
 
 Reading the directory needs root (the dumps are mode 600), so in practice:
 `sudo python3 scripts/dump-prune.py`.
+
+A SECOND DUMP FAMILY (AUD-562)
+------------------------------
+audr's own scheduled backups land in `/home/codex/audr/backups` on the deploy
+host as `audr-<ts>.sql.age`. They are pruned by the same rule through
+`--prefix`, driven from `scripts/backup-run.sh`:
+
+    python3 scripts/dump-prune.py --dir /home/codex/audr/backups \\
+        --prefix audr --days 7 --weeks 4 --apply
+
+Generalising this script rather than writing a second pruner is deliberate:
+there is one retention rule here whose failure mode is a deleted backup, and it
+should have one implementation and one test suite. Note that directory also
+holds `master_key-<ts>.hex` key copies when an operator takes a manual dump —
+those never match a dump pattern and are never candidates, which the tests
+assert explicitly.
 """
 
 from __future__ import annotations
@@ -70,19 +89,34 @@ import sys
 
 DEFAULT_DIR = "/home/codex/.paperclip/instances/default/data/backups"
 DEFAULT_DAYS = 3
+DEFAULT_PREFIX = "paperclip"
 
-# paperclip-20261011-201039.sql.gz — the uncompressed .sql spelling also exists
-# in the archive (the 2026-09-12 dump predates compression), so both are dumps.
-DUMP_RE = re.compile(r"^paperclip-(\d{8})-(\d{6})\.sql(?:\.gz)?$")
+
+def dump_re(prefix: str) -> re.Pattern[str]:
+    """Filename pattern for one dump family: `<prefix>-YYYYmmdd-HHMMSS.sql[.ext]`.
+
+    Both dump producers we own write that shape:
+
+      * `paperclip-20261011-201039.sql.gz` — the Paperclip control plane. The
+        uncompressed `.sql` spelling also exists in the archive (the 2026-09-12
+        dump predates compression), so both are dumps.
+      * `audr-20261015-141500.sql.gpg` — `scripts/backup.sh` (AUD-390), `.age`
+        when `age` is installed and `.gpg` on the fallback path.
+
+    `--prefix` exists so the second family reuses this rule rather than getting
+    a pruner of its own (AUD-562). The prefix is quoted: it names a file, and a
+    caller passing `audr.old` must not match `audrXold`.
+    """
+    return re.compile(rf"^{re.escape(prefix)}-(\d{{8}})-(\d{{6}})\.sql(?:\.gz|\.age|\.gpg)?$")
 
 KEEP_RECENT = "recent"
 KEEP_WEEKLY = "weekly"
 KEEP_NEWEST = "newest"
 
 
-def parse_stamp(name: str) -> dt.datetime | None:
+def parse_stamp(name: str, pattern: re.Pattern[str] | None = None) -> dt.datetime | None:
     """Return the timestamp encoded in a dump filename, or None if not a dump."""
-    m = DUMP_RE.match(name)
+    m = (pattern or dump_re(DEFAULT_PREFIX)).match(name)
     if not m:
         return None
     try:
@@ -93,7 +127,10 @@ def parse_stamp(name: str) -> dt.datetime | None:
         return None
 
 
-def survey(directory: pathlib.Path) -> tuple[list[tuple[str, dt.datetime, int]], list[str]]:
+def survey(
+    directory: pathlib.Path,
+    pattern: re.Pattern[str] | None = None,
+) -> tuple[list[tuple[str, dt.datetime, int]], list[str]]:
     """Split a directory into (dumps, unrecognised names).
 
     `dumps` is [(name, stamp, size_bytes)] sorted newest first.
@@ -104,7 +141,7 @@ def survey(directory: pathlib.Path) -> tuple[list[tuple[str, dt.datetime, int]],
         if not entry.is_file(follow_symlinks=False):
             other.append(entry.name)
             continue
-        stamp = parse_stamp(entry.name)
+        stamp = parse_stamp(entry.name, pattern)
         if stamp is None:
             other.append(entry.name)
             continue
@@ -117,6 +154,7 @@ def plan(
     dumps: list[tuple[str, dt.datetime, int]],
     days: int,
     today: dt.date,
+    weeks: int | None = None,
 ) -> list[tuple[str, int, str | None]]:
     """Decide the fate of every dump.
 
@@ -126,6 +164,8 @@ def plan(
     """
     if days < 1:
         raise ValueError("--days must be >= 1")
+    if weeks is not None and weeks < 1:
+        raise ValueError("--weeks must be >= 1 when given")
 
     cutoff = today - dt.timedelta(days=days - 1)
 
@@ -140,6 +180,27 @@ def plan(
         key = stamp.isocalendar()[:2]
         if stamp > weekly_survivor.get(key, dt.datetime.min):
             weekly_survivor[key] = stamp
+
+    # Cap on how many of those weekly survivors are kept, newest weeks first.
+    #
+    # Without a cap the weekly tier grows forever: one dump per ISO week, never
+    # deleted. That was affordable for the Paperclip dumps this script was
+    # written for, so the default stays uncapped and their timer's behaviour is
+    # unchanged. It is NOT affordable for audr's own dumps — measured at 282 MiB
+    # each (AUD-562, pg_dump is not compressed before `age` encrypts it), an
+    # uncapped weekly tier adds ~14.7 GiB a year to a deploy host with 11 GiB
+    # free, i.e. a disk-full in roughly eight months. That is a worse outage
+    # than the one backups prevent, and it arrives silently.
+    #
+    # Dropping the oldest weekly survivor is cheap in a way worth saying out
+    # loud: these dumps are a RECOVERY point, not an archive. The live database
+    # holds the full valuation history, and restoring a two-month-old snapshot
+    # of a portfolio tracker is close to useless anyway — the recovery cases
+    # this schedule exists for (volume loss, a bad migration, an accidental
+    # delete) are all noticed in hours or days, not months.
+    if weeks is not None and len(weekly_survivor) > weeks:
+        kept_weeks = sorted(weekly_survivor, key=lambda k: weekly_survivor[k], reverse=True)[:weeks]
+        weekly_survivor = {k: weekly_survivor[k] for k in kept_weeks}
 
     newest = max((stamp for _, stamp, _ in dumps), default=None)
 
@@ -165,14 +226,29 @@ def gib(n: int) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Prune Paperclip DB dumps to the authorised GFS retention (AUD-435).",
+        description="Prune a DB dump directory to the authorised GFS retention"
+        " (AUD-435 for Paperclip dumps, AUD-562 for audr's own).",
     )
     ap.add_argument("--dir", default=DEFAULT_DIR, help=f"dump directory (default {DEFAULT_DIR})")
+    ap.add_argument(
+        "--prefix",
+        default=DEFAULT_PREFIX,
+        help="dump filename prefix before the timestamp, e.g. 'audr' for"
+        f" audr-20261015-141500.sql.gpg (default {DEFAULT_PREFIX})",
+    )
     ap.add_argument(
         "--days",
         type=int,
         default=DEFAULT_DAYS,
         help=f"keep every dump from the last N calendar days (default {DEFAULT_DAYS})",
+    )
+    ap.add_argument(
+        "--weeks",
+        type=int,
+        default=None,
+        help="keep at most N weekly survivors, newest first (default: unlimited,"
+        " which is the AUD-435 rule for the Paperclip archive). Set this for any"
+        " directory a timer keeps writing to, or the weekly tier grows forever.",
     )
     ap.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
     ap.add_argument(
@@ -187,20 +263,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {directory} is not a directory", file=sys.stderr)
         return 2
 
+    pattern = dump_re(args.prefix)
     try:
-        dumps, other = survey(directory)
+        dumps, other = survey(directory, pattern)
     except PermissionError as exc:
         print(f"error: cannot read {directory}: {exc}", file=sys.stderr)
         print("the dumps are mode 600 — re-run under sudo", file=sys.stderr)
         return 2
 
     if not dumps:
-        print(f"{directory}: no dumps matching {DUMP_RE.pattern} — nothing to do")
+        print(f"{directory}: no dumps matching {pattern.pattern} — nothing to do")
         return 0
 
     try:
         today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
-        decided = plan(dumps, args.days, today)
+        decided = plan(dumps, args.days, today, args.weeks)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -220,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"  rule         keep all of the last {args.days} days (today = {today}),"
         " plus the newest dump of each older ISO week"
+        + (f" (at most {args.weeks} of those)" if args.weeks is not None else "")
     )
     print(f"  keep         {len(kept)} files, {gib(total - freed)}")
     for name, _, why in sorted(kept, key=lambda k: k[0]):
@@ -250,13 +328,14 @@ def main(argv: list[str] | None = None) -> int:
         f"\ndeleted {deleted} files, {gib(freed)} freed"
         + (f"; {errors} failures" if errors else "")
     )
-    print(
-        "note: this runs daily from audr-dump-prune.timer (AUD-505/AUD-509), so"
-        " no hand-repeat is due. Paperclip still writes ~2.1 GB/day of dumps that"
-        " this deletes again; reducing that write churn needs the retention"
-        " setting on the Paperclip board (AUD-435), which only a board user can"
-        " change. Disk stays flat either way."
-    )
+    if args.prefix == DEFAULT_PREFIX:
+        print(
+            "note: this runs daily from audr-dump-prune.timer (AUD-505/AUD-509), so"
+            " no hand-repeat is due. Paperclip still writes ~2.1 GB/day of dumps that"
+            " this deletes again; reducing that write churn needs the retention"
+            " setting on the Paperclip board (AUD-435), which only a board user can"
+            " change. Disk stays flat either way."
+        )
     return 1 if errors else 0
 
 

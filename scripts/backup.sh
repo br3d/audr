@@ -18,9 +18,18 @@
 # Falls back to `gpg --symmetric` (AES256) only when `age` is not installed;
 # see docs/operations.md#backups for the tradeoffs.
 #
-# secrets/master_key.hex (the KEK) is copied out SEPARATELY, in its own file,
-# never bundled into the encrypted dump — see docs/operations.md#backups for
-# why that separation matters.
+# The KEK is copied out SEPARATELY, in its own file, never bundled into the
+# encrypted dump — see docs/operations.md#backups for why that separation
+# matters. It is read from secrets/master_key.hex, or, on a host that only has
+# the rendered env file (the deploy hosts — setup-secrets.sh puts the same value
+# in .env as SECRET_KEY and the deploy path ships no secrets/master_key.hex),
+# from SECRET_KEY in .env.
+#
+# AUDR_BACKUP_SKIP_KEY_COPY=1 suppresses that copy. The scheduled on-host
+# backup (AUD-562) sets it: a KEK file beside the dump it decrypts gives an
+# attacker who can read the host both halves at once, which is the duplicate
+# AUD-426 removed from this very directory. An operator taking a dump to carry
+# off the host wants the copy and so leaves this unset.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -98,15 +107,37 @@ fi
 chmod 600 "${DUMP_PATH}"
 echo "Backup written: ${DUMP_PATH}"
 
+# Where the KEK lives on this host. setup-secrets.sh writes both, but the
+# deploy path renders only .env — so a missing master_key.hex is normal there
+# and must not be reported as "the key is gone".
 MASTER_KEY_SRC="${SECRETS_DIR}/master_key.hex"
+ENV_FILE="${AUDR_ENV_FILE:-${ROOT}/.env}"
+KEK_SOURCE=""
 if [ -f "${MASTER_KEY_SRC}" ]; then
-  MASTER_KEY_DEST="${DEST_DIR}/master_key-${TIMESTAMP}.hex"
-  cp "${MASTER_KEY_SRC}" "${MASTER_KEY_DEST}"
-  chmod 600 "${MASTER_KEY_DEST}"
-  echo "Master key copied separately: ${MASTER_KEY_DEST}"
-  echo "This file is NOT part of the encrypted dump. Store it with the same care as"
-  echo "${MASTER_KEY_SRC} — without it, provider credentials inside the dump above are"
-  echo "permanently unreadable, even after a successful restore."
+  KEK_SOURCE="${MASTER_KEY_SRC}"
+elif [ -f "${ENV_FILE}" ] && grep -q '^SECRET_KEY=' "${ENV_FILE}"; then
+  KEK_SOURCE="${ENV_FILE} (SECRET_KEY)"
+fi
+
+if [ -z "${KEK_SOURCE}" ]; then
+  echo "WARNING: no KEK found (looked in ${MASTER_KEY_SRC} and ${ENV_FILE}) —" >&2
+  echo "provider credentials and wallet addresses cannot be recovered from this backup." >&2
+elif [ "${AUDR_BACKUP_SKIP_KEY_COPY:-}" = "1" ]; then
+  echo "KEK not copied (AUDR_BACKUP_SKIP_KEY_COPY=1); it stays only in ${KEK_SOURCE}."
+  echo "This dump alone does NOT survive the loss of this host — carry the dump and"
+  echo "that key off-host together to cover that case. See docs/operations.md#backups."
 else
-  echo "WARNING: ${MASTER_KEY_SRC} not found — provider credentials cannot be recovered from this backup." >&2
+  MASTER_KEY_DEST="${DEST_DIR}/master_key-${TIMESTAMP}.hex"
+  if [ -f "${MASTER_KEY_SRC}" ]; then
+    cp "${MASTER_KEY_SRC}" "${MASTER_KEY_DEST}"
+  else
+    # Same 64 hex chars, taken from the one place this host keeps them. No
+    # trailing newline, matching what setup-secrets.sh writes.
+    ( umask 077; printf '%s' "$(grep -m1 '^SECRET_KEY=' "${ENV_FILE}" | cut -d= -f2-)" > "${MASTER_KEY_DEST}" )
+  fi
+  chmod 600 "${MASTER_KEY_DEST}"
+  echo "Master key copied separately from ${KEK_SOURCE}: ${MASTER_KEY_DEST}"
+  echo "This file is NOT part of the encrypted dump. Store it with the same care as"
+  echo "the source — without it, provider credentials and wallet addresses inside the"
+  echo "dump above are permanently unreadable, even after a successful restore."
 fi
