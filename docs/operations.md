@@ -485,6 +485,27 @@ two things somewhere else, *stored apart from each other*:
 Without (2) a restore from (1) succeeds and still cannot show a single wallet
 address — see [Key-loss behavior](#key-loss-behavior) and AUD-490.
 
+#### Host-loss coverage: decision recorded (AUD-563, 2026-10-15)
+
+Owner was presented with three options: **A** — automated replication of the
+newest dump to a second host (ai-stuff, 192.168.1.152), key material staying on
+the stand; **B** — documented manual off-host copy, no new automated exposure;
+**C** — accept total host loss as uncovered. **Option C was chosen.**
+
+Rationale: audr tracks a self-hosted Ethereum portfolio. All source data is
+public blockchain state. A total host loss means re-adding two wallet addresses
+and running a fresh chain scan — the valuation *history* is permanently lost,
+nothing else that cannot be re-derived from on-chain data. For a single-owner,
+non-custodial tracker this is a defensible risk boundary.
+
+If the acceptable loss changes — valuation history becomes material, or the
+owner starts holding data that is not re-derivable — revisit this decision.
+Option A is the cheapest to implement (one rsync cron job); option B has zero
+additional exposure but depends on operator discipline. Either route requires
+storing the dump and the key material **apart from each other** and apart from
+the stand. See [Closing the host-loss gap](#what-the-schedule-does-and-does-not-protect-against)
+above for the two files that must travel together to make an off-host copy useful.
+
 #### Retention
 
 `scripts/dump-prune.py` applies one GFS rule to both dump families we own
