@@ -439,6 +439,58 @@ async def test_feed_with_two_symbols_dedupes_on_repoll(news_session: AsyncSessio
     assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
 
 
+async def test_adding_symbol_to_feed_invalidates_conditional_get(
+    news_session: AsyncSession,
+) -> None:
+    """AUD-573: a feed that already has an etag from polling WETH must not
+    stay 304'd forever once ETH is mapped to it — the upstream body hasn't
+    changed, but the new symbol needs the next poll to actually parse it.
+    """
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    eth_id = await _hold_asset(news_session, symbol="ETH", name="Ether")
+    feed_id = await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://example.com/eth.xml",
+    )
+
+    body = _atom("e1", "Upgrade ships", "https://example.com/1")
+
+    def _conditional_response(request: object) -> Response:
+        if request.headers.get("if-none-match") == '"v1"':
+            return Response(304)
+        return Response(200, content=body, headers={"etag": '"v1"'})
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/eth.xml").mock(side_effect=_conditional_response)
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
+    assert await _news_rows(news_session, asset_id=eth_id) == []
+
+    # The manual INSERT path AUD-568 part B drives — no helper call, no
+    # explicit etag reset by the caller.
+    await news_session.execute(
+        text("INSERT INTO news_feed_symbol (feed_id, asset_symbol) VALUES (:feed_id, 'ETH')"),
+        {"feed_id": str(feed_id)},
+    )
+    await news_session.execute(
+        text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
+        {"id": str(feed_id)},
+    )
+    await news_session.flush()
+
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.get("https://example.com/eth.xml").mock(side_effect=_conditional_response)
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert "if-none-match" not in route.calls.last.request.headers
+    assert len(await _news_rows(news_session, asset_id=eth_id)) == 1
+    assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
+
+
 async def test_feed_where_no_mapped_symbol_is_held_is_not_polled(
     news_session: AsyncSession,
 ) -> None:
