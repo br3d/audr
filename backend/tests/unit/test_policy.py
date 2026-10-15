@@ -11,6 +11,7 @@ from audr.jobs.policy import (
     RetryPolicy,
     get_shared_asset_icon_rate_limiter,
     get_shared_cmc_rate_limiter,
+    get_shared_coingecko_residual_rate_limiter,
     get_shared_rpc_rate_limiter,
 )
 
@@ -165,3 +166,50 @@ class TestSharedAssetIconRateLimiter:
         finally:
             get_settings.cache_clear()
             get_shared_asset_icon_rate_limiter.cache_clear()
+
+
+@pytest.mark.unit
+class TestSharedCoinGeckoResidualRateLimiter:
+    def test_returns_same_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        get_shared_coingecko_residual_rate_limiter.cache_clear()
+        try:
+            first = get_shared_coingecko_residual_rate_limiter()
+            second = get_shared_coingecko_residual_rate_limiter()
+            assert first is second
+        finally:
+            get_shared_coingecko_residual_rate_limiter.cache_clear()
+
+    def test_configured_from_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        monkeypatch.setenv("COINGECKO_RESIDUAL_RATE_LIMIT_PER_SECOND", "0.25")
+        monkeypatch.setenv("COINGECKO_RESIDUAL_RATE_LIMIT_BURST", "1")
+        from audr.config import get_settings
+
+        get_settings.cache_clear()
+        get_shared_coingecko_residual_rate_limiter.cache_clear()
+        try:
+            limiter = get_shared_coingecko_residual_rate_limiter()
+            assert limiter._interval == pytest.approx(4.0)
+            assert limiter._burst == 1
+        finally:
+            get_settings.cache_clear()
+            get_shared_coingecko_residual_rate_limiter.cache_clear()
+
+    def test_defaults_are_conservative(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default budget sits within CoinGecko's documented keyless 5-15 req/min range."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@localhost/audr")
+        monkeypatch.setenv("SECRET_KEY", "super-secret-key")
+        from audr.config import get_settings
+
+        get_settings.cache_clear()
+        get_shared_coingecko_residual_rate_limiter.cache_clear()
+        try:
+            limiter = get_shared_coingecko_residual_rate_limiter()
+            assert limiter._interval == pytest.approx(10.0)  # 0.1 calls/s = 6/min
+            assert limiter._burst == 1
+        finally:
+            get_settings.cache_clear()
+            get_shared_coingecko_residual_rate_limiter.cache_clear()
