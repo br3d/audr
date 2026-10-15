@@ -109,6 +109,7 @@ def dump_re(prefix: str) -> re.Pattern[str]:
     """
     return re.compile(rf"^{re.escape(prefix)}-(\d{{8}})-(\d{{6}})\.sql(?:\.gz|\.age|\.gpg)?$")
 
+
 KEEP_RECENT = "recent"
 KEEP_WEEKLY = "weekly"
 KEEP_NEWEST = "newest"

@@ -247,8 +247,7 @@ def test_audr_daily_schedule_keeps_the_window_and_one_dump_per_older_week():
     """
     start, today = dt.date(2026, 9, 1), dt.date(2026, 11, 1)
     dates = [
-        (start + dt.timedelta(days=i)).strftime("%Y%m%d")
-        for i in range((today - start).days + 1)
+        (start + dt.timedelta(days=i)).strftime("%Y%m%d") for i in range((today - start).days + 1)
     ]
     rows = dumps(*audr_daily(dates), prefix="audr")
     fate = decide(rows, 14, today.isoformat())
@@ -267,7 +266,7 @@ def test_audr_daily_schedule_keeps_the_window_and_one_dump_per_older_week():
     for w in {week(n) for n in fate} - {week(n) for n in recent}:
         survivors = {n for n in kept if week(n) == w}
         assert len(survivors) == 1, f"week {w} kept {len(survivors)} dumps, expected 1"
-        assert survivors == {max((n for n in fate if week(n) == w))}, "not the newest"
+        assert survivors == {max(n for n in fate if week(n) == w)}, "not the newest"
 
 
 def test_audr_newest_dump_survives_a_stale_directory():
@@ -305,9 +304,7 @@ def test_weeks_cap_keeps_the_newest_weeks_and_drops_the_oldest():
     fate = decide(rows, 7, "2026-10-15")  # uncapped baseline
     assert len([n for n, why in fate.items() if why == dp.KEEP_WEEKLY]) == 5
 
-    capped = {
-        n: why for n, _, why in dp.plan(rows, 7, dt.date(2026, 10, 15), 2)
-    }
+    capped = {n: why for n, _, why in dp.plan(rows, 7, dt.date(2026, 10, 15), 2)}
     assert {n for n, why in capped.items() if why == dp.KEEP_WEEKLY} == {
         "audr-20261008-033012.sql.age",
         "audr-20261001-033012.sql.age",
@@ -323,8 +320,7 @@ def test_weeks_cap_bounds_the_directory_in_steady_state():
     """Two years of daily dumps must not exceed daily + capped weekly tiers."""
     start, today = dt.date(2024, 11, 1), dt.date(2026, 11, 1)
     dates = [
-        (start + dt.timedelta(days=i)).strftime("%Y%m%d")
-        for i in range((today - start).days + 1)
+        (start + dt.timedelta(days=i)).strftime("%Y%m%d") for i in range((today - start).days + 1)
     ]
     rows = dumps(*audr_daily(dates), size=282 * 2**20, prefix="audr")
     decided = dp.plan(rows, 7, today, 4)
