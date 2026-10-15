@@ -142,6 +142,42 @@ class BoardSinkTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(api.calls, [])
 
+    # ------------------------------------------------------------------ drill
+
+    def test_dry_run_writes_nothing(self):
+        # AUD-570: a drill of the AUD-567 backup-staleness alert published a
+        # real `critical` card describing a /tmp fixture as the stand's backup.
+        # --dry-run exists so that drill costs nobody a triage.
+        self.configure()
+        code, api = self.run_sink("--dry-run", "--key", "stand-down", "--", "drill")
+        self.assertEqual(code, 0)
+        self.assertEqual(api.creates(), [])
+        self.assertEqual(api.comments(), [])
+        self.assertEqual(api.patches(), [])
+        self.assertIsNone(self.recorded())
+
+    def test_dry_run_does_not_close_an_open_issue(self):
+        # The resolve path mutates too, so it needs its own proof.
+        self.configure()
+        code, _ = self.run_sink("--key", "stand-down", "--", "stand is down")
+        self.assertEqual(code, 0)
+        recorded = self.recorded()
+        self.assertIsNotNone(recorded)
+
+        code, api = self.run_sink("--dry-run", "--resolve", "--key", "stand-down", "--", "back up")
+        self.assertEqual(code, 0)
+        self.assertEqual(api.patches(), [])
+        self.assertEqual(api.comments(), [])
+        # Still open, so a later real alert comments rather than duplicating.
+        self.assertEqual(self.recorded(), recorded)
+
+    def test_dry_run_still_reports_unconfigured(self):
+        # A drill whose only outcome is "nothing happened" must not read as a
+        # pass when the reason is a missing credential.
+        code, api = self.run_sink("--dry-run", "--key", "stand-down", "--", "drill")
+        self.assertEqual(code, 3)
+        self.assertEqual(api.calls, [])
+
     # ------------------------------------------------------------- first fire
 
     def test_first_alert_creates_a_critical_issue_and_records_it(self):

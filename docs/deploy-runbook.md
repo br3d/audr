@@ -331,6 +331,39 @@ Two behaviours worth knowing before you read a replayed alert:
 `--strict` sends are never spooled: that flag is a human connectivity probe, and
 its test text would otherwise be replayed later as a real alert.
 
+### Drilling an alert without publishing one
+
+`--strict` proves delivery and therefore opens a real `critical` issue. To prove
+the *condition logic* instead — does this threshold trip, does the body read
+correctly, do the credentials resolve — use `--dry-run`, which renders the alert,
+reports the dedupe decision it would have taken, and writes to no sink and no
+spool:
+
+```bash
+scripts/notify.sh --dry-run --key backup-stale "drill"
+
+# Whole watchdog path, including a backdated dump fixture, against scratch state:
+D="$(mktemp -d)"; mkdir -p "$D/backups" "$D/state"
+touch -d '2 days ago' "$D/backups/audr-20260101-000000.sql.gz.age"
+AUDR_NOTIFY_DRY_RUN=1 AUDR_BACKUP_DIR="$D/backups" \
+AUDR_WATCHDOG_STATE_DIR="$D/state" AUDR_NOTIFY_STATE_DIR="$D/state" \
+  scripts/stand-watchdog.sh
+```
+
+Prefer the `AUDR_NOTIFY_DRY_RUN=1` environment spelling when the caller is a
+script you are not editing — every nested `notify.sh` inherits it. Point the
+state directories at scratch too: the watchdog writes its own dedupe files
+either way, and a drill that leaves `backup-stale-alerted-at` behind suppresses
+the next *real* alert for 24h.
+
+**Why this exists.** AUD-570 was a false `critical` card reporting the stand's
+backups as 27h stale, with a `/tmp` scratch path in the body and the wrong
+hostname — a drill of the AUD-567 alert path, published because an agent run
+carries live board credentials in its environment, so `notify.sh` had a working
+board sink nobody meant to use. The stand's newest dump was three hours old at
+the time. A drill that cannot be told apart from an incident costs more than it
+proves.
+
 ### Installing and inspecting the watchdog
 
 ```bash
