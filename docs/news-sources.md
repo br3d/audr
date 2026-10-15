@@ -368,7 +368,11 @@ INSERT; there is no redeploy.
   feed (a project blog or a GitHub `releases.atom` can cover more than one
   asset — e.g. `project:ethereum-blog` and `release:go-ethereum` map to both
   `WETH` and `ETH`). A feed with **no** rows here is a trade-press feed,
-  matched by keyword against the allow-list below instead.
+  matched by keyword against the allow-list below instead. Any `INSERT` into
+  this table — the manual path included, not just application code — resets
+  the target feed's `etag`/`last_modified` (migration 0029, AUD-573): a plain
+  mapping INSERT must not leave the feed's next poll 304'd on a body that was
+  already fetched before the new symbol existed.
 - **`snapshot_space`** — one row per Snapshot space (`asset_symbol`,
   `space_id`). Governance proposals are attributed by space, never by symbol.
 - **`news_tracked_asset`** — the allow-list of symbols eligible for
