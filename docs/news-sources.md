@@ -346,17 +346,29 @@ any portfolio size. The fix is the rule §3 had already stated for Snapshot,
 applied everywhere: **coverage comes from an explicit mapping, never from
 guessing at a symbol.**
 
-### The three registries
+AUD-571 then found the inverse gap the scalar `news_feed.asset_symbol`
+column created: a feed could only ever map to *one* asset, so ETH — a
+top-two holding — got no news at all even though the Ethereum blog and
+`go-ethereum/releases.atom` feeds were already being polled, just pinned to
+WETH. `news_feed` → asset is now many-to-many (`news_feed_symbol`); adding
+ETH to a feed already covering WETH did not require a new feed or any
+keyword matching.
+
+### The registries
 
 Everything the job polls lives in a table, not in code. Adding coverage is an
 INSERT; there is no redeploy.
 
-- **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `asset_symbol`,
-  `url`, `enabled`). `asset_symbol` set ⇒ every item from that feed is
-  attributed to that asset (a project blog or a GitHub `releases.atom`).
-  `asset_symbol` NULL ⇒ a trade-press feed, whose items are matched against
-  the allow-list below. Carries `etag`/`last_modified` for conditional GETs
-  and `consecutive_failures`/`last_error` for health.
+- **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `url`,
+  `enabled`). Carries `etag`/`last_modified` for conditional GETs and
+  `consecutive_failures`/`last_error` for health.
+- **`news_feed_symbol`** — many-to-many `(feed_id, asset_symbol)` mapping
+  (AUD-571). A feed with one or more rows here is attributed exactly:
+  every item is inserted once per held asset whose symbol is mapped to that
+  feed (a project blog or a GitHub `releases.atom` can cover more than one
+  asset — e.g. `project:ethereum-blog` and `release:go-ethereum` map to both
+  `WETH` and `ETH`). A feed with **no** rows here is a trade-press feed,
+  matched by keyword against the allow-list below instead.
 - **`snapshot_space`** — one row per Snapshot space (`asset_symbol`,
   `space_id`). Governance proposals are attributed by space, never by symbol.
 - **`news_tracked_asset`** — the allow-list of symbols eligible for
@@ -368,9 +380,14 @@ INSERT; there is no redeploy.
 
 In preference order, best signal first:
 
-1. Does the project publish a feed? Add it to `news_feed` with
-   `asset_symbol` set — attribution is then exact and no matching is involved.
-   A GitHub repo always has `https://github.com/<org>/<repo>/releases.atom`.
+1. Does the project publish a feed? Add it to `news_feed` and map the
+   asset(s) it covers in `news_feed_symbol` — attribution is then exact and
+   no matching is involved. A GitHub repo always has
+   `https://github.com/<org>/<repo>/releases.atom`. If an existing feed
+   already covers the project under a different symbol (e.g. ETH vs. WETH,
+   same underlying blog and release feed), add a second
+   `news_feed_symbol` row for the same `feed_id` rather than a duplicate
+   feed.
 2. Is it a governance token with a Snapshot space? Add the space to
    `snapshot_space`.
 3. Only if neither exists, and only if the ticker is distinctive enough to

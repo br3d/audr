@@ -60,6 +60,7 @@ _SEED_TRACKED_SYMBOLS = ("WETH", "UNI", "AAVE", "LINK")
 
 
 async def _purge_news_tables(session: AsyncSession) -> None:
+    await session.execute(text("DELETE FROM news_feed_symbol"))
     await session.execute(text("DELETE FROM news_feed"))
     await session.execute(text("DELETE FROM snapshot_space"))
     await session.execute(text("DELETE FROM asset_news"))
@@ -110,24 +111,28 @@ async def _insert_feed(
     key: str,
     url: str,
     tier: str = "press",
-    asset_symbol: str | None = None,
+    symbols: list[str] | None = None,
 ) -> uuid.UUID:
     feed_id = uuid.uuid4()
     await session.execute(
         text(
             """
-            INSERT INTO news_feed (id, key, tier, asset_symbol, url)
-            VALUES (:id, :key, :tier, :asset_symbol, :url)
+            INSERT INTO news_feed (id, key, tier, url)
+            VALUES (:id, :key, :tier, :url)
             """
         ),
         {
             "id": str(feed_id),
             "key": key,
             "tier": tier,
-            "asset_symbol": asset_symbol,
             "url": url,
         },
     )
+    for symbol in symbols or []:
+        await session.execute(
+            text("INSERT INTO news_feed_symbol (feed_id, asset_symbol) VALUES (:feed_id, :symbol)"),
+            {"feed_id": str(feed_id), "symbol": symbol},
+        )
     await session.flush()
     return feed_id
 
@@ -216,7 +221,7 @@ async def test_inserts_news_with_no_api_key_configured(news_session: AsyncSessio
         news_session,
         key="project:ethereum-blog",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://blog.ethereum.org/en/feed.xml",
     )
 
@@ -245,7 +250,7 @@ async def test_304_not_modified_recorded_as_success_no_duplicate(
         news_session,
         key="k",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/feed.xml",
     )
 
@@ -285,7 +290,7 @@ async def test_dedupe_on_repoll_of_unchanged_feed(news_session: AsyncSession) ->
         news_session,
         key="k",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/feed.xml",
     )
 
@@ -313,14 +318,14 @@ async def test_feed_failure_increments_health_without_breaking_other_feeds(
         news_session,
         key="broken",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/broken.xml",
     )
     await _insert_feed(
         news_session,
         key="working",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/working.xml",
     )
 
@@ -353,14 +358,14 @@ async def test_feed_scoped_to_unheld_symbol_is_not_polled(news_session: AsyncSes
         news_session,
         key="weth-feed",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/weth.xml",
     )
     await _insert_feed(
         news_session,
         key="aave-feed",
         tier="project",
-        asset_symbol="AAVE",
+        symbols=["AAVE"],
         url="https://example.com/aave.xml",
     )
 
@@ -372,6 +377,89 @@ async def test_feed_scoped_to_unheld_symbol_is_not_polled(news_session: AsyncSes
         await handle_news_refresh(news_session, uuid.uuid4())
 
     assert weth_route.called
+    assert not aave_route.called
+
+
+async def test_feed_with_two_symbols_inserts_one_row_per_asset(
+    news_session: AsyncSession,
+) -> None:
+    """The AUD-571 case: a feed mapped to both ETH and WETH inserts the same
+    item once per held asset, not once overall.
+    """
+    eth_id = await _hold_asset(news_session, symbol="ETH", name="Ether")
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH", "ETH"],
+        url="https://example.com/eth.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/eth.xml").mock(
+            return_value=Response(
+                200, content=_atom("e1", "Upgrade ships", "https://example.com/1")
+            )
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    eth_rows = await _news_rows(news_session, asset_id=eth_id)
+    weth_rows = await _news_rows(news_session, asset_id=weth_id)
+    assert len(eth_rows) == 1
+    assert len(weth_rows) == 1
+    assert eth_rows[0]["external_id"] == weth_rows[0]["external_id"] == "e1"
+
+
+async def test_feed_with_two_symbols_dedupes_on_repoll(news_session: AsyncSession) -> None:
+    eth_id = await _hold_asset(news_session, symbol="ETH", name="Ether")
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    feed_id = await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH", "ETH"],
+        url="https://example.com/eth.xml",
+    )
+
+    body = _atom("same-entry", "Same title", "https://example.com/1")
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/eth.xml").mock(return_value=Response(200, content=body))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    await news_session.execute(
+        text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
+        {"id": str(feed_id)},
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/eth.xml").mock(return_value=Response(200, content=body))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert len(await _news_rows(news_session, asset_id=eth_id)) == 1
+    assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
+
+
+async def test_feed_where_no_mapped_symbol_is_held_is_not_polled(
+    news_session: AsyncSession,
+) -> None:
+    await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="aave-feed",
+        tier="project",
+        symbols=["AAVE", "LINK"],
+        url="https://example.com/aave.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        aave_route = mock.get("https://example.com/aave.xml").mock(return_value=Response(200))
+        # WETH is seed-tracked (migration 0026) and has no native feed in
+        # this test, so it falls back to the GDELT breadth tier — stub it.
+        mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
     assert not aave_route.called
 
 
@@ -436,7 +524,7 @@ async def test_gdelt_not_queried_for_asset_with_native_feed(news_session: AsyncS
         news_session,
         key="weth-feed",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/weth.xml",
     )
 
@@ -549,7 +637,7 @@ async def test_feed_polls_durable_when_later_tier_raises(
         news_session,
         key="project:ethereum-blog",
         tier="project",
-        asset_symbol="WETH",
+        symbols=["WETH"],
         url="https://example.com/weth.xml",
     )
     # A due snapshot space is required so the (monkeypatched) Snapshot tier

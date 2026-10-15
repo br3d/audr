@@ -29,7 +29,7 @@ async def _insert_feed(
     *,
     key: str,
     tier: str = "press",
-    asset_symbol: str | None = None,
+    symbols: list[str] | None = None,
     url: str = "https://example.com/feed.xml",
     enabled: bool = True,
     last_polled_at_sql: str = "NULL",
@@ -41,22 +41,26 @@ async def _insert_feed(
         text(
             f"""
             INSERT INTO news_feed
-              (id, key, tier, asset_symbol, url, enabled, last_polled_at, etag, last_modified)
+              (id, key, tier, url, enabled, last_polled_at, etag, last_modified)
             VALUES
-              (:id, :key, :tier, :asset_symbol, :url, :enabled, {last_polled_at_sql}, :etag, :lm)
+              (:id, :key, :tier, :url, :enabled, {last_polled_at_sql}, :etag, :lm)
             """  # noqa: S608 — last_polled_at_sql is a module-local constant, not user input
         ),
         {
             "id": str(feed_id),
             "key": key,
             "tier": tier,
-            "asset_symbol": asset_symbol,
             "url": url,
             "enabled": enabled,
             "etag": etag,
             "lm": last_modified,
         },
     )
+    for symbol in symbols or []:
+        await db_session.execute(
+            text("INSERT INTO news_feed_symbol (feed_id, asset_symbol) VALUES (:feed_id, :symbol)"),
+            {"feed_id": str(feed_id), "symbol": symbol},
+        )
     await db_session.flush()
     return feed_id
 
@@ -83,6 +87,21 @@ async def test_list_due_feeds_excludes_disabled(db_session: AsyncSession) -> Non
     await _insert_feed(db_session, key="off", enabled=False)
     due = await list_due_feeds(db_session)
     assert due == []
+
+
+async def test_list_due_feeds_symbols_empty_for_press_feed(db_session: AsyncSession) -> None:
+    """No rows in `news_feed_symbol` for a feed means press tier, allow-list
+    matched — distinct from a feed someone mapped explicitly (AUD-571).
+    """
+    await _insert_feed(db_session, key="press:x", tier="press")
+    due = await list_due_feeds(db_session)
+    assert due[0].symbols == frozenset()
+
+
+async def test_list_due_feeds_symbols_for_multi_symbol_feed(db_session: AsyncSession) -> None:
+    await _insert_feed(db_session, key="eth-feed", tier="project", symbols=["WETH", "ETH"])
+    due = await list_due_feeds(db_session)
+    assert due[0].symbols == frozenset({"WETH", "ETH"})
 
 
 async def test_list_due_feeds_carries_validators(db_session: AsyncSession) -> None:
@@ -158,12 +177,12 @@ async def test_record_feed_not_modified_is_success(db_session: AsyncSession) -> 
 async def test_covered_asset_symbols_includes_project_and_release(
     db_session: AsyncSession,
 ) -> None:
-    await _insert_feed(db_session, key="p", tier="project", asset_symbol="WETH")
-    await _insert_feed(db_session, key="r", tier="release", asset_symbol="UNI")
-    await _insert_feed(db_session, key="press", tier="press", asset_symbol=None)
+    await _insert_feed(db_session, key="p", tier="project", symbols=["WETH"])
+    await _insert_feed(db_session, key="r", tier="release", symbols=["UNI"])
+    await _insert_feed(db_session, key="press", tier="press")
     assert await covered_asset_symbols(db_session) == {"WETH", "UNI"}
 
 
 async def test_covered_asset_symbols_excludes_disabled(db_session: AsyncSession) -> None:
-    await _insert_feed(db_session, key="p", tier="project", asset_symbol="WETH", enabled=False)
+    await _insert_feed(db_session, key="p", tier="project", symbols=["WETH"], enabled=False)
     assert await covered_asset_symbols(db_session) == set()
