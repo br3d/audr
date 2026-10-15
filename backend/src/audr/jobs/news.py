@@ -106,7 +106,7 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         # succeeded — staging lost 13 minutes of successful feed polling to
         # exactly that when the GDELT tier ground through 429s mid-run.
         for feed in due_feeds:
-            if feed.asset_symbol is not None and feed.asset_symbol.upper() not in held_symbols:
+            if feed.symbols and not (feed.symbols & held_symbols):
                 continue
             polled += 1
             inserted += await _poll_feed(
@@ -270,8 +270,11 @@ async def _poll_feed(
 def _targets_for_feed(
     feed: NewsFeed, assets: list[HeldAsset], tracked_symbols: set[str]
 ) -> Callable[[FeedItem], list[uuid.UUID]]:
-    if feed.asset_symbol is not None:
-        asset_ids = [a.id for a in assets if a.symbol.upper() == feed.asset_symbol.upper()]
+    if feed.symbols:
+        # Dedup by asset id: each symbol in feed.symbols matches at most one
+        # held asset, but guard against the item inserting twice on one
+        # asset_id regardless (AUD-571).
+        asset_ids = list({a.id for a in assets if a.symbol.upper() in feed.symbols})
         return lambda _item: asset_ids
     # Portfolio-wide press feeds (AUD-515 P1) must resolve to the explicit
     # allow-list, not every held asset — held-ness alone let a meme token

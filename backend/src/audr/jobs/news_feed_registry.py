@@ -28,22 +28,33 @@ class NewsFeed:
     id: uuid.UUID
     key: str
     tier: str
-    asset_symbol: str | None
+    symbols: frozenset[str]
     url: str
     etag: str | None
     last_modified: str | None
 
 
 async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
-    """Return enabled feeds not polled within MIN_POLL_INTERVAL."""
+    """Return enabled feeds not polled within MIN_POLL_INTERVAL.
+
+    A feed's symbols come from `news_feed_symbol` (AUD-571) — zero rows
+    means a press-tier feed matched by allow-list keyword, not a feed
+    nobody has mapped yet.
+    """
     result = await session.execute(
         sa.text(
             """
-            SELECT id, key, tier, asset_symbol, url, etag, last_modified
-            FROM news_feed
-            WHERE enabled
-              AND (last_polled_at IS NULL OR last_polled_at < :cutoff)
-            ORDER BY key
+            SELECT nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified,
+                   COALESCE(
+                       array_agg(nfs.asset_symbol) FILTER (WHERE nfs.asset_symbol IS NOT NULL),
+                       ARRAY[]::text[]
+                   ) AS symbols
+            FROM news_feed nf
+            LEFT JOIN news_feed_symbol nfs ON nfs.feed_id = nf.id
+            WHERE nf.enabled
+              AND (nf.last_polled_at IS NULL OR nf.last_polled_at < :cutoff)
+            GROUP BY nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified
+            ORDER BY nf.key
             """
         ),
         {"cutoff": datetime.now(tz=UTC) - MIN_POLL_INTERVAL},
@@ -53,10 +64,10 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
             id=row[0],
             key=row[1],
             tier=row[2],
-            asset_symbol=row[3],
-            url=row[4],
-            etag=row[5],
-            last_modified=row[6],
+            symbols=frozenset(symbol.upper() for symbol in row[6]),
+            url=row[3],
+            etag=row[4],
+            last_modified=row[5],
         )
         for row in result
     ]
@@ -71,8 +82,10 @@ async def covered_asset_symbols(session: AsyncSession) -> set[str]:
     result = await session.execute(
         sa.text(
             """
-            SELECT DISTINCT asset_symbol FROM news_feed
-            WHERE enabled AND tier IN ('project', 'release') AND asset_symbol IS NOT NULL
+            SELECT DISTINCT nfs.asset_symbol
+            FROM news_feed_symbol nfs
+            JOIN news_feed nf ON nf.id = nfs.feed_id
+            WHERE nf.enabled AND nf.tier IN ('project', 'release')
             """
         )
     )
