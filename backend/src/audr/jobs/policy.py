@@ -124,6 +124,27 @@ def get_shared_asset_icon_rate_limiter() -> RateLimiter:
     )
 
 
+@lru_cache
+def get_shared_coingecko_residual_rate_limiter() -> RateLimiter:
+    """Process-wide rate limiter for the keyless CoinGecko residual quote fallback (AUD-558).
+
+    quote_refresh's primary provider is keyless CoinMarketCap; for whatever
+    held assets that pass still can't price, a residual pass asks keyless
+    CoinGecko one contract address at a time (its keyless cap). That endpoint
+    enforces the same kind of tight, unpublished per-IP quota as the
+    CoinMarketCap and asset-icon limiters above — one instance per worker
+    process, shared by every residual CoinGeckoProvider quote_refresh
+    constructs.
+    """
+    from audr.config import get_settings
+
+    settings = get_settings()
+    return RateLimiter(
+        calls_per_second=settings.coingecko_residual_rate_limit_per_second,
+        burst=settings.coingecko_residual_rate_limit_burst,
+    )
+
+
 class CancellationCheckpoint:
     """Async context manager that raises asyncio.CancelledError at safe points."""
 

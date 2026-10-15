@@ -256,3 +256,96 @@ async def test_context_manager_closes_client() -> None:
             price = await provider.get_eth_price()
 
     assert price == Decimal("2000.0")
+
+
+# ---------------------------------------------------------------------------
+# Keyless (AUD-558): CoinGecko's address-based endpoint doesn't require a
+# key, just a tighter per-request address cap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+async def test_keyless_sends_no_api_key_header() -> None:
+    """Omitting api_key sends no x-cg-demo-api-key header at all."""
+    with respx.mock() as mock:
+        route = mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            return_value=Response(200, json=_token_price_response(_USDC_ADDR, 1.0))
+        )
+        provider = CoinGeckoProvider()
+        await provider.get_token_prices([_USDC_ADDR])
+        await provider.close()
+
+    assert route.called
+    assert "x-cg-demo-api-key" not in route.calls.last.request.headers
+
+
+@pytest.mark.contract
+async def test_keyless_chunks_addresses_to_one_per_request() -> None:
+    """Without a key, each contract address is sent in its own request."""
+    addr_a = _USDC_ADDR
+    addr_b = "0x" + "b1" * 20
+    with respx.mock() as mock:
+        route = mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            side_effect=lambda request: Response(
+                200,
+                json=_token_price_response(request.url.params["contract_addresses"], 1.0),
+            )
+        )
+        provider = CoinGeckoProvider()
+        prices = await provider.get_token_prices([addr_a, addr_b])
+        await provider.close()
+
+    assert route.call_count == 2
+    sent_params = [dict(call.request.url.params) for call in route.calls]
+    assert all("," not in p["contract_addresses"] for p in sent_params)
+    assert prices[addr_a] == Decimal("1.0")
+    assert prices[addr_b] == Decimal("1.0")
+
+
+@pytest.mark.contract
+async def test_keyed_still_batches_addresses_in_one_request() -> None:
+    """A keyed provider keeps sending every address in a single request."""
+    addr_a = _USDC_ADDR
+    addr_b = "0x" + "b1" * 20
+    with respx.mock() as mock:
+        route = mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            return_value=Response(
+                200,
+                json={addr_a.lower(): {"usd": 1.0}, addr_b.lower(): {"usd": 2.0}},
+            )
+        )
+        provider = CoinGeckoProvider(api_key=_FAKE_KEY)
+        prices = await provider.get_token_prices([addr_a, addr_b])
+        await provider.close()
+
+    assert route.call_count == 1
+    sent = route.calls.last.request.url.params["contract_addresses"]
+    assert "," in sent
+    assert prices[addr_a] == Decimal("1.0")
+    assert prices[addr_b] == Decimal("2.0")
+
+
+@pytest.mark.contract
+async def test_rate_limiter_acquired_once_per_request() -> None:
+    """Each outgoing request goes through the shared rate limiter first."""
+    addr_a = _USDC_ADDR
+    addr_b = "0x" + "b1" * 20
+    acquire_calls = 0
+
+    class _StubLimiter:
+        async def acquire(self) -> None:
+            nonlocal acquire_calls
+            acquire_calls += 1
+
+    with respx.mock() as mock:
+        mock.get(f"{_BASE}/simple/token_price/ethereum").mock(
+            side_effect=lambda request: Response(
+                200,
+                json=_token_price_response(request.url.params["contract_addresses"], 1.0),
+            )
+        )
+        provider = CoinGeckoProvider(rate_limiter=_StubLimiter())  # type: ignore[arg-type]
+        await provider.get_token_prices([addr_a, addr_b])
+        await provider.close()
+
+    assert acquire_calls == 2

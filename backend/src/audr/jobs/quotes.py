@@ -6,18 +6,33 @@ skipped.  Excluded assets are still priced: exclusion only keeps an asset out
 of the portfolio's value (AUD-447), so putting it back must show a current
 price immediately rather than a blank waiting for the next refresh.
 
-Provider selection (AUD-358): CoinGecko Demo requires an API key that a
-fresh install never has, so it used to be the only provider and
-quote_refresh was a permanent no-op out of the box. CoinMarketCap's public
+Provider selection (AUD-358): CoinGecko Demo used to be the only provider,
+and quote_refresh was a permanent no-op on a fresh install because it
+required an API key nothing starts with. CoinMarketCap's public
 `/public-api/v1/*` endpoints work without a key, so that's now the default;
-CoinGecko is used instead whenever the owner has saved a key for it, since
-its address-based `/simple/token_price` endpoint covers more tokens.
+CoinGecko is used as the sole primary provider instead whenever the owner
+has saved a key for it, batching every address in one request as before.
+
+CoinGecko's address-based `/simple/token_price` endpoint also works without
+a key — it is not gated on a credential, only capped at one contract address
+per request keylessly (AUD-558). So after the primary pass, for whatever
+held assets are still unpriced in this quote_set, a residual pass asks
+keyless CoinGecko about each one individually (see
+`_fetch_residual_coingecko_prices`) before the set is finalised. This is a
+post-pass, not a third provider value: `get_active_quote_provider` still
+only ever reports "coingecko" or "coinmarketcap". On a keyed install the
+residual pass is a no-op in practice: the keyed primary pass is CoinGecko
+itself, so anything it left unpriced is absent from CoinGecko's catalog and
+a keyless retry of the same address cannot do better.
 
 The job inserts a quote_set row, populates quote_observation rows for each
-successfully priced asset, and marks the set complete.  On any provider
-error the set is marked failed and the job re-raises (AUD-318) so the worker
-records the run itself as failed — a swallowed error here would report a
-provider outage as a successful run.
+successfully priced asset, and marks the set complete.  On any *primary*
+provider error the set is marked failed and the job re-raises (AUD-318) so
+the worker records the run itself as failed — a swallowed error here would
+report a provider outage as a successful run. The residual pass is
+deliberately the exception to that rule (see its docstring): it only ever
+tries to recover assets the primary pass already left unpriced, so its
+failures are caught and logged, never escalated.
 
 Per-asset freshness (AUD-370): a held asset whose most recent price is still
 younger than the quote_refresh schedule's `freshness_s` is skipped on the
@@ -44,7 +59,10 @@ from audr.assets.cmc_catalog import resolve_cmc_ids
 from audr.assets.constants import (
     NATIVE_ETH_ADDRESS,  # noqa: F401 -- re-export pinned by test_native_eth_identity.py
 )
-from audr.jobs.policy import get_shared_cmc_rate_limiter
+from audr.jobs.policy import (
+    get_shared_cmc_rate_limiter,
+    get_shared_coingecko_residual_rate_limiter,
+)
 from audr.jobs.store import JobKind, enqueue_job
 from audr.operations.status import ComponentStatus, QuoteStatus
 from audr.providers.coingecko_demo import CoinGeckoError, CoinGeckoProvider
@@ -65,6 +83,13 @@ _DEFAULT_QUOTE_FRESHNESS_S = 3600
 # purposes even though it isn't NULL — the job may be failing silently on
 # retries while an earlier price keeps the portfolio looking fine (AUD-370).
 _STALE_PRICE_FRESHNESS_MULTIPLE = 2
+
+# Caps how many keyless CoinGecko residual lookups a single quote_refresh
+# run will make (AUD-558). A normal run only needs one or two (today: TVK
+# and REPv2_Yes_1), so this is a safety valve against an asset set that
+# grows into a 429 storm, not the everyday limit — see
+# _fetch_residual_coingecko_prices.
+_MAX_RESIDUAL_LOOKUPS = 10
 
 
 async def get_active_quote_provider(session: AsyncSession) -> str:
@@ -192,12 +217,20 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
             # and history.
             raise
 
-    prices = {**cached_prices, **fetched_prices}
+    residual_addresses = [a for a in stale_addresses if a not in fetched_prices]
+    residual_prices: dict[str, Decimal] = {}
+    if residual_addresses:
+        residual_prices = await _fetch_residual_coingecko_prices(
+            residual_addresses, run_id=run_id, quote_set_id=quote_set_id
+        )
+
+    prices = {**cached_prices, **fetched_prices, **residual_prices}
     logger.info(
-        "quote_refresh run_id=%s cached=%d stale=%d",
+        "quote_refresh run_id=%s cached=%d stale=%d residual=%d",
         run_id,
         len(cached_prices),
         len(stale_addresses),
+        len(residual_prices),
     )
 
     # Fencing: re-check run status after the external API call — the purge may
@@ -274,6 +307,58 @@ async def handle_quote_refresh(session: AsyncSession, run_id: uuid.UUID) -> None
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+async def _fetch_residual_coingecko_prices(
+    addresses: list[str], *, run_id: uuid.UUID, quote_set_id: uuid.UUID
+) -> dict[str, Decimal]:
+    """Keyless CoinGecko lookup for held assets the primary pass couldn't price (AUD-558).
+
+    Capped at _MAX_RESIDUAL_LOOKUPS addresses per run and paced through the
+    shared keyless-CoinGecko rate limiter; CoinGeckoProvider itself chunks
+    each lookup to one address per request since there's no key here. If the
+    cap truncates the list, that's logged — an asset set that grows into
+    this path must not silently turn into a 429 storm with no trace of what
+    was skipped.
+
+    Deliberately best-effort: this pass only ever tries to recover assets
+    the primary provider already left unpriced, so the worst case on failure
+    is today's status quo — that asset stays unpriced. Unlike the primary
+    provider's errors above, a residual failure is caught and logged here
+    rather than re-raised, so it can never turn an otherwise-successful run
+    into a failed one (AUD-318 still applies to the primary pass only).
+
+    Goes through `get_prices` rather than `get_token_prices` so the native-ETH
+    placeholder, if it ever reaches here, is routed to `/simple/price` instead
+    of being asked about as if it were a contract address — that endpoint is
+    keyless too.
+    """
+    capped = addresses[:_MAX_RESIDUAL_LOOKUPS]
+    skipped = len(addresses) - len(capped)
+    if skipped > 0:
+        logger.warning(
+            "quote_refresh residual cap reached run_id=%s quote_set=%s requested=%d skipped=%d",
+            run_id,
+            quote_set_id,
+            len(addresses),
+            skipped,
+        )
+
+    prices: dict[str, Decimal] = {}
+    limiter = get_shared_coingecko_residual_rate_limiter()
+    async with CoinGeckoProvider(rate_limiter=limiter) as provider:
+        for address in capped:
+            try:
+                prices.update(await provider.get_prices([address]))
+            except CoinGeckoError as exc:
+                logger.warning(
+                    "quote_refresh residual lookup failed run_id=%s quote_set=%s address=%s: %s",
+                    run_id,
+                    quote_set_id,
+                    address,
+                    exc,
+                )
+    return prices
 
 
 async def _get_held_asset_addresses(session: AsyncSession) -> list[str]:

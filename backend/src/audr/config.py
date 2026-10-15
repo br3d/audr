@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     asset_icon_cg_rate_limit_per_second: float = 0.5
     asset_icon_cg_rate_limit_burst: int = 1
 
+    # Rate limit for the keyless CoinGecko residual quote fallback
+    # quote_refresh runs after its keyless CoinMarketCap primary pass
+    # (AUD-558) for held assets CoinMarketCap still couldn't price. Keyless
+    # CoinGecko's unpublished per-IP quota is roughly 5-15 req/min; the
+    # residual pass is already capped at a handful of lookups per run, so
+    # this budget is a backstop against that cap being raised later, not the
+    # primary defense.
+    coingecko_residual_rate_limit_per_second: float = 0.1
+    coingecko_residual_rate_limit_burst: int = 1
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:

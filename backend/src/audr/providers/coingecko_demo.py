@@ -4,8 +4,16 @@ Supports:
 - ERC-20 token prices via /simple/token_price/{platform_id}
 - Native ETH price via /simple/price?ids=ethereum
 
-Rate limits: CoinGecko Demo allows ~30 req/min.  Callers should avoid
-calling this more frequently than once per minute.
+Rate limits: CoinGecko Demo allows ~30 req/min with a key.  Callers should
+avoid calling this more frequently than once per minute.
+
+The API key is optional (AUD-558): `/simple/token_price` and `/simple/price`
+both work unauthenticated, just capped at one contract address per request
+instead of a free-form batch (HTTP 400 `error_code 10012` above that) — this
+is what lets `jobs.quotes`' residual fallback use this provider without the
+owner ever saving a key. When *api_key* is omitted, no auth header is sent
+and `get_token_prices` chunks requests to one address each; the keyed path's
+single-batch-request behaviour is unchanged.
 
 Never logs or exposes the API key.
 """
@@ -20,6 +28,7 @@ from typing import Any
 import httpx
 
 from audr.assets.constants import NATIVE_ETH_ADDRESS, is_native_eth
+from audr.jobs.policy import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +36,9 @@ _BASE_URL = "https://api.coingecko.com/api/v3"
 _ETH_COIN_ID = "ethereum"
 _PLATFORM_ID = "ethereum"
 _TIMEOUT = 15.0
+
+# Keyless requests are capped at one contract address per call (AUD-558).
+_MAX_ADDRESSES_PER_REQUEST_KEYLESS = 1
 
 
 class CoinGeckoError(Exception):
@@ -51,9 +63,10 @@ class CoinGeckoProvider:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None = None,
         http_client: httpx.AsyncClient | None = None,
         base_url: str = _BASE_URL,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._api_key = api_key
         self._base = base_url.rstrip("/")
@@ -62,6 +75,11 @@ class CoinGeckoProvider:
             timeout=httpx.Timeout(_TIMEOUT),
             follow_redirects=False,
         )
+        # Shared across job handlers when the caller passes the process-wide
+        # limiter (see audr.jobs.policy.get_shared_coingecko_residual_rate_limiter);
+        # None here means "no rate limiting" so unit/contract tests that
+        # construct a provider directly are unaffected.
+        self._rate_limiter = rate_limiter
 
     async def __aenter__(self) -> CoinGeckoProvider:
         return self
@@ -99,29 +117,39 @@ class CoinGeckoProvider:
 
         Addresses not found in the CoinGecko catalog are silently omitted —
         callers must treat absent tokens as unknown, not zero.
+
+        Keyless requests are chunked to one address per call (AUD-558) since
+        CoinGecko answers more than that with HTTP 400 `error_code 10012`;
+        a keyed request keeps sending every address in a single batch, as
+        before.
         """
         if not contract_addresses:
             return {}
-        addresses_param = ",".join(a.lower() for a in contract_addresses)
-        data = await self._get(
-            f"/simple/token_price/{platform_id}",
-            params={
-                "contract_addresses": addresses_param,
-                "vs_currencies": "usd",
-                "precision": "18",
-            },
+        chunk_size = (
+            len(contract_addresses) if self._api_key else _MAX_ADDRESSES_PER_REQUEST_KEYLESS
         )
         result: dict[str, Decimal] = {}
-        for addr, prices in data.items():
-            if not isinstance(prices, dict):
-                continue
-            usd_val = prices.get("usd")
-            if usd_val is None:
-                continue
-            try:
-                result[addr.lower()] = Decimal(str(usd_val))
-            except Exception:
-                logger.warning("coingecko: unparseable price for %s: %r", addr, usd_val)
+        for position in range(0, len(contract_addresses), chunk_size):
+            chunk = contract_addresses[position : position + chunk_size]
+            addresses_param = ",".join(a.lower() for a in chunk)
+            data = await self._get(
+                f"/simple/token_price/{platform_id}",
+                params={
+                    "contract_addresses": addresses_param,
+                    "vs_currencies": "usd",
+                    "precision": "18",
+                },
+            )
+            for addr, prices in data.items():
+                if not isinstance(prices, dict):
+                    continue
+                usd_val = prices.get("usd")
+                if usd_val is None:
+                    continue
+                try:
+                    result[addr.lower()] = Decimal(str(usd_val))
+                except Exception:
+                    logger.warning("coingecko: unparseable price for %s: %r", addr, usd_val)
         return result
 
     async def get_prices(
@@ -155,12 +183,11 @@ class CoinGeckoProvider:
     # ------------------------------------------------------------------
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire()
         url = f"{self._base}{path}"
-        response = await self._client.get(
-            url,
-            params=params,
-            headers={"x-cg-demo-api-key": self._api_key},
-        )
+        headers = {"x-cg-demo-api-key": self._api_key} if self._api_key else {}
+        response = await self._client.get(url, params=params, headers=headers)
         _check_response(response)
         return json.loads(response.text, parse_float=Decimal)  # type: ignore[no-any-return]
 

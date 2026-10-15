@@ -13,7 +13,14 @@ from audr.models import metadata
 alembic_config = context.config
 
 if alembic_config.config_file_name is not None:
-    fileConfig(alembic_config.config_file_name)
+    # disable_existing_loggers=False matters whenever alembic runs in the same
+    # process as the app or the test suite: the default (True) permanently sets
+    # .disabled on every logger created before this line, so every `audr.*`
+    # logger already imported goes silent for the rest of the process. In the
+    # integration suite that silently broke caplog assertions in any test file
+    # ordered after the migration tests (AUD-558); in-process it would discard
+    # app logs after a migration.
+    fileConfig(alembic_config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = metadata
 
