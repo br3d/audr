@@ -168,6 +168,20 @@ cover deliberately different failure shapes:
 | CI failure step | a deploy fails **and** leaves `/health/ready` not-ok | none — immediate | `ci/gitea-overlay/workflows/deploy.yaml` |
 | `audr-watchdog.timer` | `/health/ready` fails 5 probes in a row, deploy or no deploy | ~5 min sustained | `scripts/stand-watchdog.sh` on the host |
 | `audr-backup.timer` | the daily dump fails, or its own decrypt-check says the archive is unreadable | one run — immediate | `scripts/backup-run.sh` on the host |
+| `audr-watchdog.timer` (backup freshness) | the newest dump in `backups/` is older than 26h, or there is none at all | ~26h since the last dump | `check_backup_age` in `scripts/stand-watchdog.sh` |
+
+The last two rows look redundant and are not. `backup-run.sh` can only speak if
+it runs: a backup that **fails** alerts, a backup that **never starts** — timer
+disabled by a daemon-reload, unit file lost to a reinstall, `OnCalendar` mistyped
+— is completely silent. That silence is the shape of AUD-562 (the dump tooling
+was shipped and proven, then nothing ran it for two weeks) and of AUD-505 (a
+timer authorised and closed while the unit did not exist). So the freshness check
+watches the **artefact's mtime**, not the schedule, and rides the watchdog timer
+that is observably firing every 60s rather than a second timer that would need
+its own liveness proof. 26h, not 24h, because 03:20 UTC + `RandomizedDelaySec=10m`
+can legitimately put two dumps 24h20m apart; a missed 03:20 still surfaces by
+~05:30 the same morning. Alert key `backup-stale`, one message a day while stale,
+one `✅` that closes the issue when a dump lands.
 
 The watchdog is the one that matters most, because the CI step structurally
 cannot see an outage that no deploy caused — an OOM kill, a reboot, Postgres
@@ -341,6 +355,7 @@ watchdog's copies need the installer.)
 systemctl list-timers audr-watchdog.timer      # next/last probe
 sudo systemctl start audr-watchdog.service     # probe right now
 cat ~/.local/state/audr-watchdog/consecutive-failures   # 0 when healthy
+ls ~/.local/state/audr-watchdog/backup-stale-alerted-at # absent = backups fresh
 ls ~/.local/state/audr-notify/                 # issue-<key>: open alert issues
                                                # undelivered.jsonl: spooled alerts
 
@@ -352,14 +367,17 @@ python3 scripts/test_drain_alert_spool.py
 # Probe history and alert decisions. `sudo` is required: the unit runs as
 # codex but logs to the system journal, and plain `journalctl -u` as codex
 # prints "No entries" rather than an error, which reads exactly like a dead
-# timer. One healthy tick logs "[watchdog] ok".
+# timer. One healthy tick logs two lines: the backup-freshness verdict
+# ("[watchdog] newest backup is Nh old") and then "[watchdog] ok".
 sudo journalctl -u audr-watchdog.service -n 50
 ```
 
 To silence it during planned maintenance, `sudo systemctl stop
 audr-watchdog.timer` — and start it again afterwards. Stopping the timer is
 better than raising the threshold, because the counter file resets on the first
-healthy probe either way.
+healthy probe either way. Note that stopping this timer also stops the
+backup-freshness check, so a maintenance window long enough to span a missed
+03:20 would go unreported — start it again the same day.
 
 ## Installing and inspecting the scheduled backup
 
