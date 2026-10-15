@@ -29,7 +29,11 @@
 #                     than the timer would silently delete days the timer kept)
 #   AUDR_BACKUP_WEEKS keep at most N older weekly survivors (default 4). Both
 #                     tiers are dump-prune.py's rule; the cap is what bounds the
-#                     directory, measured on the stand at ~282 MiB per dump.
+#                     directory. Sized when a dump was 282 MiB; since AUD-564
+#                     gzips before encrypting it is ~10x smaller, so these
+#                     defaults now cost a fraction of the disk they were
+#                     chosen against. Widening them is a separate decision,
+#                     not something this change should make silently.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,19 +79,29 @@ if [ -z "${dump}" ] || [ ! -f "${dump}" ]; then
 fi
 
 size="$(stat -c %s "${dump}")"
-# A valid dump of this schema is megabytes. Anything tiny is a failed pipe that
+# A valid dump of this schema is tens of megabytes even gzipped (AUD-564 took
+# the stand's dump from 282 MiB to 49 MiB), so a 1 MiB floor still leaves well
+# over an order of magnitude of headroom. Anything tiny is a failed pipe that
 # still exited 0 somewhere upstream.
 [ "${size}" -ge 1048576 ] || fail "dump ${dump} is only ${size} bytes — refusing to call that a backup"
 
 # Decrypt to stdout and look at the header only; the plaintext never lands on
-# disk, which is the whole point of the pipe in backup.sh.
+# disk, which is the whole point of the pipe in backup.sh. Checking the header
+# AFTER decompressing is the point: it proves the gzip stream is intact too, so
+# a dump whose compression was truncated fails here rather than at restore time.
 log "verifying ${dump} decrypts (${size} bytes)"
 case "${dump}" in
+  *.gz.age|*.gz.gpg) decompress=(gzip -dc) ;;
+  *)                 decompress=(cat) ;;
+esac
+case "${dump}" in
   *.age)
-    head="$(age -d -i "${AUDR_SECRETS_DIR}/backup_key.txt" "${dump}" 2>/dev/null | head -c 4096)" ;;
+    head="$(age -d -i "${AUDR_SECRETS_DIR}/backup_key.txt" "${dump}" 2>/dev/null \
+      | "${decompress[@]}" 2>/dev/null | head -c 4096)" ;;
   *.gpg)
     head="$(gpg --quiet --batch --yes --decrypt \
-      --passphrase-file "${AUDR_SECRETS_DIR}/backup_key.txt" "${dump}" 2>/dev/null | head -c 4096)" ;;
+      --passphrase-file "${AUDR_SECRETS_DIR}/backup_key.txt" "${dump}" 2>/dev/null \
+      | "${decompress[@]}" 2>/dev/null | head -c 4096)" ;;
   *) fail "unrecognised dump extension on ${dump}" ;;
 esac
 case "${head}" in

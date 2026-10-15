@@ -75,11 +75,19 @@ if [ "$mode" = check ]; then
     else
       echo 'no failure flag'
     fi
-    echo '== encryption =='
+    echo '== compression and encryption =='
+    # gzip before age (AUD-564). Report it as its own line: a host without
+    # gzip takes dumps 5.7x bigger than the retention was sized for, and the
+    # only other place that shows up is the disk filling.
+    if command -v gzip >/dev/null 2>&1; then
+      echo \"gzip present (\$(gzip --version 2>&1 | head -1)) — dumps are compressed before encryption\"
+    else
+      echo 'gzip ABSENT — backup.sh refuses to run unless AUDR_BACKUP_COMPRESS=none'
+    fi
     if command -v age >/dev/null 2>&1; then
-      echo \"age present (\$(age --version 2>&1 | head -1)) — dumps are .sql.age\"
+      echo \"age present (\$(age --version 2>&1 | head -1)) — dumps are .sql.gz.age\"
     elif command -v gpg >/dev/null 2>&1; then
-      echo 'age ABSENT, gpg present — dumps take the .sql.gpg fallback path'
+      echo 'age ABSENT, gpg present — dumps take the .sql.gz.gpg fallback path'
     else
       echo 'NEITHER age NOR gpg — backup.sh cannot encrypt and will refuse to run'
     fi
