@@ -2,9 +2,15 @@
 # Restore an encrypted Postgres backup produced by scripts/backup.sh (AUD-390).
 #
 # Usage: ./scripts/restore.sh [--force] [--identity FILE] DUMP_FILE
-#   DUMP_FILE    path to an audr-*.sql.age or audr-*.sql.gpg archive.
+#   DUMP_FILE    path to an audr-*.sql[.gz].age or audr-*.sql[.gz].gpg archive.
 #   --identity   age identity / gpg passphrase file (default: secrets/backup_key.txt).
 #   --force      required to restore over a database that already has tables.
+#
+# Both shapes are read, and that is load-bearing rather than politeness:
+# backup.sh gzips before encrypting as of AUD-564, and the dumps written before
+# that change are still the only copy of the days they cover. The `.gz` in the
+# name is what selects the decompression step, so a dump taken either way
+# restores with the same command.
 #
 # This restores the *data* only. If SECRET_KEY / secrets/master_key.hex does
 # not match what the dump's `key_state` row was wrapped with, provider
@@ -53,19 +59,29 @@ done
 [ -f "${DUMP_FILE}" ] || { echo "Dump file not found: ${DUMP_FILE}" >&2; exit 1; }
 
 case "${DUMP_FILE}" in
-  *.sql.age)
+  *.sql.age|*.sql.gz.age)
     command -v age >/dev/null 2>&1 || { echo "'age' not found on PATH" >&2; exit 1; }
     [ -f "${IDENTITY_FILE}" ] || { echo "age identity file not found: ${IDENTITY_FILE}" >&2; exit 1; }
     DECRYPT=(age -d -i "${IDENTITY_FILE}")
     ;;
-  *.sql.gpg)
+  *.sql.gpg|*.sql.gz.gpg)
     command -v gpg >/dev/null 2>&1 || { echo "'gpg' not found on PATH" >&2; exit 1; }
     [ -f "${IDENTITY_FILE}" ] || { echo "gpg passphrase file not found: ${IDENTITY_FILE}" >&2; exit 1; }
     DECRYPT=(gpg --decrypt --batch --yes --passphrase-file "${IDENTITY_FILE}")
     ;;
   *)
-    echo "Unrecognised dump extension (expected .sql.age or .sql.gpg): ${DUMP_FILE}" >&2
+    echo "Unrecognised dump extension (expected .sql[.gz].age or .sql[.gz].gpg): ${DUMP_FILE}" >&2
     exit 1
+    ;;
+esac
+
+case "${DUMP_FILE}" in
+  *.sql.gz.age|*.sql.gz.gpg)
+    command -v gzip >/dev/null 2>&1 || { echo "'gzip' not found on PATH — needed for a .gz dump" >&2; exit 1; }
+    DECOMPRESS=(gzip -dc)
+    ;;
+  *)
+    DECOMPRESS=(cat)
     ;;
 esac
 
@@ -86,8 +102,10 @@ if [ "${TABLE_COUNT}" != "0" ] && [ "${FORCE}" -eq 1 ]; then
 fi
 
 echo "Decrypting ${DUMP_FILE} and restoring into '${DB_NAME}'..."
-"${DECRYPT[@]}" < "${DUMP_FILE}" | docker compose -p "${COMPOSE_PROJECT}" exec -T "${DB_SERVICE}" \
-  psql -U "${DB_USER}" -d "${DB_NAME}"
+"${DECRYPT[@]}" < "${DUMP_FILE}" \
+  | "${DECOMPRESS[@]}" \
+  | docker compose -p "${COMPOSE_PROJECT}" exec -T "${DB_SERVICE}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}"
 
 echo "Restore complete. Remember to also restore the matching secrets/master_key.hex"
 echo "(backed up separately as master_key-*.hex) if this host does not already have it."

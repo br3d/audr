@@ -64,7 +64,8 @@ Reading the directory needs root (the dumps are mode 600), so in practice:
 A SECOND DUMP FAMILY (AUD-562)
 ------------------------------
 audr's own scheduled backups land in `/home/codex/audr/backups` on the deploy
-host as `audr-<ts>.sql.age`. They are pruned by the same rule through
+host as `audr-<ts>.sql.gz.age` (and `audr-<ts>.sql.age` for the ones taken
+before AUD-564 compressed them). They are pruned by the same rule through
 `--prefix`, driven from `scripts/backup-run.sh`:
 
     python3 scripts/dump-prune.py --dir /home/codex/audr/backups \\
@@ -93,21 +94,26 @@ DEFAULT_PREFIX = "paperclip"
 
 
 def dump_re(prefix: str) -> re.Pattern[str]:
-    """Filename pattern for one dump family: `<prefix>-YYYYmmdd-HHMMSS.sql[.ext]`.
+    """Filename pattern for one dump family: `<prefix>-YYYYmmdd-HHMMSS.sql[.gz][.enc]`.
 
     Both dump producers we own write that shape:
 
       * `paperclip-20261011-201039.sql.gz` — the Paperclip control plane. The
         uncompressed `.sql` spelling also exists in the archive (the 2026-09-12
         dump predates compression), so both are dumps.
-      * `audr-20261015-141500.sql.gpg` — `scripts/backup.sh` (AUD-390), `.age`
-        when `age` is installed and `.gpg` on the fallback path.
+      * `audr-20261015-141500.sql.gz.age` — `scripts/backup.sh` (AUD-390),
+        `.age` when `age` is installed and `.gpg` on the fallback path, and
+        `.gz` since AUD-564 compressed the dump before encrypting it. The
+        uncompressed `audr-<ts>.sql.age` spelling predates that change and is
+        still on the stand, so both are dumps here too — a pruner that stopped
+        recognising the old shape would quietly stop bounding it, which is the
+        failure mode `--weeks` exists to prevent.
 
     `--prefix` exists so the second family reuses this rule rather than getting
     a pruner of its own (AUD-562). The prefix is quoted: it names a file, and a
     caller passing `audr.old` must not match `audrXold`.
     """
-    return re.compile(rf"^{re.escape(prefix)}-(\d{{8}})-(\d{{6}})\.sql(?:\.gz|\.age|\.gpg)?$")
+    return re.compile(rf"^{re.escape(prefix)}-(\d{{8}})-(\d{{6}})\.sql(?:\.gz)?(?:\.age|\.gpg)?$")
 
 
 KEEP_RECENT = "recent"
@@ -187,11 +193,13 @@ def plan(
     # Without a cap the weekly tier grows forever: one dump per ISO week, never
     # deleted. That was affordable for the Paperclip dumps this script was
     # written for, so the default stays uncapped and their timer's behaviour is
-    # unchanged. It is NOT affordable for audr's own dumps — measured at 282 MiB
-    # each (AUD-562, pg_dump is not compressed before `age` encrypts it), an
-    # uncapped weekly tier adds ~14.7 GiB a year to a deploy host with 11 GiB
-    # free, i.e. a disk-full in roughly eight months. That is a worse outage
-    # than the one backups prevent, and it arrives silently.
+    # unchanged. It is NOT affordable for audr's own dumps. When the cap was
+    # added they were 282 MiB each (AUD-562, nothing compressed the dump before
+    # `age` encrypted it) and an uncapped weekly tier added ~14.7 GiB a year to
+    # a deploy host with 11 GiB free — a silent disk-full in roughly eight
+    # months. AUD-564 made them 5.7x smaller, which buys time rather than
+    # removing the problem: "grows forever" is not a size, and a directory a
+    # timer keeps writing to still needs a bound.
     #
     # Dropping the oldest weekly survivor is cheap in a way worth saying out
     # loud: these dumps are a RECOVERY point, not an archive. The live database

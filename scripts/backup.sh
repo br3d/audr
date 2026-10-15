@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # Encrypted Postgres backup (AUD-390).
 #
-# Dumps the `db` service via `docker compose exec`, pipes the dump straight
-# through an encryption tool (never touching disk unencrypted), and writes a
-# timestamped archive to a configurable destination directory.
+# Dumps the `db` service via `docker compose exec`, pipes the dump through gzip
+# and then straight through an encryption tool (never touching disk
+# unencrypted), and writes a timestamped archive to a configurable destination
+# directory.
+#
+# COMPRESS BEFORE ENCRYPTING, not after (AUD-564). Ciphertext is
+# incompressible, so the order is not a preference. Measured on the stand's
+# live database: `age` on a plain pg_dump produced 295,260,620 bytes (282 MiB);
+# gzipped first, the same database produced 51,621,096 bytes (49 MiB) — 5.7x.
+# The archive is `audr-<ts>.sql.gz.age`; restore.sh reads that shape and the
+# older uncompressed `.sql.age` / `.sql.gpg` ones.
+#
+# AUDR_BACKUP_COMPRESS=none writes the old uncompressed shape, for an operator
+# who wants a dump readable with `age -d` alone and no gzip on the far end.
 #
 # Usage: ./scripts/backup.sh [DEST_DIR]
 #   DEST_DIR defaults to ./backups (override with AUDR_BACKUP_DIR or $1).
@@ -40,6 +51,24 @@ COMPOSE_PROJECT="${AUDR_COMPOSE_PROJECT:-audr}"
 DB_SERVICE="${AUDR_DB_SERVICE:-db}"
 DB_NAME="${AUDR_DB_NAME:-audr}"
 DB_USER="${AUDR_DB_USER:-audr}"
+COMPRESS="${AUDR_BACKUP_COMPRESS:-gzip}"
+
+case "${COMPRESS}" in
+  gzip)
+    command -v gzip >/dev/null 2>&1 || {
+      echo "'gzip' is not on PATH — set AUDR_BACKUP_COMPRESS=none to take an uncompressed dump." >&2
+      exit 1
+    }
+    SQL_EXT=".sql.gz"
+    ;;
+  none)
+    SQL_EXT=".sql"
+    ;;
+  *)
+    echo "AUDR_BACKUP_COMPRESS must be 'gzip' or 'none', got '${COMPRESS}'" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "${DEST_DIR}"
 chmod 700 "${DEST_DIR}"
@@ -80,7 +109,7 @@ if [ "${ENGINE}" = "age" ]; then
     }
   fi
   echo "Backup recipient: ${RECIPIENT}"
-  DUMP_PATH="${DEST_DIR}/audr-${TIMESTAMP}.sql.age"
+  DUMP_PATH="${DEST_DIR}/audr-${TIMESTAMP}${SQL_EXT}.age"
 else
   if [ ! -f "${BACKUP_KEY_FILE}" ]; then
     mkdir -p "${SECRETS_DIR}"
@@ -90,20 +119,35 @@ else
     chmod 600 "${BACKUP_KEY_FILE}"
     echo "Keep ${BACKUP_KEY_FILE} safe and backed up elsewhere — losing it makes every past backup permanently unreadable."
   fi
-  DUMP_PATH="${DEST_DIR}/audr-${TIMESTAMP}.sql.gpg"
+  DUMP_PATH="${DEST_DIR}/audr-${TIMESTAMP}${SQL_EXT}.gpg"
 fi
 
-echo "Dumping ${DB_NAME} via 'docker compose exec' and encrypting with ${ENGINE}..."
-if [ "${ENGINE}" = "age" ]; then
-  docker compose -p "${COMPOSE_PROJECT}" exec -T "${DB_SERVICE}" \
-    pg_dump -U "${DB_USER}" -d "${DB_NAME}" --format=plain \
-    | age -r "${RECIPIENT}" -o "${DUMP_PATH}"
+# `cat` rather than a conditional pipeline: one code path writes the dump, so
+# the compressed and uncompressed shapes cannot drift in how they are produced.
+if [ "${COMPRESS}" = "gzip" ]; then
+  COMPRESSOR=(gzip -6)
 else
-  docker compose -p "${COMPOSE_PROJECT}" exec -T "${DB_SERVICE}" \
-    pg_dump -U "${DB_USER}" -d "${DB_NAME}" --format=plain \
-    | gpg --symmetric --batch --yes --cipher-algo AES256 \
-      --passphrase-file "${BACKUP_KEY_FILE}" -o "${DUMP_PATH}"
+  COMPRESSOR=(cat)
 fi
+
+if [ "${ENGINE}" = "age" ]; then
+  ENCRYPTOR=(age -r "${RECIPIENT}" -o "${DUMP_PATH}")
+else
+  ENCRYPTOR=(gpg --symmetric --batch --yes --cipher-algo AES256
+    --passphrase-file "${BACKUP_KEY_FILE}" -o "${DUMP_PATH}")
+fi
+
+if [ "${COMPRESS}" = "gzip" ]; then
+  echo "Dumping ${DB_NAME} via 'docker compose exec', compressing with gzip and encrypting with ${ENGINE}..."
+else
+  echo "Dumping ${DB_NAME} via 'docker compose exec' and encrypting with ${ENGINE} (uncompressed)..."
+fi
+# pipefail is on, so a pg_dump or gzip failure mid-stream fails the whole run
+# rather than leaving a short, perfectly decryptable, truncated archive.
+docker compose -p "${COMPOSE_PROJECT}" exec -T "${DB_SERVICE}" \
+  pg_dump -U "${DB_USER}" -d "${DB_NAME}" --format=plain \
+  | "${COMPRESSOR[@]}" \
+  | "${ENCRYPTOR[@]}"
 chmod 600 "${DUMP_PATH}"
 echo "Backup written: ${DUMP_PATH}"
 

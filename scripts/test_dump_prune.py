@@ -42,8 +42,8 @@ def hourly(date: str, hours=range(24)):
     return [f"paperclip-{date}-{h:02d}1039.sql.gz" for h in hours]
 
 
-def decide(rows, days, today):
-    return {n: why for n, _, why in dp.plan(rows, days, dt.date.fromisoformat(today))}
+def decide(rows, days, today, weeks=None):
+    return {n: why for n, _, why in dp.plan(rows, days, dt.date.fromisoformat(today), weeks)}
 
 
 def deleted(rows, days, today):
@@ -205,6 +205,61 @@ def test_audr_dumps_match_only_under_their_own_prefix():
     # one on the deploy host must never reach a Paperclip dump.
     assert dp.parse_stamp("audr-20261015-141500.sql.age", paperclip) is None
     assert dp.parse_stamp("paperclip-20261011-201039.sql.gz", audr) is None
+
+
+def test_audr_compressed_dumps_match_without_losing_the_old_shape():
+    """AUD-564 added `.gz` between the `.sql` and the encryption suffix.
+
+    Both spellings have to match the same pattern, and for a reason sharper
+    than tidiness: the stand's directory holds weeks of pre-AUD-564
+    `audr-<ts>.sql.age` dumps. A pattern that only recognised the new shape
+    would classify every one of them as "not a dump" — never deleted, never
+    counted, so the `--weeks` cap would silently stop bounding the directory
+    it was added to bound, and the disk-full it prevents arrives anyway.
+    """
+    audr = dp.dump_re("audr")
+    for name in (
+        "audr-20261015-141500.sql.gz.age",  # the AUD-564 shape
+        "audr-20261015-141500.sql.gz.gpg",  # ... on the gpg fallback
+        "audr-20261015-141500.sql.age",  # pre-AUD-564, still on the stand
+        "audr-20261015-141500.sql.gpg",
+        "audr-20261015-141500.sql",  # AUDR_BACKUP_COMPRESS=none, no encryptor
+        "audr-20261015-141500.sql.gz",
+    ):
+        assert dp.parse_stamp(name, audr) is not None, name
+
+    # The suffixes are optional, not free-form: order matters and nothing may
+    # follow the encryption suffix.
+    for name in (
+        "audr-20261015-141500.sql.age.gz",  # encrypt-then-compress: not ours
+        "audr-20261015-141500.sql.gz.age.part",  # still being written
+        "audr-20261015-141500.sql.gz.gz.age",
+        "audr-20261015-141500.gz.age",  # no .sql at all
+    ):
+        assert dp.parse_stamp(name, audr) is None, name
+
+
+def test_mixed_compressed_and_uncompressed_dumps_prune_as_one_series():
+    """The stand after AUD-564: old big dumps and new small ones, same rule.
+
+    The retention tiers key off the timestamp alone, so a day covered by an
+    uncompressed dump and a day covered by a compressed one are kept or
+    dropped identically. The transition must not create a seam where the old
+    shape outlives the rule or gets preferentially culled.
+    """
+    today = dt.date(2026, 11, 1)
+    old = audr_daily(["20260917", "20260924", "20261001"], ext=".age")
+    new = [f"audr-{d}-033012.sql.gz.age" for d in ("20261008", "20261015", "20261101")]
+    fate = decide(dumps(*old, *new, prefix="audr"), 3, today.isoformat(), weeks=2)
+
+    assert fate["audr-20261101-033012.sql.gz.age"] == dp.KEEP_RECENT
+    # Two weekly survivors, newest weeks first — one of each shape, chosen by
+    # date and not by whether the name happens to carry a `.gz`.
+    assert fate["audr-20261015-033012.sql.gz.age"] == dp.KEEP_WEEKLY
+    assert fate["audr-20261008-033012.sql.gz.age"] == dp.KEEP_WEEKLY
+    assert fate["audr-20261001-033012.sql.age"] is None
+    assert fate["audr-20260924-033012.sql.age"] is None
+    assert fate["audr-20260917-033012.sql.age"] is None
 
 
 def test_audr_key_copies_are_never_dumps():

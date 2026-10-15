@@ -295,7 +295,7 @@ docker compose up -d
 docker volume inspect audr_db_data --format '{{.Options}}'
 
 # 4. Restore into the empty database. No --force: it has no tables yet.
-./scripts/restore.sh backups/audr-<timestamp>.sql.age
+./scripts/restore.sh backups/audr-<timestamp>.sql.gz.age
 ```
 
 Keep `secrets/master_key.hex` exactly as it was across those steps — the
@@ -383,10 +383,22 @@ inside.
 ```
 
 This pipes `pg_dump` (run inside the `db` container via `docker compose exec`)
-straight through [`age`](https://github.com/FiloSottile/age) and writes
-`audr-YYYYMMDD-HHMMSS.sql.age` — there is never an intermediate plaintext dump
-on disk. If `age` is not installed, the script falls back to
-`gpg --symmetric` (AES-256) and writes `.sql.gpg` instead.
+through `gzip` and then [`age`](https://github.com/FiloSottile/age), writing
+`audr-YYYYMMDD-HHMMSS.sql.gz.age` — there is never an intermediate plaintext
+dump on disk. If `age` is not installed, the script falls back to
+`gpg --symmetric` (AES-256) and writes `.sql.gz.gpg` instead.
+
+**Compression comes before encryption**, and the order is not a style choice:
+ciphertext does not compress, so a dump that was encrypted first can never be
+shrunk afterwards. Measured on the stand's live database (AUD-564): 282 MiB
+uncompressed, **49 MiB** compressed — 5.7x. `AUDR_BACKUP_COMPRESS=none` writes
+the old uncompressed shape, for an operator who wants an archive that `age -d`
+alone turns back into SQL.
+
+`restore.sh` reads **both** shapes, selecting the decompression step from the
+`.gz` in the filename, so dumps taken before this change restore with the
+current script unchanged. That is proven by a drill rather than assumed — see
+[verification-history.md](verification-history.md).
 
 **Zero-config first backup**: if no recipient key exists yet, the script
 generates one on first run — an `age` identity at `secrets/backup_key.txt`
@@ -465,7 +477,7 @@ encryption cancelled out — it hands both halves to anyone who can read the hos
 the stand without putting an off-host credential on the stand. It means copying
 two things somewhere else, *stored apart from each other*:
 
-1. the newest `~/audr/backups/audr-*.sql.age`, and
+1. the newest `~/audr/backups/audr-*.sql.gz.age`, and
 2. the `SECRET_KEY` value from `~/audr/.env` (equivalently
    `secrets/master_key.hex` — the same 64 hex characters), plus
    `secrets/backup_key.txt`, the `age` identity that decrypts the dump itself.
@@ -489,17 +501,23 @@ protected unconditionally, so neither a clock skew nor a stalled timer can
 empty it, and files that are not dumps — including any `master_key-<ts>.hex`
 left by a manual backup — are never candidates.
 
-Sizing, measured rather than guessed: one dump of the live database is **282
-MiB** (`age` does not compress, and neither does plain-text `pg_dump`), so
-steady state is 11 files, **~3.1 GiB**, on a root filesystem with ~11 GiB free.
+Sizing, measured rather than guessed: one dump of the live database is **49
+MiB** since AUD-564 compressed it (282 MiB before — `age` does not compress,
+and neither does plain-text `pg_dump`), so steady state is 11 files, **~0.6
+GiB**, on a root filesystem with ~11 GiB free. The pre-AUD-564 dumps still in
+the directory are the big ones and age out of it on the same rule.
 
-The `--weeks` cap is the part that must not be dropped. Without it the weekly
-tier grows forever at one 282 MiB dump a week — ~14.7 GiB/year, which fills
-that disk in roughly eight months. A host that runs out of space because of its
-own backups is a worse outage than the one they prevent, and it arrives
+The `--weeks` cap is the part that must not be dropped. Compression bought time
+here, not an exemption: without the cap the weekly tier still grows forever,
+now at ~2.5 GiB/year instead of ~14.7. A host that runs out of space because of
+its own backups is a worse outage than the one they prevent, and it arrives
 silently. The cap is affordable because these dumps are a *recovery point, not
 an archive*: the live database holds the full valuation history, and restoring
 a two-month-old snapshot of a portfolio tracker is close to useless anyway.
+
+The same arithmetic is why `--days 7 --weeks 4` was **not** widened in the same
+change that made the dumps small. Retention is a recovery-window decision; this
+change only made the window cheaper to hold.
 
 For a manual dump taken to carry off the host, leave `AUDR_BACKUP_SKIP_KEY_COPY`
 unset — there you *want* the `master_key-<ts>.hex` beside it, because the two
@@ -513,7 +531,8 @@ finds nothing regardless of what it contains. Decrypt on the fly rather than
 writing a plaintext copy to disk:
 
 ```bash
-age -d -i secrets/backup_key.txt backups/audr-20261002-131755.sql.age | grep -c 'SOME_VALUE'
+age -d -i secrets/backup_key.txt backups/audr-20261015-172140.sql.gz.age \
+  | gzip -dc | grep -c 'SOME_VALUE'
 ```
 
 The same caution applies to the live database: `grep` over the PostgreSQL data
@@ -526,9 +545,11 @@ transparently. The measurements behind this are in
 ### Restoring
 
 ```bash
-./scripts/restore.sh audr-20261002-131755.sql.age
+./scripts/restore.sh audr-20261015-172140.sql.gz.age
 # "already has N table(s) ... Refusing to restore" if the target DB is not empty
-./scripts/restore.sh --force audr-20261002-131755.sql.age
+./scripts/restore.sh --force audr-20261015-172140.sql.gz.age
+# pre-AUD-564 uncompressed dumps take the same command
+./scripts/restore.sh --force audr-20261015-142732.sql.age
 ```
 
 `restore.sh` decrypts with `secrets/backup_key.txt` (or `--identity FILE`) and

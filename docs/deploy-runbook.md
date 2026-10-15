@@ -379,8 +379,8 @@ ls -la ~/audr/backups/                         # the dumps themselves, mode 600
 sudo journalctl -u audr-backup.service -n 50   # per-run log: dump, decrypt check, prune
 ```
 
-Each run takes a dump, **decrypts its own output** to prove the archive is
-readable, prunes to `--days 7 --weeks 4`, and alerts through the same
+Each run takes a dump, **decrypts and decompresses its own output** to prove the
+archive is readable, prunes to `--days 7 --weeks 4`, and alerts through the same
 `notify.sh` sinks as the watchdog on any failure — with a flag file at
 `~/audr/backups/.last-run-failed` so the next success stands the alert down.
 A backup that quietly stops being taken was the actual AUD-562 gap, so it is
@@ -394,8 +394,10 @@ Two things worth knowing before you touch it:
   host, and the schedule deliberately writes no KEK copy beside them. Getting a
   dump and the `SECRET_KEY` off-host is an owner action — see
   [operations.md](operations.md#what-the-schedule-does-and-does-not-protect-against).
-- **`--weeks 4` is load-bearing.** A dump is 282 MiB; without the cap the weekly
-  tier grows ~14.7 GiB/year and fills `/` in about eight months.
+- **`--weeks 4` is load-bearing.** A dump is 49 MiB since AUD-564 gzips it
+  before encrypting (282 MiB before that); without the cap the weekly tier
+  still grows forever, now ~2.5 GiB/year rather than ~14.7. Compression bought
+  headroom, not an exemption from bounding a directory a timer writes to.
 
 As with the watchdog, editing `backup.sh`, `backup-run.sh` or `dump-prune.py`
 in this repo does not reach the host until `install-backup.sh` runs again.
