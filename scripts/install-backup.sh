@@ -129,7 +129,7 @@ echo "==> checking the host can encrypt"
 if ! "${SSH[@]}" 'command -v age >/dev/null 2>&1'; then
   if "${SSH[@]}" 'command -v gpg >/dev/null 2>&1'; then
     echo "    NOTE: 'age' is not installed; dumps will take the gpg --symmetric"
-    echo "    fallback (.sql.gpg). Both are AES-256 and restore.sh reads either."
+    echo "    fallback (.sql.gz.gpg). Both are AES-256 and restore.sh reads either."
     echo "    'age' is preferred and is in the Ubuntu archive: sudo apt install age"
   else
     echo "ERROR: the host has neither 'age' nor 'gpg' — backup.sh cannot encrypt." >&2

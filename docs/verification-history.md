@@ -818,95 +818,6 @@ boundary rather than implying a green timer covers it.
 
 ## Scope
 
-`scripts/backup.sh` piped `pg_dump --format=plain` straight into `age`. Neither
-stage compresses, so AUD-562 measured a 282 MiB dump of a 351 MB database and
-every other constraint on the stand's backups was sized against that number.
-This change puts `gzip -6` between the dump and the encryptor —
-`audr-<ts>.sql.gz.age` — and teaches `restore.sh` the matching step.
-
-The risk in this change is entirely in the restore path: making *new* dumps
-smaller while silently breaking the restore of *existing* ones would be
-strictly worse than large dumps. So the gate was a real restore of **both**
-shapes, not just the new one.
-
-## The win, measured
-
-| | Dump | Size |
-|---|---|---|
-| Before (AUD-562, uncompressed) | `audr-20261015-142732.sql.age` | 295,260,620 B — 282 MiB |
-| After (this change) | `audr-20261015-172140.sql.gz.age` | 51,621,096 B — **49 MiB** |
-
-**5.7x**, not the 5-10x the issue estimated from first principles, and the
-measured figure is what the comments and docs now carry. Retention stays at
-`--days 7 --weeks 4`: the same window now costs ~0.6 GiB instead of ~3.1 GiB.
-Widening the recovery window is a separate decision and was deliberately not
-smuggled into the change that made it cheap.
-
-## Steps and results
-
-Each shape was restored into its **own** isolated throwaway stack —
-`postgres:16-alpine`, own compose project, own volume, own network, no published
-port — and each target was confirmed to have `0` tables in `public` before the
-restore, so both were restores into genuinely empty databases rather than over a
-migrated schema.
-
-| Step | Command | Result |
-|---|---|---|
-| 1. Live counts | `query_to_xml` over every `public` base table | 35 tables, captured before the dump |
-| 2. New shape restores | `restore.sh audr-20261015-172140.sql.gz.age` into `audr-drill-564gz` | Exit **0**, **zero** `ERROR:` lines from `psql` |
-| 3. Row counts | same query against the restored DB | **35 of 35 tables matched the live database exactly**, including `job_run` at 901,380 |
-| 4. Distinct databases | `pg_postmaster_start_time()` on both | Drill `2026-10-15 17:24:26`, live `2026-10-07 10:30:03` — the counts above were read from the drill, not from live by accident. Live `job_run` moved to 901,381 during the drill, as an append-only table should |
-| 5. KEK-wrapped ciphertext | `md5(string_agg(...))` over `key_state.wrapped_key`, `wallet.{address_ciphertext,label_ciphertext,address_bidx}`, `integration.encrypted_blob` | Byte-identical, live vs restored, all three |
-| 6. Real decrypt | app's own `get_master_key` / `decrypt_address` / `decrypt_label` from the running backend image, `SECRET_KEY` from the host's `.env`, pointed at the restored DB | Master key unwrapped (32 bytes); both wallets' addresses and labels decrypted to their real values; `balance_observation` 124,101 rows; latest `history_point` `quality = complete`, `total_value_usd` = 133228.688387555993181907 |
-| 7. **Old shape still restores** | `restore.sh audr-20261015-142732.sql.age` (the pre-change 282 MiB dump) into `audr-drill-564old` | Exit **0**, **zero** `ERROR:` lines |
-| 8. Old shape decrypts | steps 5–6 repeated against it | Ciphertext checksums identical to live in all three tables; addresses and labels decrypted; `balance_observation` 121,653, `total_value_usd` = 127598.540250440065728237 — **exactly the figures AUD-562 recorded for this artefact**, which independently confirms the old dump is intact and the new `restore.sh` reads it unchanged |
-| 9. Pruner on mixed names | `dump-prune.py --prefix audr --days 7 --weeks 4` (dry run) | `3 files, 0.82 GiB, keep 3, delete 0` — the old `.sql.age` dumps are still recognised as dumps |
-| 10. Unit test suite | `pytest scripts/test_dump_prune.py` | 22 passed, including the new cases for `.sql.gz.age` / `.sql.gz.gpg`, the rejection of `encrypt-then-compress` (`.sql.age.gz`) and `.part` names, and a mixed-shape directory pruning as one series |
-
-Step 8 is the one that justifies this change shipping at all. Step 7 proves the
-old dump *loads*; step 8 proves it loads the *right bytes*, with the host's KEK
-still the right key for them.
-
-## A note on the pruner regex
-
-The pattern went from `\.sql(?:\.gz|\.age|\.gpg)?$` to
-`\.sql(?:\.gz)?(?:\.age|\.gpg)?$`. The old one admitted `.gz` **or** an
-encryption suffix but not both, so `audr-<ts>.sql.gz.age` would have matched
-nothing — and a file that is not a dump is never a candidate, so the `--weeks`
-cap would have silently stopped bounding the one directory AUD-562 added it to
-bound. The disk-full it exists to prevent would have arrived anyway, with a
-green timer the whole way.
-
-## An incident worth recording
-
-The first run of this drill was destroyed mid-restore: `psql` died with
-`FATAL: terminating connection due to administrator command` and the drill
-container, network and volume were all gone. The cause was a **concurrent
-sibling run of this same agent** performing the same drill under the same
-compose project name and running its `down -v` cleanup while this restore was in
-flight. Nothing touched the live stack (`audr-db-1`, 8 days up, `audr_db_data`
-untouched; the only reads against it were `pg_dump` and the count queries). The
-fix is procedural and cheap: give a throwaway stack a **run-unique** project
-name, not a task-unique one.
-
-## Cleanup
-
-Both drill stacks were removed with `down -v --remove-orphans`, and
-`/tmp/aud564` deleted. `install-backup.sh` was then re-run so the pinned copies
-on the host match this branch — without that step the host keeps writing the old
-uncompressed shape no matter what this repo says.
-
----
-
-# Verification: Compressed dumps, and a two-shape restore drill (AUD-564)
-
-**Date**: 2026-10-15
-**Branch**: fix/aud-564-compress-dumps
-**Author**: infraLead
-**Host**: the owner stand, 192.168.1.228
-
-## Scope
-
 AUD-564 put `gzip` between `pg_dump` and `age` in `scripts/backup.sh`. The
 saving is real but it is not the interesting part of this drill. The risk in
 this change is entirely on the restore side: a change that makes *new* dumps
@@ -939,6 +850,12 @@ only reads against it were `pg_dump` and the count/checksum queries.
 Row counts came from `query_to_xml` over every `public` table, not
 `pg_stat_user_tables.n_live_tup`, which is an estimate and reads `0` for
 several tables that have rows.
+
+One check worth stating because "35 of 35 matched" is exactly what reading the
+*live* database by mistake would also produce: `pg_postmaster_start_time()` was
+compared on both targets. The drill reported `2026-10-15 17:24:26` and live
+`2026-10-07 10:30:03`, eight days apart, so the matching counts came from the
+restored database and not from the one the dump was taken out of.
 
 ## Results
 
@@ -989,6 +906,21 @@ deleted. Two further drill stacks from earlier in this change
 (`audr-drill-564gz`, `audr-drill-564old`) were found still running and were
 removed with their volumes and networks; `/` went back to 11 GiB free. The
 three pre-existing dumps in `~/audr/backups` were not touched by any step.
+
+### Why there were stacks to find
+
+Two concurrent runs of this agent drilled this change at the same time, and the
+first attempt was destroyed mid-restore: `psql` died with `FATAL: terminating
+connection due to administrator command`, and the drill container, network and
+volume were all gone — one run's `down -v` cleanup landed while the other's
+restore was still streaming. Both runs then re-drilled under run-specific
+project names, which is why two extra stacks were left to collect here.
+
+No step in either run targeted the live stack: `audr-db-1` stayed up throughout
+(8 days at the time), `audr_db_data` was untouched, and the only reads against
+it were `pg_dump` and the count/checksum queries. The lesson is cheap and
+procedural: a throwaway stack needs a **run-unique** project name, not a
+task-unique one, or a sibling's cleanup is indistinguishable from an incident.
 
 ## Conclusion
 
