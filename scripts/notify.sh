@@ -5,6 +5,7 @@
 #   scripts/notify.sh "stand is down"
 #   printf '%s\n' "$body" | scripts/notify.sh --key stand-down
 #   scripts/notify.sh --key stand-down --resolve "back up"
+#   scripts/notify.sh --dry-run --key stand-down "drill"   # delivers nothing
 #
 # TWO SINKS, EITHER OR BOTH
 # -------------------------
@@ -49,9 +50,19 @@ set -uo pipefail
 strict=0
 alert_key=""
 resolve=0
+# --dry-run (or AUDR_NOTIFY_DRY_RUN=1) renders the alert and reports which sinks
+# would have taken it, delivering to none and spooling nothing. The environment
+# spelling exists so a drill sets it once and every nested caller inherits it:
+# `AUDR_NOTIFY_DRY_RUN=1 scripts/stand-watchdog.sh` exercises the whole path,
+# which is how AUD-567's alert should have been proven instead of publishing
+# AUD-570. The watchdog still writes its own dedupe state, so a drill should
+# point AUDR_WATCHDOG_STATE_DIR at a scratch directory too.
+dry=0
+[ "${AUDR_NOTIFY_DRY_RUN:-0}" = 1 ] && dry=1
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --strict)  strict=1; shift ;;
+    --dry-run) dry=1; shift ;;
     --resolve) resolve=1; shift ;;
     --key)     alert_key="${2:-}"; shift 2 ;;
     --key=*)   alert_key="${1#--key=}"; shift ;;
@@ -81,6 +92,10 @@ if [ -f "$BOARD" ]; then
   board_args=()
   [ -n "$alert_key" ] && board_args+=(--key "$alert_key")
   [ "$resolve" = 1 ] && board_args+=(--resolve)
+  # Passed through rather than short-circuited here: notify-board.py is the only
+  # thing that knows whether the credentials resolve and whether this key
+  # already has an issue open, and those are the two answers a drill wants.
+  [ "$dry" = 1 ] && board_args+=(--dry-run)
   # Exit codes are this script's contract with notify-board.py:
   #   0 delivered (or nothing to resolve), 1 configured but failed,
   #   3 no credentials. See its header.
@@ -111,7 +126,12 @@ if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
   done
 fi
 
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ] && [ "$dry" = 1 ]; then
+  # Credentials resolved, which is the half of this sink that can be verified
+  # without sending; the POST itself is what a drill must not do.
+  echo "[notify] DRY RUN — telegram credentials resolved, would send ${#message} chars"
+  telegram_state=ok
+elif [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
   telegram_state=fail
   # Three attempts: the thing we are usually reporting is a host in a bad state,
   # which is exactly when one outbound request is most likely to blip.
@@ -159,6 +179,13 @@ SPOOL_MAX_LINES="${AUDR_SPOOL_MAX_LINES:-200}"
 
 spool_alert() {
   reason="$1"
+  # Same reasoning as --strict below: the drain replays this file into the board
+  # from inside an agent run, so spooling drill text would publish it later —
+  # exactly the delayed-false-alarm shape that produced AUD-570.
+  [ "$dry" = 1 ] && {
+    echo "[notify] DRY RUN — not spooled (reason would have been $reason)"
+    return 0
+  }
   command -v python3 >/dev/null 2>&1 || {
     echo "[notify] no python3 — undelivered alert not spooled" >&2
     return 1
@@ -236,6 +263,11 @@ fi
 if [ "$strict" = 1 ] && { [ "$board_state" = fail ] || [ "$telegram_state" = fail ]; }; then
   echo "[notify] delivered to some channels but not all (board=${board_state:-skipped} telegram=${telegram_state:-skipped})" >&2
   exit 1
+fi
+
+if [ "$dry" = 1 ]; then
+  echo "[notify] DRY RUN — nothing delivered (board=${board_state:-skipped} telegram=${telegram_state:-skipped} would have taken it)"
+  exit 0
 fi
 
 echo "[notify] delivered (board=${board_state:-skipped} telegram=${telegram_state:-skipped})"

@@ -246,6 +246,11 @@ def main(argv: list[str]) -> int:
         "--resolve", action="store_true", help="the condition has cleared; close the issue"
     )
     parser.add_argument("--state-dir", default="", help="override where recorded issue ids live")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="resolve credentials and report the dedupe decision; write nothing to the board",
+    )
     parser.add_argument("message", nargs="*", help="alert body; read from stdin when omitted")
     args = parser.parse_args(argv)
 
@@ -286,6 +291,31 @@ def main(argv: list[str]) -> int:
     path = state_path(state_dir, args.key) if args.key else ""
     existing = read_open_issue(cfg, path) if path else None
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: UP017
+
+    # A drill has to exercise the parts that actually break — credential
+    # resolution, the URL, and the dedupe decision — without leaving a real
+    # `critical` issue behind. AUD-570 is what the alternative costs: a
+    # backdated fixture in a scratch directory, used to prove the AUD-567 alert
+    # path fires, opened a board card reporting the stand's backups as 27h stale
+    # (from a /tmp path, on the wrong host) while the stand's newest dump was
+    # three hours old. Everything above this point is reads only, so the
+    # reported decision is the one a real send would take.
+    if args.dry_run:
+        if args.resolve:
+            would = (
+                f"close issue {existing}"
+                if existing
+                else "do nothing — no open issue recorded for this key"
+            )
+        elif existing:
+            would = f"comment on the open issue {existing}"
+        else:
+            would = f"open a new critical issue titled {title_for(message, stamp)!r}"
+        log(f"DRY RUN — would {would}")
+        log("message NOT sent:")
+        for line in message.splitlines():
+            log(f"  {line}")
+        return 0
 
     if args.resolve:
         if not existing:
