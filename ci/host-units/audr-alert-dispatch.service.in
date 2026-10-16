@@ -1,0 +1,23 @@
+# Template — scripts/install-watchdog.sh substitutes @INSTALL_DIR@ and
+# @REMOTE_DIR@ and installs the result as
+# /etc/systemd/system/audr-alert-dispatch.service (ADR-007 phase 2, AUD-584).
+# Same reasoning as audr-watchdog.service.in: host layout stays out of a public
+# repository, and a second host cannot inherit this one's directories.
+[Unit]
+Description=audr news alert dispatch — pushes pending critical news_alert rows via notify.sh (AUD-584)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=codex
+# The live stack's compose project directory: the script runs
+# `docker compose exec -T worker` from there, and notify.sh reads
+# secrets/telegram.env and secrets/paperclip.env out of it — so the unit itself
+# carries no credential.
+Environment=AUDR_REMOTE_DIR=@REMOTE_DIR@
+ExecStart=@INSTALL_DIR@/scripts/alert-dispatch.sh
+# A tick that cannot finish must not pile up behind the next one. The script
+# already bounds each `docker compose exec` with `timeout`; this is the backstop
+# for the case where the script itself wedges.
+TimeoutStartSec=5min
