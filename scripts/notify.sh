@@ -6,6 +6,7 @@
 #   printf '%s\n' "$body" | scripts/notify.sh --key stand-down
 #   scripts/notify.sh --key stand-down --resolve "back up"
 #   scripts/notify.sh --dry-run --key stand-down "drill"   # delivers nothing
+#   scripts/notify.sh --road-file /tmp/road "..."; cat /tmp/road   # board|spool|...
 #
 # TWO SINKS, EITHER OR BOTH
 # -------------------------
@@ -45,11 +46,33 @@
 # activating a channel is purely dropping its file in place — no code change and
 # no redeploy. Pass --strict to invert this for a connectivity test; it then
 # requires every configured sink to have delivered.
+#
+# WHICH ROAD IT TOOK (--road-file, AUD-595). The exit code answers "did this
+# helper do its job", and for every caller on a failure path that is the right
+# question — which is why spooling exits 0 and why --strict is NOT the way to
+# learn more. A caller that must RECORD the outcome needs a second question
+# answered ("delivered to a human, or parked on disk?"), so it passes
+# --road-file and reads one word out of it:
+#
+#   board | telegram | board+telegram   at least one sink took it
+#   spool                               no sink took it; it is on disk, and
+#                                       scripts/drain-alert-spool.py owns it
+#   none                                nothing delivered and nothing spooled
+#                                       (--strict, or the spool write failed)
+#   dry-run                             --dry-run; nothing was sent at all
+#
+# A file rather than an exit code deliberately: five other callers already read
+# the exit status (backup-run.sh, stand-watchdog.sh, deploy.yaml, the installer
+# probe), and redefining 0 for them to tell alert-dispatch.sh one thing would
+# trade a silent gap for a blast radius. The file is written on every exit path,
+# truncated first, so a stale file from a previous call can never be read as
+# this call's answer.
 set -uo pipefail
 
 strict=0
 alert_key=""
 resolve=0
+road_file="${AUDR_NOTIFY_ROAD_FILE:-}"
 # --dry-run (or AUDR_NOTIFY_DRY_RUN=1) renders the alert and reports which sinks
 # would have taken it, delivering to none and spooling nothing. The environment
 # spelling exists so a drill sets it once and every nested caller inherits it:
@@ -66,10 +89,27 @@ while [ "$#" -gt 0 ]; do
     --resolve) resolve=1; shift ;;
     --key)     alert_key="${2:-}"; shift 2 ;;
     --key=*)   alert_key="${1#--key=}"; shift ;;
+    --road-file)  road_file="${2:-}"; shift 2 ;;
+    --road-file=*) road_file="${1#--road-file=}"; shift ;;
     --)        shift; break ;;
     *)         break ;;
   esac
 done
+
+# Writes the road this call took, for a caller that must record the outcome
+# rather than merely react to it. Failing to write it is not allowed to change
+# what the alert does: the message matters more than the bookkeeping, and this
+# whole script exists for callers already on a failure path.
+record_road() {
+  [ -n "$road_file" ] || return 0
+  printf '%s\n' "$1" > "$road_file" 2>/dev/null \
+    || echo "[notify] cannot write road file $road_file" >&2
+  return 0
+}
+
+# Truncated up front, before anything can go wrong, so a leftover file from an
+# earlier call is never mistaken for this call's answer.
+record_road none
 
 if [ "$#" -gt 0 ]; then
   message="$*"
@@ -235,7 +275,16 @@ if len(lines) > cap:
     echo "[notify] failed to spool the undelivered alert" >&2
     return 1
   }
+  record_road spool
   echo "[notify] spooled to $SPOOL_FILE (reason=$reason) — scripts/drain-alert-spool.py delivers it"
+}
+
+# "board", "telegram" or "board+telegram" — the sinks that actually took it.
+delivered_road() {
+  local roads=""
+  [ "$board_state" = ok ] && roads="board"
+  [ "$telegram_state" = ok ] && roads="${roads:+${roads}+}telegram"
+  printf '%s' "${roads:-none}"
 }
 
 # ------------------------------------------------------------------- summary
@@ -246,6 +295,10 @@ if [ -z "$board_state" ] && [ -z "$telegram_state" ]; then
   # Not under --strict: that flag is a human connectivity probe, and spooling
   # its test text would have the drain replay it later as a real board alert.
   [ "$strict" = 1 ] && exit 1
+  # Under --dry-run spool_alert deliberately writes nothing, so neither did any
+  # road get taken — say that rather than leaving the pre-set `none`, which a
+  # caller would record as a real failed delivery.
+  [ "$dry" = 1 ] && record_road dry-run
   spool_alert unconfigured
   exit 0
 fi
@@ -254,6 +307,7 @@ if [ "$board_state" != ok ] && [ "$telegram_state" != ok ]; then
   echo "[notify] GAVE UP — no configured channel accepted the alert. Message follows:" >&2
   printf '%s\n' "$message" | sed 's/^/[notify]   /' >&2
   [ "$strict" = 1 ] && exit 1
+  [ "$dry" = 1 ] && record_road dry-run
   spool_alert undelivered
   exit 0
 fi
@@ -262,13 +316,18 @@ fi
 # counts as a failure: the whole point of the flag is proving the wiring works.
 if [ "$strict" = 1 ] && { [ "$board_state" = fail ] || [ "$telegram_state" = fail ]; }; then
   echo "[notify] delivered to some channels but not all (board=${board_state:-skipped} telegram=${telegram_state:-skipped})" >&2
+  # The road is still what actually happened: --strict changes this script's
+  # verdict, not the fact that a sink took the message.
+  record_road "$(delivered_road)"
   exit 1
 fi
 
 if [ "$dry" = 1 ]; then
   echo "[notify] DRY RUN — nothing delivered (board=${board_state:-skipped} telegram=${telegram_state:-skipped} would have taken it)"
+  record_road dry-run
   exit 0
 fi
 
+record_road "$(delivered_road)"
 echo "[notify] delivered (board=${board_state:-skipped} telegram=${telegram_state:-skipped})"
 exit 0

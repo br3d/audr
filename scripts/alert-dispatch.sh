@@ -17,7 +17,21 @@
 # ONE TICK = READ, SEND, MARK, per alert:
 #   docker compose exec -T worker python -m audr.jobs.alerts_pending   -> JSON
 #   scripts/notify.sh --key news-<asset>-<category> -- <text>          -> push
-#   docker compose exec -T worker python -m audr.jobs.alerts_mark <id> -> dispatched_at
+#   docker compose exec -T worker python -m audr.jobs.alerts_mark \
+#        --via <road> <id>                               -> dispatched_at (+via)
+#
+# THE ROAD IS PART OF THE MARK (AUD-595). notify.sh exits 0 both when a sink
+# accepted the alert and when none did and it was spooled for
+# scripts/drain-alert-spool.py to replay. Both are deliveries, at very different
+# latencies, and marking the row on either is correct — what was wrong was
+# recording them identically: a spooled alert left the pending set with a
+# `dispatched_at` that reads as "a human was pushed at", which is why the AUD-592
+# watchdog check is blind to the spool road. So notify.sh reports which road it
+# took in a --road-file and that word goes onto the row. The staleness of the
+# spool itself is watched by its own artefact — the age of the oldest line in
+# undelivered.jsonl, stand-watchdog.sh's check_alert_spool_age — rather than by
+# holding the row pending; docs/deploy-runbook.md records why --strict was the
+# wrong fix.
 #
 # Marking happens per alert, immediately after its notify.sh returns 0, rather
 # than in one batch at the end: the window in which a crash re-sends an alert is
@@ -60,6 +74,17 @@ LIMIT="${AUDR_ALERT_DISPATCH_LIMIT:-20}"
 # A hung `docker compose exec` must not leave the unit running into the next
 # tick. 60s is generous for a query behind a partial index.
 EXEC_TIMEOUT="${AUDR_ALERT_DISPATCH_TIMEOUT:-60}"
+
+# Where notify.sh reports which road each alert took (AUD-595). In the state
+# directory rather than /tmp: the unit's own runtime state belongs with the
+# spool it is reporting about, and a shared /tmp path is a symlink target on a
+# multi-user host. Removed on the way out, including on a signal — a stale road
+# file is never read as fresh (notify.sh truncates it per call) but leaving one
+# behind invites exactly that reading.
+ROAD_DIR="${AUDR_NOTIFY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/audr-notify}"
+mkdir -p "$ROAD_DIR" 2>/dev/null || ROAD_DIR="${TMPDIR:-/tmp}"
+ROAD_FILE="$ROAD_DIR/dispatch-road.$$"
+trap 'rm -f "$ROAD_FILE"' EXIT HUP INT TERM
 
 dry=0
 case "${1:-}" in
@@ -136,6 +161,10 @@ fi
 stamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 sent=0
 failed=0
+# Of the `sent`, how many only reached the spool. Reported separately in the
+# summary line so `journalctl -u audr-alert-dispatch` stops reading "2
+# dispatched" over a tick that pushed nothing at anybody.
+spooled=0
 
 # Fed by redirection rather than a pipe so the counters survive the loop — a
 # `while read` on the right-hand side of a pipe runs in a subshell.
@@ -165,7 +194,11 @@ while IFS=$'\t' read -r id key symbol category summary title url news_site publi
     "In-app: the alerts list carries every severity, including the warnings" \
     "that are deliberately not pushed here.")"
 
-  notify_args=(--key "$key")
+  # One road file for the whole tick, truncated by notify.sh itself on every
+  # call, so a call that cannot write it leaves an empty file and this records
+  # no road rather than the previous alert's.
+  : > "$ROAD_FILE" 2>/dev/null || true
+  notify_args=(--key "$key" --road-file "$ROAD_FILE")
   [ "$dry" = 1 ] && notify_args+=(--dry-run)
 
   # `--` is the boundary between flags and the alert body: a headline is
@@ -177,11 +210,30 @@ while IFS=$'\t' read -r id key symbol category summary title url news_site publi
 
   if [ "$notify_rc" -eq 0 ]; then
     sent=$((sent + 1))
+    # One word, from notify.sh's own mouth. Anything unexpected (an empty file
+    # because this notify.sh predates --road-file, a word the worker's
+    # constraint would reject) is dropped rather than guessed at: the mark must
+    # still happen, and `dispatched_via IS NULL` honestly says "road unknown".
+    road="$(tr -d '[:space:]' < "$ROAD_FILE" 2>/dev/null || true)"
+    case "$road" in
+      board|telegram|board+telegram|spool) ;;
+      *) [ -n "$road" ] && echo "[alert-dispatch] notify.sh reported an unknown road '${road}' — marking without it" >&2
+         road="" ;;
+    esac
+    if [ "$road" = spool ]; then
+      spooled=$((spooled + 1))
+      # Said out loud per alert: this is the one outcome that looks like
+      # delivery in the journal and is not one yet.
+      echo "[alert-dispatch] $id was SPOOLED, not pushed — scripts/drain-alert-spool.py owns it now"
+    fi
+    mark_args=()
+    [ -n "$road" ] && mark_args+=("--via=$road")
     if [ "$dry" = 1 ]; then
-      echo "[alert-dispatch] DRY RUN — would mark $id dispatched"
+      echo "[alert-dispatch] DRY RUN — would mark $id dispatched${road:+ via $road}"
       continue
     fi
-    if ! mark_out="$(worker_exec python -m audr.jobs.alerts_mark "$id" 2>&1)"; then
+    if ! mark_out="$(worker_exec python -m audr.jobs.alerts_mark \
+      "${mark_args[@]+"${mark_args[@]}"}" "$id" 2>&1)"; then
       # Delivered but not marked: the next tick will send it again and --key
       # will collapse it. Say so rather than failing, so the journal explains
       # the duplicate somebody may see on the board.
@@ -208,6 +260,6 @@ EOF
 if [ "$dry" = 1 ]; then
   echo "[alert-dispatch] DRY RUN — $total pending, $sent would have been accepted, $failed would have failed"
 else
-  echo "[alert-dispatch] $total pending, $sent dispatched, $failed failed"
+  echo "[alert-dispatch] $total pending, $sent dispatched ($spooled of them spooled, not pushed), $failed failed"
 fi
 exit 0

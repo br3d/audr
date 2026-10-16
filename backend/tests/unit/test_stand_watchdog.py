@@ -1,4 +1,4 @@
-"""The watchdog's secondary checks: disk pressure (AUD-580), dispatch lag (AUD-592).
+"""The watchdog's secondary checks: disk (AUD-580), dispatch lag (AUD-592), spool (AUD-595).
 
 `scripts/host-gc.sh` has always been able to *detect* disk pressure — it has two
 escalating WARN paths for it — but it only ever `echo`s, from an `if: always()`
@@ -14,6 +14,11 @@ state was real after AUD-584 phase 2 merged — the timer ticked for an hour
 against an image with no `audr.jobs.alerts_pending`, and it was found only by
 reading the journal by eye.
 
+The spool check (AUD-595) is the other half of that same layer: because
+notify.sh exits 0 when it only *spools* an alert, the dispatch-lag check cannot
+see the road where nothing reached a human at all. Its artefact is the age of
+the oldest line in `undelivered.jsonl`.
+
 These tests drive the real `scripts/stand-watchdog.sh` (bind-mounted by
 compose.test.yaml) with a stubbed `df` and `docker` on PATH and a stubbed
 `notify.sh`, so what is asserted is the shipped script's behaviour, not a
@@ -25,9 +30,11 @@ healthy host.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -136,6 +143,10 @@ def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
             "AUDR_REMOTE_DIR": str(tmp_path),
             "DOCKER_CALLS": str(tmp_path / "docker-calls.log"),
             "PSQL_ROW": QUIET_ROW,
+            # Where the spool check (AUD-595) looks. Left un-created on
+            # purpose: "no spool file" is the healthy state, so the other
+            # checks' tests keep exactly one condition in play each.
+            "AUDR_NOTIFY_STATE_DIR": str(tmp_path / "notify-state"),
             # The probe cannot reach a stand from the test container. Port 1 on
             # localhost refuses fast, and a threshold far above one tick keeps
             # that failure from firing an outage alert into the same log.
@@ -503,3 +514,196 @@ def test_threshold_default_is_above_host_gc_warn_pct() -> None:
         f"watchdog alerts at {disk_warn}% but host-gc only escalates at "
         f"{warn_pct}% — the alert would fire before GC has had its chance"
     )
+
+
+# ------------------------------------------------- undrained spool (AUD-595)
+#
+# The road the dispatch-lag check above deliberately cannot see. notify.sh
+# exits 0 when no sink took an alert — it parks it in undelivered.jsonl for
+# scripts/drain-alert-spool.py to replay — so the row is marked dispatched and
+# leaves the pending set. Correct, and it must stay correct: with the stand's
+# board token answering 401, holding those rows pending would keep every alert
+# pending forever and make the lag check fire every tick. So the artefact for
+# this road is the spool file's own age, the same shape as AUD-567's backup
+# check watching the dump's mtime rather than the timer.
+
+SPOOL_KEY = "alert-spool-stale"
+
+
+def _spool_calls(calls: Path) -> list[str]:
+    if not calls.exists():
+        return []
+    return [
+        line
+        for line in calls.read_text(encoding="utf-8").splitlines()
+        if f"--key {SPOOL_KEY}" in line
+    ]
+
+
+def _write_spool(env: dict[str, str], records: list[tuple[float, str]]) -> Path:
+    """Write undelivered.jsonl from (age-in-hours, key) pairs."""
+    spool_dir = Path(env["AUDR_NOTIFY_STATE_DIR"])
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    path = spool_dir / "undelivered.jsonl"
+    now = time.time()
+    path.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - age_h * 3600)),
+                    "key": key,
+                    "resolve": False,
+                    "reason": "unconfigured",
+                    "message": "🔴 audr: hack_exploit alert on ETH\nwith a newline and a 'quote'",
+                }
+            )
+            + "\n"
+            for age_h, key in records
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_no_spool_file_is_quiet_but_not_silent(tmp_path: Path) -> None:
+    # A drained spool and a check that stopped running must not look identical.
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    proc = _run(script, env)
+    assert _spool_calls(calls) == []
+    assert "alert spool ok (no spool file" in proc.stdout
+
+
+def test_a_fresh_spool_does_not_alert(tmp_path: Path) -> None:
+    # The drain routine runs every ~3h; an alert spooled an hour ago is simply
+    # in flight, not undelivered.
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    _write_spool(env, [(1, "news-eth-hack-exploit")])
+    proc = _run(script, env)
+    assert _spool_calls(calls) == []
+    assert "alert spool ok (1 record(s), oldest 1h" in proc.stdout
+
+
+def test_a_spool_older_than_the_limit_alerts(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    _write_spool(env, [(20, "news-eth-hack-exploit"), (2, "news-crv-depeg")])
+
+    proc = _run(script, env)
+
+    sent = _spool_calls(calls)
+    assert len(sent) == 1, sent
+    # The oldest record sets the age — a fresh alert landing on top of a
+    # week-old one must not reset its clock.
+    assert "oldest 20h" in sent[0]
+    assert "PARKED ON DISK" in sent[0]
+    # What a reader needs first: the drain command, and that the rows already
+    # read as dispatched.
+    assert "drain-alert-spool.py" in sent[0]
+    assert "dispatched_via = 'spool'" in sent[0]
+    assert "ALERT sent — alert spool stale (2 record(s), oldest 20h" in proc.stdout
+
+
+def test_the_checks_own_alert_does_not_sustain_the_condition(tmp_path: Path) -> None:
+    """The self-reference that would make this check unresolvable.
+
+    This alert is sent through notify.sh, which on a stand with no working sink
+    spools it — into the very file being measured. Counting it would make the
+    condition permanently true from its own first message, so records under its
+    own key are excluded from the age.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    _write_spool(env, [(30, SPOOL_KEY)])
+
+    proc = _run(script, env)
+
+    assert _spool_calls(calls) == []
+    assert "alert spool ok (0 record(s)" in proc.stdout
+
+
+def test_remind_window_suppresses_the_second_spool_fire(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    env["AUDR_SPOOL_REMIND_HOURS"] = "12"
+    _write_spool(env, [(20, "news-eth-hack-exploit")])
+
+    _run(script, env)
+    proc = _run(script, env)
+
+    assert len(_spool_calls(calls)) == 1
+    assert "already alerted, reminding in" in proc.stdout
+
+
+def test_a_drained_spool_sends_one_resolve_and_clears_state(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    spool = _write_spool(env, [(20, "news-eth-hack-exploit")])
+    _run(script, env)
+    assert len(_spool_calls(calls)) == 1
+
+    # What drain-alert-spool.py leaves behind once it has replayed everything.
+    spool.unlink()
+    proc = _run(script, env)
+
+    sent = _spool_calls(calls)
+    assert len(sent) == 2, sent
+    assert "--resolve" in sent[1]
+    assert "drained" in proc.stdout
+    assert not (Path(env["AUDR_WATCHDOG_STATE_DIR"]) / "alert-spool-stale-alerted-at").exists()
+
+    # And the recovery is sent once, not on every tick afterwards.
+    proc = _run(script, env)
+    assert len(_spool_calls(calls)) == 2
+    assert "--resolve" not in proc.stdout
+
+
+def test_a_truncated_last_line_is_ignored_not_fatal(tmp_path: Path) -> None:
+    # A tick can read the file while notify.sh is appending to it. A half-written
+    # record is not evidence of anything — the next tick sees it whole — and must
+    # not take the whole check down.
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    spool = _write_spool(env, [(20, "news-eth-hack-exploit")])
+    with spool.open("a", encoding="utf-8") as fh:
+        fh.write('{"ts": "2026-10-16T10:00:00Z", "key": "news-eth-de')
+
+    proc = _run(script, env)
+
+    sent = _spool_calls(calls)
+    assert len(sent) == 1, sent
+    assert "oldest 20h" in sent[0]
+    assert "1 record(s)" in proc.stdout
+
+
+def test_an_undatable_record_counts_as_old(tmp_path: Path) -> None:
+    # A record nobody can date has still not been delivered, so it must not be
+    # silently treated as fresh.
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    spool_dir = Path(env["AUDR_NOTIFY_STATE_DIR"])
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    (spool_dir / "undelivered.jsonl").write_text(
+        json.dumps({"key": "news-eth-hack-exploit", "message": "no ts at all"}) + "\n",
+        encoding="utf-8",
+    )
+
+    _run(script, env)
+
+    assert len(_spool_calls(calls)) == 1
+
+
+def test_spool_limit_default_clears_the_drain_cadence() -> None:
+    """The default must stay several drain cycles wide.
+
+    The drain is an agent routine on a ~3h cadence, so a limit at or under it
+    would fire on a merely late heartbeat — the failure mode that gets a
+    channel muted (AUD-444's own reasoning about the 5-probe threshold).
+    """
+    if not WATCHDOG.exists():  # pragma: no cover - mount missing
+        pytest.skip("scripts/stand-watchdog.sh is not mounted into the test container")
+    text = WATCHDOG.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.startswith("SPOOL_MAX_AGE_H="):
+            assert int(line.split(":-", 1)[1].rstrip('}"')) >= 9
+            return
+    raise AssertionError("SPOOL_MAX_AGE_H default not found")

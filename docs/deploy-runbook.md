@@ -328,6 +328,13 @@ Two behaviours worth knowing before you read a replayed alert:
   spooled and when it was delivered, because an unlabelled "🔴 audr stand DOWN"
   sends somebody to the host for an incident that ended yesterday.
 
+A spool nobody drains is itself an alertable condition since AUD-595: the
+watchdog measures the age of the oldest record here and speaks at 12h — see
+[*When delivery only reaches the spool*](#when-delivery-only-reaches-the-spool-aud-595).
+News alerts that took this road also say so in the database (`news_alert
+.dispatched_via = 'spool'`), so "dispatched" in the app no longer implies
+anybody was pushed at.
+
 `--strict` sends are never spooled: that flag is a human connectivity probe, and
 its test text would otherwise be replayed later as a real alert.
 
@@ -593,12 +600,97 @@ server gets the colon unparsed and every tick dies on `syntax error at or near
 ":"` — which this check would then report as "cannot read". Do not simplify it
 back.
 
-**Known gap, carded separately.** Because notify.sh exits 0 when it only
-*spools* an alert, the dispatcher marks that row dispatched and it leaves the
-pending set — so the other AUD-584 road ("delivered to nobody, and the spool
-only moves when an agent drains it by hand") is invisible to this check. The
-pending set is a faithful artefact of the first road only. The fix belongs in
-the dispatcher's notify.sh contract, not in this query.
+**This check cannot see the spool road, by design.** Because notify.sh exits 0
+when it only *spools* an alert, the dispatcher marks that row dispatched and it
+leaves the pending set — so the other AUD-584 road ("delivered to nobody, and
+the spool only moves when an agent drains it") is invisible here, and has to
+stay invisible here. That road has its own artefact and its own check: next
+section.
+
+### When delivery only reaches the spool (AUD-595)
+
+`dispatched_at` means "notify.sh accepted it" (ADR-007 rev 2.1), and notify.sh
+accepts an alert **no sink would take**: it writes it to
+`~/.local/state/audr-notify/undelivered.jsonl` and exits 0, because that spool
+is what `drain-alert-spool.py` replays. So one `dispatched_at` covered two very
+different outcomes — somebody was pushed at, or nobody was — and nothing in the
+database, the in-app list or the watchdog could tell them apart. On this stand
+that is the *common* case, not a hypothetical: the board token answers 401, so
+every critical news alert currently takes the spool road.
+
+**The decision.** Three things, and deliberately not a fourth:
+
+1. **notify.sh reports which road it took**, in a file named by `--road-file`:
+   one word — `board` / `telegram` / `board+telegram` / `spool` / `none` /
+   `dry-run`. A file rather than the exit code, because five callers already
+   read that exit status and redefining `0` for all of them to tell the
+   dispatcher one thing would trade a silent gap for a blast radius.
+2. **`news_alert.dispatched_via` records it** — migration 0034, written by
+   `alerts_mark --via`, exposed on `GET /api/v1/alerts`. `dispatched_via =
+   'spool'` reads as "out of the dispatcher's queue, nobody pushed yet".
+3. **The spool's own age is the watched artefact** — `check_alert_spool_age` in
+   `stand-watchdog.sh`, `--key alert-spool-stale`, firing when the oldest record
+   is over 12h old (`AUDR_SPOOL_MAX_AGE_HOURS`, against a drain routine on a
+   ~3h cadence). The same shape as AUD-567's backup check, which watches the
+   dump's mtime rather than the timer that writes it.
+
+**What was rejected, and why it matters.** The one-line fix is to pass
+`--strict` so a spool becomes a non-zero exit, a `dispatch_error`, and a row
+that stays pending for the lag check above to find. Against the current 401
+board token that would make *every* dispatch fail, *every* row stay pending and
+the lag check fire continuously — a muted channel instead of a silent gap — and
+it would disable the spool on the one path that delivers anything at all. So a
+spooled row still leaves the pending set and the lag check stays quiet;
+`dispatched_via` carries the truth and the spool's age carries the alarm.
+
+The spool alert itself travels by the spool when there is no working sink, so
+you will usually read it as a replay from the very drain it is asking for. Two
+consequences: records under its own key are excluded from the age it measures
+(otherwise its first message would make the condition permanently true), and
+what it ultimately asks for is a working board credential, not a drain.
+
+```bash
+# Which alerts were accepted but never pushed at anybody:
+cd ~/audr && docker compose exec -T db psql -U audr -d audr -c \
+  "SELECT id, severity, created_at, dispatched_at, dispatched_via
+     FROM news_alert WHERE dispatched_via = 'spool' ORDER BY created_at DESC LIMIT 10"
+
+# What the watchdog sees, and the three states it distinguishes:
+sudo journalctl -u audr-watchdog -n 20 | grep spool
+#   [watchdog] alert spool ok (no spool file at ...)                     healthy
+#   [watchdog] alert spool ok (1 record(s), oldest 1h, limit 12h)        in flight
+#   [watchdog] ALERT sent — alert spool stale (2 record(s), oldest 20h)  firing
+
+python3 scripts/drain-alert-spool.py --dry-run   # from an agent run: what would be sent
+```
+
+`dispatched_via` is NULL on rows dispatched before migration 0034 — honestly
+"road unknown" rather than a backfilled guess — and on any row marked by a
+dispatcher whose `notify.sh` predates `--road-file`. `install-watchdog.sh` ships
+both files together, so that pairing only comes apart if someone copies one by
+hand.
+
+Drilling it is cheap and needs no database: append a record with an old `ts` to
+a scratch spool and point the watchdog at it. Use a scratch state directory for
+both halves so a drill cannot stand down a real alert, and `--dry-run` so the
+message is not published (`AUDR_NOTIFY_DRY_RUN=1` is inherited by the nested
+notify.sh — but it cannot cover a *systemd* tick, so stop the timer **and** the
+service exactly as in the section above):
+
+```bash
+D=$(mktemp -d); mkdir -p "$D/state"
+python3 - "$D/state/undelivered.jsonl" <<'PY'
+import json, sys, time
+old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 20 * 3600))
+open(sys.argv[1], "w").write(json.dumps(
+    {"ts": old, "key": "news-eth-hack-exploit", "resolve": False,
+     "reason": "unconfigured", "message": "DRILL ROW"}) + "\n")
+PY
+AUDR_NOTIFY_DRY_RUN=1 AUDR_NOTIFY_STATE_DIR="$D/state" \
+AUDR_WATCHDOG_STATE_DIR="$D/wd" \
+  ~/.local/share/audr-watchdog/scripts/stand-watchdog.sh | grep spool
+rm -rf "$D"
+```
 
 ## Installing and inspecting the scheduled backup
 

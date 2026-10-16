@@ -58,6 +58,7 @@ def _fake_host(
     pending: list[dict[str, object]],
     notify_rc: int = 0,
     docker_rc: int = 0,
+    road: str | None = "board",
 ) -> tuple[Path, Path, dict[str, str]]:
     """Lay out a throwaway host and return (script, call log, env).
 
@@ -105,6 +106,18 @@ def _fake_host(
         'for a in "$@"; do\n'
         '  printf "notify-arg %s\\n" "$(printf "%s" "$a" | tr "\\n" " ")" >> "$CALLS"\n'
         "done\n"
+        # The real notify.sh reports which road it took in the file named by
+        # --road-file, and the dispatcher's --via comes from that word alone
+        # (AUD-595). The stub honours the same contract: $ROAD unset stands in
+        # for a notify.sh that predates the flag and writes nothing.
+        'road_file=""\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '  [ "$1" = "--road-file" ] && road_file="$2"\n'
+        "  shift\n"
+        "done\n"
+        'if [ -n "$road_file" ] && [ -n "${ROAD:-}" ]; then\n'
+        '  printf "%s\\n" "$ROAD" > "$road_file"\n'
+        "fi\n"
         # What notify.sh inherits is as much a part of the contract as its argv:
         # it resolves the board and telegram credentials under
         # $AUDR_REMOTE_DIR/secrets/, so an unset value silently costs a sink.
@@ -125,8 +138,15 @@ def _fake_host(
             "CALLS": str(calls),
             "PENDING_JSON": str(pending_file),
             "AUDR_REMOTE_DIR": str(stack),
+            # Keeps the road file (and anything else notify.sh would write)
+            # inside tmp_path instead of the test container's real state dir.
+            "AUDR_NOTIFY_STATE_DIR": str(tmp_path / "notify-state"),
         }
     )
+    if road is None:
+        env.pop("ROAD", None)
+    else:
+        env["ROAD"] = road
     return scripts / "alert-dispatch.sh", calls, env
 
 
@@ -172,11 +192,57 @@ def test_quiet_tick_says_so_and_sends_nothing(tmp_path: Path) -> None:
 def test_delivered_alert_is_marked_dispatched(tmp_path: Path) -> None:
     script, calls, env = _fake_host(tmp_path, pending=[ALERT])
     out = _run(script, env)
-    assert "1 pending, 1 dispatched, 0 failed" in out.stdout
+    assert "1 pending, 1 dispatched (0 of them spooled, not pushed), 0 failed" in out.stdout
     marks = _marks(calls)
     assert len(marks) == 1, _lines(calls)
     assert ALERT["id"] in marks[0]
     assert "--error" not in marks[0]
+    # The road notify.sh reported goes onto the row (AUD-595).
+    assert "--via=board" in marks[0]
+
+
+def test_a_spooled_alert_is_marked_but_recorded_as_spooled(tmp_path: Path) -> None:
+    """The AUD-595 gap: notify.sh exits 0 on a spool, so the row leaves the
+    pending set either way — and must, since spool->drain is a real delivery
+    path and holding it pending would re-send it every tick. What may not
+    happen is recording it as a push at a human: `--via=spool` is the whole
+    point, and the journal has to say it out loud too, because "1 dispatched"
+    over a tick that reached nobody is how this went unnoticed for days."""
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT], road="spool")
+    out = _run(script, env)
+    assert "1 pending, 1 dispatched (1 of them spooled, not pushed), 0 failed" in out.stdout
+    assert "was SPOOLED, not pushed" in out.stdout
+    marks = _marks(calls)
+    assert len(marks) == 1, _lines(calls)
+    assert "--via=spool" in marks[0]
+    # Still marked: a row left pending here is re-sent on the next tick, every
+    # tick, for as long as the sink stays broken.
+    assert "--error" not in marks[0]
+
+
+def test_a_notify_that_reports_no_road_still_marks_the_alert(tmp_path: Path) -> None:
+    """An install directory whose notify.sh predates --road-file.
+
+    The mark must still happen — losing it means re-sending the alert every
+    tick — and the road must stay NULL rather than be guessed at.
+    """
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT], road=None)
+    _run(script, env)
+    marks = _marks(calls)
+    assert len(marks) == 1, _lines(calls)
+    assert "--via" not in marks[0]
+
+
+def test_an_unknown_road_is_dropped_not_passed_through(tmp_path: Path) -> None:
+    """`--via` is constrained at both ends (argparse choices, a CHECK
+    constraint), so a word this script does not recognise must never reach the
+    worker: that would turn a delivered alert into an unmarked one."""
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT], road="carrier-pigeon")
+    out = _run(script, env)
+    assert "unknown road" in out.stderr
+    marks = _marks(calls)
+    assert len(marks) == 1, _lines(calls)
+    assert "--via" not in marks[0]
 
 
 def test_notify_inherits_a_remote_dir_even_when_the_caller_sets_none(tmp_path: Path) -> None:
@@ -218,7 +284,7 @@ def test_a_refused_alert_is_not_marked_dispatched(tmp_path: Path) -> None:
     """The expensive bug: marking on failure loses the alert permanently."""
     script, calls, env = _fake_host(tmp_path, pending=[ALERT], notify_rc=1)
     out = _run(script, env)
-    assert "1 pending, 0 dispatched, 1 failed" in out.stdout
+    assert "1 pending, 0 dispatched (0 of them spooled, not pushed), 1 failed" in out.stdout
     marks = _marks(calls)
     assert len(marks) == 1, _lines(calls)
     assert "--error" in marks[0]
@@ -230,12 +296,14 @@ def test_hostile_headline_cannot_become_a_flag(tmp_path: Path) -> None:
     hostile["summary"] = "-- leading dashes --"
     script, calls, env = _fake_host(tmp_path, pending=[hostile])
     out = _run(script, env)
-    assert "1 pending, 1 dispatched, 0 failed" in out.stdout
+    assert "1 pending, 1 dispatched (0 of them spooled, not pushed), 0 failed" in out.stdout
     args = _notify_args(calls)
     # The flags before `--` are only the ones the script chose, and the body
     # arrives as exactly one argument after it.
-    assert args[:3] == ["--key", hostile["key"], "--"]
-    assert len(args) == 4, args
+    assert args[:2] == ["--key", hostile["key"]]
+    assert args[2] == "--road-file"
+    assert args[4] == "--"
+    assert len(args) == 6, args
     assert not Path("/tmp/audr-pwned").exists(), "command substitution ran"  # noqa: S108
     # Two calls would mean the embedded newline split one alert into two rows.
     assert len([line for line in _lines(calls) if line == "notify-call"]) == 1

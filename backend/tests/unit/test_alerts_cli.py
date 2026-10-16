@@ -66,6 +66,30 @@ class _StubSession:
         return None
 
 
+class _FailsFirstStubSession(_StubSession):
+    """Raises on the FIRST execute only, then behaves normally.
+
+    Poses the one state `mark_dispatched` has a second statement for: an image
+    carrying `dispatched_via` against a database that has not had migration
+    0034 applied yet (AUD-595).
+    """
+
+    def __init__(self, *, error: Exception) -> None:
+        super().__init__(rows=[_row()])
+        self._first_error: Exception | None = error
+        self.rolled_back = False
+
+    async def execute(self, _statement: object, params: dict[str, object] | None = None) -> object:
+        if self._first_error is not None:
+            error, self._first_error = self._first_error, None
+            self.params = params
+            raise error
+        return await super().execute(_statement, params)
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
+
+
 def _programming_error(sqlstate: str) -> ProgrammingError:
     orig = types.SimpleNamespace(sqlstate=sqlstate)
     return ProgrammingError("SELECT ...", {}, orig)  # type: ignore[arg-type]
@@ -175,7 +199,63 @@ async def test_marking_dispatched_commits_and_counts() -> None:
         session, alerts_mark.parse_ids(["11111111-1111-4111-8111-111111111111"])
     )
     assert changed == 1
+    # No road given: recorded as NULL rather than invented (AUD-595).
+    assert session.params == {"ids": ["11111111-1111-4111-8111-111111111111"], "via": None}
+
+
+async def test_the_road_is_recorded_with_the_mark() -> None:
+    # The AUD-595 distinction: `dispatched_at` alone cannot tell a push at a
+    # human from an alert parked in the spool, and both set it.
+    session = _StubSession(rows=[_row()])
+    await alerts_mark.mark_dispatched(  # type: ignore[arg-type]
+        session, alerts_mark.parse_ids(["11111111-1111-4111-8111-111111111111"]), "spool"
+    )
+    assert session.params is not None
+    assert session.params["via"] == "spool"
+
+
+def test_via_only_accepts_roads_the_column_allows() -> None:
+    # argparse `choices` and ck_news_alert_dispatched_via (migration 0034) must
+    # agree: a value that passed the CLI and then violated the constraint would
+    # abort the mark and have the alert re-sent on every tick.
+    for road in alerts_mark.DISPATCH_ROADS:
+        assert (
+            alerts_mark.parse_args(["--via", road, "11111111-1111-4111-8111-111111111111"]).via
+            == road
+        )
+    # `none` and `dry-run` are what notify.sh reports when nothing was sent at
+    # all. The dispatcher never marks a row on either, so they are rejected
+    # here rather than stored as if they were deliveries.
+    for rejected in ("carrier-pigeon", "none", "dry-run"):
+        with pytest.raises(SystemExit):
+            alerts_mark.parse_args(["--via", rejected, "11111111-1111-4111-8111-111111111111"])
+
+
+async def test_a_database_without_the_road_column_still_gets_marked() -> None:
+    """The inverse of the AUD-584 outage: new image, un-migrated database.
+
+    If the UPDATE carrying `dispatched_via` simply failed there, the row would
+    stay pending and the same alert be re-sent on every tick until someone
+    noticed. Marking it without the road is the correct degradation.
+    """
+    session = _FailsFirstStubSession(error=_programming_error("42703"))
+    changed = await alerts_mark.mark_dispatched(  # type: ignore[arg-type]
+        session, alerts_mark.parse_ids(["11111111-1111-4111-8111-111111111111"]), "spool"
+    )
+    assert changed == 1
+    assert session.rolled_back is True
+    # The retry is the column-less statement, so it carries no `via` parameter.
     assert session.params == {"ids": ["11111111-1111-4111-8111-111111111111"]}
+
+
+async def test_other_programming_errors_on_marking_are_not_swallowed() -> None:
+    # Only UndefinedColumn gets the second chance. Anything else is a real bug,
+    # and a silent retry would hide it behind a successful-looking mark.
+    session = _FailsFirstStubSession(error=_programming_error("42P01"))  # undefined_table
+    with pytest.raises(ProgrammingError):
+        await alerts_mark.mark_dispatched(  # type: ignore[arg-type]
+            session, alerts_mark.parse_ids(["11111111-1111-4111-8111-111111111111"]), "spool"
+        )
 
 
 async def test_dispatch_error_is_truncated_before_it_reaches_the_column() -> None:
