@@ -368,8 +368,33 @@ proves.
 
 ```bash
 scripts/install-watchdog.sh            # install or update, then show status
-scripts/install-watchdog.sh --check    # what is installed, and whether creds exist
+scripts/install-watchdog.sh --check    # what is installed, and whether each sink answers
 ```
+
+Both modes end by **probing** the sinks instead of listing their files
+(AUD-594): the board credential through a read-only `notify-board.py --probe`
+(`GET /api/agents/me`, never a POST), the Telegram token through `getMe`. Read
+that verdict, not the file list above it:
+
+| line | means |
+|---|---|
+| `Alerts will be delivered — probed sink(s): …` | those sinks answered; delivery is direct, inside the probe window |
+| `configured and did NOT answer: …` | the file is there and the channel is dead — delivery falls back to the spool, at agent-heartbeat latency |
+| `NO CHANNEL CONFIGURED` | no credential file at all |
+| `the installed notify-board.py predates --probe` | the host copy is stale; re-run the installer |
+
+Why this is worth a probe: until AUD-594 the installer printed
+`Alert credentials present — alerts will be delivered.` whenever
+`secrets/paperclip.env` existed. On the stand it existed **and the key inside had
+expired**, so every alert spent a 401 and then spooled. Nothing was lost — the
+spool is the designed fallback — but the one line summarising the whole install
+promised the fast path while the slow one was in use. A 401 here is not an
+incident; believing that message was the problem.
+
+A 403 is reported as live on purpose: the credential this file should hold is a
+`task_bridge` key scoped to opening one agent's issues, and such a key can be
+refused on `/api/agents/me` while being perfectly able to POST the alert. An
+expired or wrong key answers 401.
 
 The installer copies the four scripts to `~/.local/share/audr-watchdog/scripts/`
 and renders both units from `ci/host-units/audr-watchdog.service.in` and
@@ -468,6 +493,13 @@ env -u AUDR_REMOTE_DIR ~/.local/share/audr-watchdog/scripts/notify.sh \
   --dry-run --key probe -- probe      # -> no channel configured
 AUDR_REMOTE_DIR=~/audr ~/.local/share/audr-watchdog/scripts/notify.sh \
   --dry-run --key probe -- probe      # -> board=ok
+
+# `board=ok` means the credential RESOLVED and ANSWERED since AUD-594: a dry run
+# now probes it (read-only) instead of reporting a parsed file as a live sink.
+# A dry run against an expired key says so and still exits 0 — a drill must not
+# render as a real delivery failure:
+#   [notify-board] PROBE — credential REJECTED at https://... (HTTP 401): ...
+#   [notify-board] DRY RUN — the board sink would NOT have accepted this alert
 
 # What is pending and why a previous attempt failed (dispatch_error):
 docker compose exec -T db psql -U audr -d audr -c \

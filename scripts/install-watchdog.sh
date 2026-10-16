@@ -40,6 +40,136 @@ REMOTE_DIR="${AUDR_REMOTE_DIR:-/home/codex/audr}"
 INSTALL_DIR="${AUDR_WATCHDOG_DIR:-.local/share/audr-watchdog}"
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$HOST")
 
+# --- sink probes (AUD-594) ----------------------------------------------------
+# This script used to end with "Alert credentials present — alerts will be
+# delivered." on the strength of `test -f secrets/paperclip.env`. Both the file
+# and that line were there on the stand, and the claim was false: the key inside
+# had expired, so every alert spent a 401 and then spooled. Delivery did still
+# happen, by the slow spool->drain path AUD-591 designed on purpose — but an
+# operator who read that line had been told the host delivers directly, inside
+# the probe window. The one sentence summarising the whole install was wrong
+# about the only thing it claimed, which is the same false-green shape as a
+# green unit doing impossible work (AUD-584) and is read the same way: as a
+# reason to stop looking.
+#
+# So both probes ask the channel, not the filesystem, and report three states
+# rather than two — "not configured" and "configured and refused" need different
+# actions. Exit codes are notify-board.py's contract:
+#   0 live   1 configured but refused/unreachable   3 not configured
+probe_board() {
+  # Probes the *installed* copy, which is the one the timers execute. Running
+  # the repo copy instead would prove a file that is not on the delivery path.
+  if ! "${SSH[@]}" "test -f '$1/scripts/notify-board.py'" 2>/dev/null; then
+    echo "[board] $1/scripts/notify-board.py is not installed"
+    return 3
+  fi
+  local rc=0
+  "${SSH[@]}" "AUDR_REMOTE_DIR='$REMOTE_DIR' python3 '$1/scripts/notify-board.py' --probe" || rc=$?
+  # 2 is argparse's usage error, which here means one specific thing: the copy
+  # on the host predates --probe. Worth naming, because the alternative is an
+  # operator reading "did not answer" and going to look at the credential.
+  if [ "$rc" = 2 ]; then
+    echo "[board] the installed notify-board.py predates --probe (AUD-594) — re-run this installer to update it"
+  fi
+  return "$rc"
+}
+
+probe_telegram() {
+  # `bash -s` with the directory as $1: the alternative is nesting three levels
+  # of quoting inside a remote one-liner, which is how a path with a space
+  # becomes a probe that silently tests nothing.
+  "${SSH[@]}" "bash -s -- '$REMOTE_DIR'" <<'REMOTE'
+set -u
+env_file="$1/secrets/telegram.env"
+[ -f "$env_file" ] || { echo "[telegram] $env_file absent"; exit 3; }
+
+# Reads the two names rather than sourcing the file: it holds a bot token, and
+# `.` would execute whatever else ended up in there. Same rule as
+# notify-board.py's load_env_file, for the same reason.
+field() {
+  sed -n "s/^[[:space:]]*\(export[[:space:]]\+\)\?$1=//p" "$env_file" \
+    | tail -1 | tr -d "\"'" | tr -d '\r'
+}
+token="$(field TELEGRAM_BOT_TOKEN)"
+chat="$(field TELEGRAM_CHAT_ID)"
+if [ -z "$token" ] || [ -z "$chat" ]; then
+  echo "[telegram] $env_file exists but TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are not both set"
+  exit 1
+fi
+
+# getMe, not sendMessage: it proves the token without putting a test message in
+# the owner's chat on every install. chat_id cannot be verified without sending,
+# so it is checked for presence only — and the report says so rather than
+# implying more than was checked.
+code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
+  "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo 000)"
+case "$code" in
+  200) echo "[telegram] bot token answers getMe (HTTP 200); chat_id is set, unverifiable without sending"; exit 0 ;;
+  000) echo "[telegram] no answer from api.telegram.org — token not verified"; exit 1 ;;
+  # The token is never echoed: it travels in the request URL, and this output
+  # lands in terminals and CI logs.
+  *)   echo "[telegram] bot token REJECTED (HTTP $code)"; exit 1 ;;
+esac
+REMOTE
+}
+
+# Renders the line this script is judged on, saying only what the probes
+# support. Returns 1 when nothing is configured at all, which is the one case
+# that needs the long setup note instead of a verdict.
+report_sinks() {
+  local board_rc="$1" tg_rc="$2"
+  local live=() broken=()
+  # Anything that is neither 0 nor 3 counts as broken, not as unconfigured.
+  # The codes are a contract, but a probe can still fail in a way outside it —
+  # an installed copy too old to know --probe exits 2 — and defaulting an
+  # unrecognised code to "no credentials here" would print the cheerful setup
+  # note over a channel that exists and is failing. Unknown resolves towards
+  # the louder reading on purpose.
+  classify() {
+    case "$2" in
+      0) live+=("$1") ;;
+      3) ;;
+      *) broken+=("$1") ;;
+    esac
+  }
+  classify board "$board_rc"
+  classify telegram "$tg_rc"
+
+  if [ "${#live[@]}" -gt 0 ]; then
+    echo "==> Alerts will be delivered — probed sink(s): ${live[*]}"
+    if [ "${#broken[@]}" -gt 0 ]; then
+      cat <<EOF
+    NOTE: configured here and did NOT answer: ${broken[*]}. Alerting works
+    through the probed sink(s) above, so nothing is lost — but that channel is
+    dead weight until its credential is replaced.
+EOF
+    fi
+    return 0
+  fi
+
+  if [ "${#broken[@]}" -gt 0 ]; then
+    cat <<EOF
+==> WARNING: configured and did NOT answer: ${broken[*]}. No sink is live, so
+    alerts are NOT delivered from this host.
+
+    They are not lost either: notify.sh spools every undelivered alert to
+    ~/.local/state/audr-notify/undelivered.jsonl and scripts/drain-alert-spool.py
+    replays it from an agent run. That is the designed fallback — AUD-591 settled
+    that the deploy host does not hold a board credential and should not — but it
+    is the SLOW path. Nothing moves until an agent drains the spool, which can be
+    up to an hour. Do not read this install as "the host pages someone in
+    minutes".
+
+    An expired agent token is the usual cause and looks exactly like this: the
+    probe above reports HTTP 401. Replacing it needs a board user, because agents
+    cannot mint their own keys — the format is in the setup note this script
+    prints when no credential file exists at all.
+EOF
+    return 0
+  fi
+  return 1
+}
+
 mode=apply
 case "${1:-}" in
   --check) mode=check ;;
@@ -65,21 +195,31 @@ if [ "$mode" = check ]; then
         echo "not installed"
       fi
     done
-    echo "== credentials =="
-    # Either file on its own is a complete channel; both absent is the only
-    # state in which a detected outage reaches nobody.
-    present=0
+    echo "== credential files =="
     for f in ~/audr/secrets/paperclip.env ~/audr/secrets/telegram.env; do
-      if [ -f "$f" ]; then echo "$f present ($(stat -c %a "$f"))"; present=1; else echo "$f absent"; fi
+      if [ -f "$f" ]; then echo "$f present ($(stat -c %a "$f"))"; else echo "$f absent"; fi
     done
-    [ "$present" = 1 ] || echo "NO CHANNEL CONFIGURED — alerts will be logged on this host and delivered to nobody"
   '
-  exit 0
 fi
 
 # Absolute install path, resolved on the host so ~ belongs to the remote user.
+# Needed by --check too since AUD-594: the board probe runs the installed copy
+# of notify-board.py, so it has to know where that is.
 remote_home="$("${SSH[@]}" 'echo "$HOME"')"
 abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
+
+if [ "$mode" = check ]; then
+  # Presence was listed above because it is a fact worth seeing; it is
+  # deliberately NOT the verdict. A present file whose key has expired is the
+  # state this whole section was rewritten for (AUD-594), and the old code read
+  # it as a configured channel.
+  echo "== sinks (probed, nothing sent) =="
+  check_board_rc=0; probe_board "$abs_install" || check_board_rc=$?
+  check_tg_rc=0;    probe_telegram || check_tg_rc=$?
+  report_sinks "$check_board_rc" "$check_tg_rc" \
+    || echo "==> NO CHANNEL CONFIGURED — alerts are logged on this host and delivered to nobody"
+  exit 0
+fi
 
 echo "==> installing host alerting scripts to $HOST:$abs_install/scripts"
 "${SSH[@]}" "mkdir -p '$abs_install/scripts'"
@@ -120,9 +260,11 @@ echo
 echo "==> installed. Timers:"
 "${SSH[@]}" 'systemctl list-timers audr-watchdog.timer audr-alert-dispatch.timer --no-pager | head -4'
 echo
-"${SSH[@]}" "test -f '$REMOTE_DIR/secrets/paperclip.env' -o -f '$REMOTE_DIR/secrets/telegram.env'" \
-  && echo "==> Alert credentials present — alerts will be delivered." \
-  || cat <<EOF
+echo "==> probing the alert sinks (reads only; nothing is sent)"
+board_rc=0; probe_board "$abs_install" || board_rc=$?
+tg_rc=0;    probe_telegram || tg_rc=$?
+echo
+report_sinks "$board_rc" "$tg_rc" || cat <<EOF
 ==> NOTE: neither $REMOTE_DIR/secrets/paperclip.env nor telegram.env exists, so
     the watchdog is running and will log alerts but deliver them to nobody.
 
@@ -143,7 +285,12 @@ echo
            AUDR_ALERT_ASSIGNEE_AGENT_ID=<agent uuid to wake>
            AUDR_ALERT_PROJECT_ID=<project uuid>
            CREDS
-      3. Verify:  $abs_install/scripts/notify.sh --strict "audr alerting test"
+      3. Verify:  $0 --check
+                  (probes the credential read-only and reports whether it
+                  answers; re-running this installer prints the same verdict)
+
+         For an end-to-end check that the issue really lands:
+                  $abs_install/scripts/notify.sh --strict "audr alerting test"
                   (opens a real issue — close it afterwards)
 
     Telegram remains supported as a second, independent sink; drop

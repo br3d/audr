@@ -2,9 +2,16 @@
 """Unit tests for scripts/notify-board.py.
 
 Deliberately dependency-free: run it with `python3 scripts/test_notify_board.py`.
-The backend pytest suite is not the right home for this — it runs inside a
-container that only copies `backend/`, so it cannot see `scripts/`. Same reason
-as scripts/test_registry_prune.py.
+
+NOTE (AUD-594): the reason recorded here for living outside the backend suite —
+"it runs inside a container that only copies `backend/`, so it cannot see
+`scripts/`" — stopped being true at AUD-580, which bind-mounts individual
+scripts into the test service for exactly this purpose. The live consequence is
+that no CI job runs this file: backend/pyproject.toml pins
+`testpaths = ["tests"]`, so these cases execute only when somebody invokes them
+by hand. New coverage for notify-board.py therefore goes to
+backend/tests/unit/test_notify_board_probe.py plus a mount in compose.test.yaml.
+Relocating what is already here is worth doing and is not AUD-594's scope.
 
 The HTTP layer is stubbed, so nothing here touches the real board. What is under
 test is the lifecycle: the failure mode that matters is not a bad request, it is

@@ -111,6 +111,13 @@ services:
       # — the thing that must not regress (never marking an alert dispatched
       # that notify.sh refused) lives in the shipped script, not in a copy.
       - ./scripts/alert-dispatch.sh:/workspace/scripts/alert-dispatch.sh:ro
+      # AUD-594: tests/unit/test_notify_board_probe.py loads the real
+      # notify-board.py and drives `--probe` over a stubbed HTTP layer. The
+      # script's own scripts/test_notify_board.py is run by no CI job
+      # (backend/pyproject.toml pins testpaths = ["tests"]), so without this
+      # mount the check that stops the installer promising delivery it never
+      # verified would not run anywhere.
+      - ./scripts/notify-board.py:/workspace/scripts/notify-board.py:ro
     profiles:
       - backend
 
