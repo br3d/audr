@@ -485,6 +485,62 @@ itself is `audr-watchdog`'s alert to send, and a unit failing every 60s would
 only repeat it. Alerts are not lost meanwhile: they stay pending in the database
 and the tick after recovery takes them.
 
+### When the dispatcher itself goes mute (AUD-592)
+
+**Do not read `systemctl status audr-alert-dispatch` as an answer.** That exit 0
+above is unconditional: on any unreadable stack the script prints `cannot read
+pending alerts (exit N) — nothing dispatched` and succeeds, so a bridge that can
+deliver nothing at all still leaves `ExecMainStatus=0` behind it. That state was
+real for an hour after phase 2 merged — the timer ticked against an image with
+no `audr.jobs.alerts_pending`, four runs, zero possible deliveries — and it was
+found only by reading the journal by eye.
+
+`audr-watchdog` now has the voice for it. `check_alert_dispatch_lag` queries
+`news_alert` **directly through `psql` in the db container**, which shares no
+code with the dispatcher, so it still sees the rows when the dispatcher's own
+half is the broken part. It alerts under `--key alert-dispatch-stale` when
+either:
+
+- a `critical` row has been pending more than 15 minutes
+  (`AUDR_DISPATCH_LAG_MINUTES`) — nothing is even attempting delivery; or
+- any pending `critical` row carries a `dispatch_error` — notify.sh was reached
+  and refused. No grace on this one, deliberately: notify.sh exits 0 for every
+  outcome it handles (including spooling), so a non-zero exit means it could not
+  run at all.
+
+One key for both, because they want the same first action and an errored row is
+usually also a stale one. It `--resolve`s when the condition clears, reminds
+every 6h while it lasts (`AUDR_DISPATCH_REMIND_HOURS`), and stays silent — with
+a named journal line — when the query cannot run at all or when migration 0033
+has not reached this stand. An unreadable database is not evidence of a stalled
+dispatcher, and both of those causes already have owners.
+
+```bash
+# What the check sees, by hand (this is the condition it queries):
+cd ~/audr && docker compose exec -T db psql -U audr -d audr -tA -F '|' -c \
+  "SELECT count(*) FILTER (WHERE created_at < now() - interval '15 min'),
+          count(*) FILTER (WHERE dispatch_error IS NOT NULL)
+     FROM news_alert WHERE dispatched_at IS NULL AND severity = 'critical'"
+
+sudo journalctl -u audr-watchdog -n 20 | grep dispatch
+#   [watchdog] alert dispatch ok (no critical alert pending over 15m)    healthy
+#   [watchdog] ALERT sent — alert dispatch stale (stale=2 errored=0 ...)  firing
+#   [watchdog] cannot read news_alert (exit 1) — dispatch check skipped   quiet, by design
+```
+
+The watchdog runs the query on stdin rather than `psql -c`, and that is
+load-bearing: psql interpolates `:'var'` in its own lexer, so with `-c` the
+server gets the colon unparsed and every tick dies on `syntax error at or near
+":"` — which this check would then report as "cannot read". Do not simplify it
+back.
+
+**Known gap, carded separately.** Because notify.sh exits 0 when it only
+*spools* an alert, the dispatcher marks that row dispatched and it leaves the
+pending set — so the other AUD-584 road ("delivered to nobody, and the spool
+only moves when an agent drains it by hand") is invisible to this check. The
+pending set is a faithful artefact of the first road only. The fix belongs in
+the dispatcher's notify.sh contract, not in this query.
+
 ## Installing and inspecting the scheduled backup
 
 The second timer on this host, installed the same way and for the same reason

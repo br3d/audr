@@ -1,4 +1,4 @@
-"""The watchdog's disk-pressure check (AUD-580).
+"""The watchdog's secondary checks: disk pressure (AUD-580), dispatch lag (AUD-592).
 
 `scripts/host-gc.sh` has always been able to *detect* disk pressure — it has two
 escalating WARN paths for it — but it only ever `echo`s, from an `if: always()`
@@ -7,12 +7,20 @@ the condition host-gc calls "Docker is no longer the thing filling this disk"
 was invisible, on a host whose own GC header notes that exhaustion "takes the
 live stack's database volume down with it".
 
+The dispatch-lag check (AUD-592) covers the same shape one layer up:
+`scripts/alert-dispatch.sh` exits 0 on any unreadable stack by design, so a
+bridge that cannot deliver a single alert leaves a green unit behind it. That
+state was real after AUD-584 phase 2 merged — the timer ticked for an hour
+against an image with no `audr.jobs.alerts_pending`, and it was found only by
+reading the journal by eye.
+
 These tests drive the real `scripts/stand-watchdog.sh` (bind-mounted by
-compose.test.yaml) with a stubbed `df` on PATH and a stubbed `notify.sh`, so
-what is asserted is the shipped script's behaviour, not a reimplementation of
-it. The threshold, the remind window and the resolve-on-recovery handshake are
-all things that fail silently in production if they regress — a watchdog that
-has stopped alerting looks exactly like a healthy host.
+compose.test.yaml) with a stubbed `df` and `docker` on PATH and a stubbed
+`notify.sh`, so what is asserted is the shipped script's behaviour, not a
+reimplementation of it. The thresholds, the remind windows and the
+resolve-on-recovery handshakes are all things that fail silently in production
+if they regress — a watchdog that has stopped alerting looks exactly like a
+healthy host.
 """
 
 from __future__ import annotations
@@ -34,6 +42,16 @@ WATCHDOG = REPO_ROOT / "scripts" / "stand-watchdog.sh"
 # single board issue: if it collided with `stand-down`, a filling disk would
 # comment on the outage thread instead of opening its own.
 DISK_KEY = "disk-pressure"
+# Same contract for the dispatch check, and additionally distinct from
+# `news-<asset>-<category>`: a broken *bridge* and the alerts it is failing to
+# carry are different conditions with different owners, and collapsing them
+# would file the infrastructure problem as a comment on a market event.
+DISPATCH_KEY = "alert-dispatch-stale"
+
+# The row `docker compose exec db psql ...` returns: stale, errored, oldest-age
+# in minutes, sample dispatch_error. Tab-separated because that is what the
+# script asks psql for with `-tA -F $'\t'`.
+QUIET_ROW = "0\t0\t0\t"
 
 
 def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
@@ -81,6 +99,23 @@ def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
     )
     df.chmod(0o755)
 
+    # Stub docker, standing in for `docker compose exec -T db psql`. Answers
+    # with PSQL_ROW / PSQL_RC / PSQL_STDERR so a test can pose any of the four
+    # states the dispatch check distinguishes — quiet, stale, errored,
+    # unreadable — without a database. Defaults to the quiet row so the other
+    # checks' tests keep exactly one condition in play each.
+    docker = bindir / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf "docker %s\\n" "$*" >> "$DOCKER_CALLS"\n'
+        '[ -n "${PSQL_STDERR:-}" ] && printf "%s\\n" "$PSQL_STDERR" >&2\n'
+        '[ "${PSQL_RC:-0}" -ne 0 ] && exit "$PSQL_RC"\n'
+        'printf "%s\\n" "${PSQL_ROW:-}"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
     # A fresh dump so the backup check stays quiet; it shares the notify stub
     # and would otherwise add its own line to the log.
     backups = tmp_path / "backups"
@@ -94,6 +129,13 @@ def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
             "NOTIFY_CALLS": str(calls),
             "AUDR_WATCHDOG_STATE_DIR": str(tmp_path / "state"),
             "AUDR_BACKUP_DIR": str(backups),
+            # The dispatch check `cd`s here before running compose. tmp_path
+            # exists, so the stub docker is actually reached — pointing it at a
+            # missing directory would make every dispatch test pass through the
+            # "cannot read" branch and assert nothing.
+            "AUDR_REMOTE_DIR": str(tmp_path),
+            "DOCKER_CALLS": str(tmp_path / "docker-calls.log"),
+            "PSQL_ROW": QUIET_ROW,
             # The probe cannot reach a stand from the test container. Port 1 on
             # localhost refuses fast, and a threshold far above one tick keeps
             # that failure from firing an outage alert into the same log.
@@ -241,6 +283,196 @@ def test_unreadable_disk_does_not_alert(tmp_path: Path) -> None:
 
     assert _disk_calls(calls) == []
     assert "cannot read disk usage" in proc.stdout
+
+
+def _dispatch_calls(calls: Path) -> list[str]:
+    if not calls.exists():
+        return []
+    return [
+        line
+        for line in calls.read_text(encoding="utf-8").splitlines()
+        if f"--key {DISPATCH_KEY}" in line
+    ]
+
+
+def test_no_pending_alerts_is_quiet(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+
+    proc = _run(script, env)
+
+    assert _dispatch_calls(calls) == []
+    # Spoken on purpose: a quiet news day and a check that stopped running must
+    # not look identical in the journal.
+    assert "alert dispatch ok" in proc.stdout
+
+
+def test_stale_pending_alert_alerts(tmp_path: Path) -> None:
+    """A critical alert pending past the threshold means nothing is delivering."""
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    # 2 stale, none errored, oldest 47m — the AUD-584 shape: the dispatcher
+    # cannot read the worker at all, so no attempt was ever recorded.
+    env["PSQL_ROW"] = "2\t0\t47\t"
+
+    proc = _run(script, env)
+
+    fired = _dispatch_calls(calls)
+    assert len(fired) == 1
+    assert "--resolve" not in fired[0]
+    assert "NOT being dispatched" in fired[0]
+    # The counts have to reach the body, and the alert must say to read the
+    # journal rather than the unit status — the unit is green in this state,
+    # which is the whole reason this check exists.
+    assert "oldest: 47m" in fired[0]
+    assert "journalctl -u audr-alert-dispatch" in fired[0]
+    assert "ALERT sent — alert dispatch stale" in proc.stdout
+
+
+def test_recorded_dispatch_error_alerts_with_a_different_headline(tmp_path: Path) -> None:
+    """A failed attempt and no attempt at all want different first questions."""
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    # Errored but NOT yet past the lag threshold: the error path has no grace,
+    # because notify.sh exits 0 on every outcome it handles, so a non-zero exit
+    # means it could not run at all.
+    env["PSQL_ROW"] = "0\t1\t2\tnotify.sh exit 127: not found"
+
+    proc = _run(script, env)
+
+    fired = _dispatch_calls(calls)
+    assert len(fired) == 1
+    assert "FAILING to dispatch" in fired[0]
+    # The recorded error is the single most useful line in the alert; losing it
+    # sends the responder to psql for the first question.
+    assert "notify.sh exit 127: not found" in fired[0]
+    assert "ALERT sent" in proc.stdout
+
+
+def test_remind_window_suppresses_the_second_dispatch_fire(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["PSQL_ROW"] = "1\t0\t30\t"
+    env["AUDR_DISPATCH_REMIND_HOURS"] = "6"
+
+    _run(script, env)
+    proc = _run(script, env)
+
+    assert len(_dispatch_calls(calls)) == 1
+    assert "already alerted" in proc.stdout
+
+
+def test_dispatch_recovery_sends_one_resolve_and_clears_state(tmp_path: Path) -> None:
+    """The condition clearing must close the board issue it opened.
+
+    This is the second half of AUD-592's acceptance: alert on a prepared overdue
+    row, then go quiet once the row is gone.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["PSQL_ROW"] = "1\t0\t30\t"
+    _run(script, env)
+    assert len(_dispatch_calls(calls)) == 1
+
+    env["PSQL_ROW"] = QUIET_ROW
+    proc = _run(script, env)
+
+    fired = _dispatch_calls(calls)
+    assert len(fired) == 2
+    assert "--resolve" in fired[1]
+    assert "flowing again" in fired[1]
+    assert "alert dispatch recovered" in proc.stdout
+
+    state = Path(env["AUDR_WATCHDOG_STATE_DIR"]) / "alert-dispatch-alerted-at"
+    assert not state.exists()
+
+    # And a relapse can alert again rather than being swallowed by the stale
+    # remind timestamp.
+    env["PSQL_ROW"] = "1\t0\t30\t"
+    _run(script, env)
+    assert len(_dispatch_calls(calls)) == 3
+
+
+def test_quiet_dispatch_run_sends_no_resolve(tmp_path: Path) -> None:
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+
+    _run(script, env)
+    _run(script, env)
+
+    assert _dispatch_calls(calls) == []
+
+
+def test_unreadable_database_does_not_alert(tmp_path: Path) -> None:
+    """A stack that cannot be queried is not evidence of a stalled dispatcher.
+
+    Same rule as the disk check's unreadable-df case. Every cause already has an
+    owner — a down stand is this script's own outage alert — and guessing in
+    either direction is worse than one honest journal line.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["PSQL_RC"] = "1"
+    env["PSQL_STDERR"] = "error: service db is not running"
+
+    proc = _run(script, env)
+
+    assert _dispatch_calls(calls) == []
+    assert "cannot read news_alert (exit 1)" in proc.stdout
+
+
+def test_missing_table_is_named_explicitly(tmp_path: Path) -> None:
+    """Before migration 0033 reaches a stand, say so rather than "cannot read".
+
+    Both outcomes are silence, so this is only a journal line — but it is the
+    line that distinguishes "phase 1 has not deployed here" from "the database
+    is unreachable", which are different problems with different owners.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["PSQL_RC"] = "3"
+    env["PSQL_STDERR"] = 'ERROR:  relation "news_alert" does not exist'
+
+    proc = _run(script, env)
+
+    assert _dispatch_calls(calls) == []
+    assert "migration 0033 not applied" in proc.stdout
+
+
+def test_garbage_row_does_not_alert(tmp_path: Path) -> None:
+    """psql exiting 0 with an unparseable row must not be read as a count.
+
+    ON_ERROR_STOP is what normally prevents this, but a changed query or a
+    future psql could still hand back something unexpected, and `[ x -ne 0 ]`
+    on a non-number is a bash error that `|| true` would swallow into silence.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["PSQL_ROW"] = "ERROR\tnope\t-\t"
+
+    proc = _run(script, env)
+
+    assert _dispatch_calls(calls) == []
+    assert "unexpected row from news_alert query" in proc.stdout
+
+
+def test_dispatch_query_reads_the_database_not_the_worker(tmp_path: Path) -> None:
+    """The read path must not be the dispatcher's own.
+
+    A check that went through `docker compose exec worker python -m
+    audr.jobs.alerts_pending` would have been blind to the actual AUD-584
+    outage, whose cause was that module being absent from the running image.
+    Asserting on the argv pins the independence that makes this check worth
+    having at all.
+    """
+    script, _, env = _fake_repo(tmp_path, pct=70)
+
+    _run(script, env)
+
+    argv = Path(env["DOCKER_CALLS"]).read_text(encoding="utf-8")
+    assert "psql" in argv
+    assert "exec -T db" in argv
+    assert "alerts_pending" not in argv
+    assert "worker" not in argv
+    # The SQL itself is deliberately absent from argv: psql only interpolates
+    # `:'lag'` in its own lexer, so the query goes in on stdin. With -c the
+    # server gets the colon unparsed and every tick fails on `syntax error at
+    # or near ":"` — measured, and the reason the pipe is there.
+    assert "ON_ERROR_STOP=1" in argv
+    assert "select count(*)" not in argv
+    # A wedged exec must not hold this tick into the next one.
+    assert "timeout" in Path(script).read_text(encoding="utf-8")
 
 
 def test_threshold_default_is_above_host_gc_warn_pct() -> None:

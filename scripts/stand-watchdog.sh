@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Probe the stand's /health/ready and alert on a sustained outage (AUD-444),
-# plus two slower conditions that have no timer of their own: backup staleness
-# (AUD-567) and disk pressure (AUD-580).
+# plus three slower conditions that have no timer of their own: backup staleness
+# (AUD-567), disk pressure (AUD-580) and a mute alert dispatcher (AUD-592).
 #
 # Runs on the deploy host from audr-watchdog.timer, once a minute. One tick =
 # one probe; all the state between ticks is a counter in a file.
@@ -11,7 +11,9 @@
 # liveness proof, recursively, which is exactly the trap AUD-567 fell into. This
 # unit is observably firing every 60s in the journal, so hanging the checks off
 # it is the one place that needs no new proof. Each is independent of the probe
-# and of the other: they run under `|| true` and cannot change its outcome.
+# and of each other: they run under `|| true` and cannot change its outcome.
+# The probe's own curl runs before all of them, so a slow check can delay an
+# outage alert by its timeout but can never lose the reading.
 #
 # WHY THIS EXISTS SEPARATELY FROM CI. The deploy workflow's "Report stand state"
 # step only speaks when a deploy fails, and only to whoever opens the run. The
@@ -105,10 +107,74 @@ DISK_WARN_PCT="${AUDR_DISK_WARN_PCT:-85}"
 DISK_REMIND_H="${AUDR_DISK_REMIND_HOURS:-6}"
 DISK_KEY="${AUDR_DISK_ALERT_KEY:-disk-pressure}"
 
+# --- alert dispatch lag (AUD-592) --------------------------------------------
+# scripts/alert-dispatch.sh is deliberately mute when it cannot read: on any
+# failed `docker compose exec` it prints "cannot read pending alerts (exit N) —
+# nothing dispatched" and exits 0, because every cause of that is someone else's
+# alert to send (stand down -> this watchdog; stale image -> the next deploy;
+# wrong compose dir -> install time). The cost of that choice is that a green
+# unit with ExecMainStatus=0 is indistinguishable from a bridge that cannot
+# deliver anything at all.
+#
+# That is not hypothetical. After AUD-584 phase 2 merged, the timer ticked every
+# minute from 17:57 while the stand still ran the pre-merge image
+# 0.1.2-g00957c0d303e, which has no `audr.jobs.alerts_pending` — four real runs,
+# all "Deactivated successfully", zero possible deliveries. It was found only by
+# reading the journal by eye. A sibling run hit the same end state by a second
+# road the same heartbeat: with AUDR_REMOTE_DIR unexported, a genuine critical
+# was *spooled* as `unconfigured` instead of delivered, and the spool only moves
+# when an agent runs drain-alert-spool.py by hand. Both bugs are fixed; the
+# failure class — no delivery, and nobody finds out — was not.
+#
+# audr-alert-dispatch.timer argues that a stopped dispatcher is not silent,
+# because pending alerts stay visible in-app with dispatched_at IS NULL. That is
+# true for a logged-in owner and false for exactly the audience phase 2 exists
+# to reach: the one who is not looking at the app.
+#
+# WHY THIS READS THE DATABASE DIRECTLY instead of reusing alerts_pending. A
+# check that went through the same `docker compose exec worker python -m
+# audr.jobs.alerts_*` path would have been just as blind to the real AUD-584
+# outage, whose cause was that module being absent from the running image. psql
+# in the db container is a read path that shares no code with the dispatcher, so
+# it still sees the rows when the dispatcher's own half is broken. Same reason
+# this is a check on the already-proven watchdog rather than a fourth timer: a
+# timer watching a timer needs its own liveness proof, recursively (AUD-567).
+DISPATCH_DIR="${AUDR_REMOTE_DIR:-$HOME/audr}"
+DISPATCH_DB_SERVICE="${AUDR_DB_SERVICE:-db}"
+DISPATCH_DB_NAME="${AUDR_DB_NAME:-audr}"
+DISPATCH_DB_USER="${AUDR_DB_USER:-audr}"
+# 15 min against a 60s tick: fifteen chances to deliver before this calls it
+# broken, so a single wedged exec, a deploy restarting the worker, or a tick
+# that lands between the row's INSERT and its own query cannot fire it.
+#
+# The grace applies to the lag trigger ONLY. A recorded dispatch_error fires on
+# the next tick with no grace at all, deliberately: alert-dispatch.sh records
+# that column when notify.sh exits NON-ZERO, and notify.sh exits 0 for every
+# delivery outcome it is written to handle — including "no sink accepted it, so
+# it is spooled". A non-zero exit therefore means notify.sh could not run at
+# all, which no amount of waiting improves.
+#
+# NOTE a limit this check inherits from that same contract. Because notify.sh
+# exits 0 on a spool, alert-dispatch.sh marks the row dispatched and it leaves
+# the pending set — so the AUD-584 spool road ("delivered to nobody, and the
+# spool only moves when an agent drains it by hand") is NOT visible here. The
+# pending set is a faithful artefact of road one (the bridge cannot read) and
+# not of road two. Carded separately rather than papered over here, because the
+# fix belongs in the dispatcher's notify.sh contract, not in this query.
+DISPATCH_LAG_MIN="${AUDR_DISPATCH_LAG_MINUTES:-15}"
+# Hours, like the disk path: the condition is "delivery is broken", which is
+# worth repeating while it lasts but not every minute.
+DISPATCH_REMIND_H="${AUDR_DISPATCH_REMIND_HOURS:-6}"
+DISPATCH_KEY="${AUDR_DISPATCH_ALERT_KEY:-alert-dispatch-stale}"
+# A wedged exec must not hold this tick into the next one. The query is a count
+# behind ix_news_alert_pending; 20s is generous.
+DISPATCH_TIMEOUT="${AUDR_DISPATCH_QUERY_TIMEOUT:-20}"
+
 mkdir -p "$STATE_DIR" || { echo "[watchdog] cannot create $STATE_DIR" >&2; exit 1; }
 
 BACKUP_STATE_FILE="$STATE_DIR/backup-stale-alerted-at"
 DISK_STATE_FILE="$STATE_DIR/disk-pressure-alerted-at"
+DISPATCH_STATE_FILE="$STATE_DIR/alert-dispatch-alerted-at"
 
 # Runs before the health probe and deliberately cannot change its outcome: a
 # stale backup and a down stand are independent conditions, and the probe is the
@@ -248,6 +314,147 @@ check_disk_space() {
   echo "[watchdog] ALERT sent — disk at ${pct}% (limit ${DISK_WARN_PCT}%)"
 }
 
+# Same contract as the two checks above: runs before the probe's branches,
+# cannot change its outcome, every failure path returns rather than exits.
+check_alert_dispatch_lag() {
+  local row rc stderr_file stale errored oldest sample now last headline detail field
+
+  case "$DISPATCH_LAG_MIN" in
+    ''|*[!0-9]*)
+      echo "[watchdog] AUDR_DISPATCH_LAG_MINUTES is not a number — skipping dispatch check"
+      return 0
+      ;;
+  esac
+
+  now="$(date -u +%s)"
+  stderr_file="$STATE_DIR/dispatch-query.err"
+
+  # One statement, one exec, fed on stdin. The counts and the sample error come
+  # back as a single tab-separated row:
+  #   stale    pending criticals older than the threshold
+  #   errored  pending criticals whose last delivery attempt was recorded failed
+  #   oldest   age in whole minutes of the oldest pending critical
+  #   sample   one of the recorded dispatch_error strings, flattened
+  #
+  # ON_ERROR_STOP makes psql exit non-zero on a SQL error, which it otherwise
+  # does not — without it a missing table would come back as exit 0 with an
+  # empty row, i.e. "nothing pending", which is the precise lie this check
+  # exists to stop telling.
+  #
+  # STDIN, NOT -c, AND THAT IS LOAD-BEARING. psql interpolates `:'var'` in its
+  # own lexer, and a -c string is handed to the server unparsed — so the same
+  # query with -c fails with `syntax error at or near ":"`, every tick, which
+  # this check would then report as "cannot read". Measured against
+  # postgres:16-alpine, not inferred. Keeping the threshold a psql variable
+  # rather than pasting it into the SQL is why it is worth the pipe.
+  #
+  # max(dispatch_error) is an arbitrary-but-deterministic pick among the failed
+  # rows. It is a sample for the alert body, not a report: the full set is in
+  # the table and the alert says how to read it. Tabs, newlines and carriage
+  # returns are translated out of it because the row framing must survive an
+  # error string that contains them.
+  row="$(printf '%s\n' "
+          select count(*) filter (where created_at < now() - (:'lag' || ' minutes')::interval),
+                 count(*) filter (where dispatch_error is not null),
+                 coalesce(max(floor(extract(epoch from now() - created_at) / 60))::bigint, 0),
+                 coalesce(left(translate(max(dispatch_error), chr(10) || chr(9) || chr(13), '   '), 200), '')
+          from news_alert
+          where dispatched_at is null and severity = 'critical'
+        " | ( cd "$DISPATCH_DIR" 2>/dev/null || exit 70
+      timeout "$DISPATCH_TIMEOUT" docker compose exec -T "$DISPATCH_DB_SERVICE" \
+        psql -U "$DISPATCH_DB_USER" -d "$DISPATCH_DB_NAME" \
+        -v ON_ERROR_STOP=1 -v lag="$DISPATCH_LAG_MIN" -tA -F $'\t' ) 2>"$stderr_file" )"
+  rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    # Unreadable is not evidence, in either direction — the same rule the disk
+    # check follows. Every cause already has an owner: a down stand is this
+    # script's own outage alert a few lines below, and a database without
+    # migration 0033 is a stand where phase 1 has not deployed yet. Saying which
+    # one it was costs one journal line and saves an SSH session.
+    if grep -qi 'does not exist' "$stderr_file" 2>/dev/null; then
+      echo "[watchdog] news_alert does not exist yet (migration 0033 not applied) — dispatch check skipped"
+    else
+      echo "[watchdog] cannot read news_alert (exit $rc) — dispatch check skipped"
+    fi
+    return 0
+  fi
+
+  IFS=$'\t' read -r stale errored oldest sample <<<"$row"
+  for field in stale errored oldest; do
+    case "${!field}" in
+      ''|*[!0-9]*)
+        echo "[watchdog] unexpected row from news_alert query ($field) — dispatch check skipped"
+        return 0
+        ;;
+    esac
+  done
+
+  # Two triggers, one key, on purpose. A row with a dispatch_error is a
+  # dispatcher that tried and was refused by notify.sh; a row past the threshold
+  # is one that is not delivering at all. They want the same first action — go
+  # look at why delivery is failing — and an errored row is almost always also
+  # a stale one, so two keys would mean two board issues for one condition.
+  # Which trigger fired is in the body instead.
+  if [ "$stale" = 0 ] && [ "$errored" = 0 ]; then
+    if [ -f "$DISPATCH_STATE_FILE" ]; then
+      "$NOTIFY" --key "$DISPATCH_KEY" --resolve -- "$(printf '%s\n' \
+        "✅ audr news alert dispatch is flowing again" \
+        "" \
+        "No critical news_alert row is pending past ${DISPATCH_LAG_MIN}m and none" \
+        "carries a dispatch_error, as of ${stamp}." \
+        "No action needed.")"
+      rm -f "$DISPATCH_STATE_FILE"
+      echo "[watchdog] alert dispatch recovered — stand-down sent"
+    else
+      # Said out loud for the same reason as "[watchdog] ok": a quiet news day
+      # and a check that silently stopped running must not look identical.
+      echo "[watchdog] alert dispatch ok (no critical alert pending over ${DISPATCH_LAG_MIN}m)"
+    fi
+    return 0
+  fi
+
+  if [ "$errored" != 0 ]; then
+    headline="🟠 audr news alerts are FAILING to dispatch"
+    detail="${errored} pending critical alert(s) have a recorded dispatch_error — notify.sh refused the delivery."
+  else
+    headline="🟠 audr news alerts are NOT being dispatched"
+    detail="${stale} critical alert(s) have been pending for more than ${DISPATCH_LAG_MIN}m (oldest: ${oldest}m) with no dispatch_error recorded — nothing is even attempting delivery."
+  fi
+
+  last=0
+  [ -f "$DISPATCH_STATE_FILE" ] && last="$(cat "$DISPATCH_STATE_FILE" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ "$last" -ne 0 ] && [ $(( now - last )) -lt $(( DISPATCH_REMIND_H * 3600 )) ]; then
+    echo "[watchdog] alert dispatch stale (stale=${stale} errored=${errored}) — already alerted, reminding in $(( (DISPATCH_REMIND_H * 3600 - (now - last)) / 3600 ))h"
+    return 0
+  fi
+
+  "$NOTIFY" --key "$DISPATCH_KEY" -- "$(printf '%s\n' \
+    "$headline" \
+    "" \
+    "$detail" \
+    "Checked at ${stamp} by audr-watchdog on $(hostname)." \
+    "" \
+    "${sample:+last recorded error: ${sample}}" \
+    "" \
+    "The dispatcher exits 0 on an unreadable stack by design, so its unit is" \
+    "green either way — do not read audr-alert-dispatch.service's status as an" \
+    "answer. Read what it actually said:" \
+    "  journalctl -u audr-alert-dispatch -n 30 --no-pager" \
+    "" \
+    "'cannot read pending alerts' means the worker half is unreachable; the" \
+    "usual cause is an image that predates audr.jobs.alerts_pending, which the" \
+    "next deploy fixes:" \
+    "  cd ${DISPATCH_DIR} && docker compose exec -T worker python -m audr.jobs.alerts_pending" \
+    "'no channel configured' means the alert was spooled, not delivered, and" \
+    "the spool only moves when someone drains it." \
+    "" \
+    "Runbook: docs/deploy-runbook.md — 'News alert dispatch'.")"
+  echo "$now" > "$DISPATCH_STATE_FILE"
+  echo "[watchdog] ALERT sent — alert dispatch stale (stale=${stale} errored=${errored}, limit ${DISPATCH_LAG_MIN}m)"
+}
+
 fails=0
 [ -f "$STATE_FILE" ] && fails="$(cat "$STATE_FILE" 2>/dev/null || echo 0)"
 case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
@@ -255,10 +462,11 @@ case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
 ready="$(curl -s -m 10 "$PROBE_URL" 2>/dev/null || true)"
 stamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-# Before the probe's own branches, which all exit. `|| true` so a bug in either
+# Before the probe's own branches, which all exit. `|| true` so a bug in any
 # secondary check cannot cost us the outage alert.
 check_backup_age || true
 check_disk_space || true
+check_alert_dispatch_lag || true
 
 case "$ready" in
   *'"status":"ok"'*)
