@@ -398,7 +398,7 @@ live before seeding — HTTP 200 plus a parseable body for a feed, a
 |---|---|---|
 | KNC | ~65% | `blog.kyberswap.com` + `KyberNetwork/kyberswap-interface` releases |
 | ETH | ~11% | `blog.ethereum.org` + `go-ethereum` releases (shared with WETH, AUD-571) |
-| ENS | ~5% | `ensdomains/ens-contracts` releases + Snapshot `ens.eth` |
+| ENS | ~5% | `blog.ens.domains` + `ensdomains/ensjs` releases (0032), plus `ens-contracts` releases + Snapshot `ens.eth` |
 | CRV, LDO | dust | `news.curve.finance`; `blog.lido.fi` + Snapshot `lido-snapshot.eth` |
 | MATIC | dust | `maticnetwork/bor` releases |
 | SUSHI | dust | Snapshot `sushigov.eth` |
@@ -414,11 +414,19 @@ assume an oversight:
   `sushi-labs/sushiswap` serve a valid but entry-less `releases.atom`.
 - **Sub-$1 dust** (ARB, APE, 1INCH, BAL, COW, COMP, DYDX) — Snapshot spaces
   exist; coverage would be completeness for its own sake.
+- **`discuss.ens.domains/latest.rss`** — live, and a forum feed is an
+  established tier here (`project:aave-governance` is one), but it carries
+  per-post traffic rather than announcements: AAVE, the only asset on a forum
+  feed, has ~53 rows against everything else's 10–20.
 
-Two seeded sources are wired but quiet today: `ens-contracts`'s newest release
-is 2026-03-13 and `ens.eth`'s newest proposal is just outside retention. They
-populate on the next release or proposal. That is the mapping working, not a
-dead source — distinguish "no rows yet" from "no source" before re-triaging.
+`ens-contracts` releases and Snapshot `ens.eth` are wired but quiet — newest
+release 2026-03-13, newest proposal just outside retention. 0031 shipped ENS
+on those two alone and the first live run proved the point: every other seeded
+asset picked up rows and ENS picked up none, which is why 0032 added the blog
+and `ensjs`. Keep them anyway — low-volume is not dead, and a contract release
+or a governance proposal outranks a blog post when one lands. The general rule:
+distinguish "no rows yet" from "no source", but do not stop at "wired but
+quiet" while a live first-party feed is still unlooked-for.
 
 ### Adding a new holding to news coverage
 

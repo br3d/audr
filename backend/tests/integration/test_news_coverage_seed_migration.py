@@ -1,4 +1,9 @@
-"""Integration test for migration 0031 — portfolio news coverage (AUD-568 B).
+"""Integration tests for the portfolio news-coverage seeds (AUD-568 part B).
+
+Covers migrations 0031 and 0032 together: 0032 only exists because 0031's two
+ENS sources both turned out to sit outside the retention window, so the pair
+is one coverage decision and asserting them separately would let a later edit
+drop one half without a red test.
 
 Runs the real migration chain against a disposable, dedicated database (same
 discipline as `test_news_misattribution_purge_migration.py`) so the seeded
@@ -35,6 +40,9 @@ _EXPECTED_FEEDS = {
     "project:lido-blog": ("project", {"LDO"}),
     "project:curve-news": ("project", {"CRV"}),
     "release:polygon-bor": ("release", {"MATIC"}),
+    # 0032 — ENS's live sources; 0031's two were both outside retention.
+    "project:ens-blog": ("project", {"ENS"}),
+    "release:ensjs": ("release", {"ENS"}),
 }
 
 _EXPECTED_SPACES = {("ENS", "ens.eth"), ("LDO", "lido-snapshot.eth"), ("SUSHI", "sushigov.eth")}
@@ -83,8 +91,8 @@ async def _drop_scratch_db(admin_url: str) -> None:
     await admin_engine.dispose()
 
 
-async def test_upgrade_0031_seeds_coverage_idempotently() -> None:
-    """0031 seeds every verified source once, on top of hand-inserted rows."""
+async def test_upgrade_seeds_news_coverage_idempotently() -> None:
+    """0031/0032 seed every verified source once, on top of hand-inserted rows."""
     base_url = os.environ["DATABASE_URL"]
     scratch_url = base_url.rsplit("/", 1)[0] + f"/{_SCRATCH_DB}"
 
@@ -127,7 +135,7 @@ async def test_upgrade_0031_seeds_coverage_idempotently() -> None:
                 {"id": uuid.uuid4()},
             )
 
-        await asyncio.to_thread(command.upgrade, cfg, "0031")
+        await asyncio.to_thread(command.upgrade, cfg, "head")
 
         async with scratch_engine.connect() as conn:
             feed_rows = (
@@ -150,7 +158,7 @@ async def test_upgrade_0031_seeds_coverage_idempotently() -> None:
         await _drop_scratch_db(base_url)
 
     # No duplicate feed row for the hand-inserted key, and every new feed
-    # mapped to exactly the symbols 0031 claims.
+    # mapped to exactly the symbols the seeds claim.
     keys = [key for key, _tier, _symbol in feed_rows]
     for key, (tier, symbols) in _EXPECTED_FEEDS.items():
         matching = [(t, s) for k, t, s in feed_rows if k == key]
@@ -163,7 +171,7 @@ async def test_upgrade_0031_seeds_coverage_idempotently() -> None:
     assert _EXPECTED_SPACES <= set(spaces)
     assert spaces.count(("ENS", "ens.eth")) == 1
     # A Snapshot space whose newest proposal predates the 90-day retention
-    # window can only ever insert zero rows — 0031 deliberately leaves
+    # window can only ever insert zero rows — the seed deliberately leaves
     # `curve.eth` out, so a later edit that adds it has to say why.
     assert not [s for _sym, s in spaces if s == "curve.eth"]
 
@@ -179,9 +187,9 @@ async def test_upgrade_0031_seeds_coverage_idempotently() -> None:
 def test_seeded_feed_urls_are_registry_shaped(key: str) -> None:
     """Keys follow the `tier:slug` convention `_targets_for_feed` relies on.
 
-    Cheap guard rather than a live HTTP check: every URL in 0031 was verified
-    against the real host before seeding, but a test must not depend on six
-    third-party endpoints being up.
+    Cheap guard rather than a live HTTP check: every seeded URL was verified
+    against the real host before it landed, but a test must not depend on
+    eight third-party endpoints being up.
     """
     tier, _symbols = _EXPECTED_FEEDS[key]
     assert key.startswith(f"{tier}:")
