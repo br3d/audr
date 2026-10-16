@@ -105,6 +105,10 @@ def _fake_host(
         'for a in "$@"; do\n'
         '  printf "notify-arg %s\\n" "$(printf "%s" "$a" | tr "\\n" " ")" >> "$CALLS"\n'
         "done\n"
+        # What notify.sh inherits is as much a part of the contract as its argv:
+        # it resolves the board and telegram credentials under
+        # $AUDR_REMOTE_DIR/secrets/, so an unset value silently costs a sink.
+        'printf "notify-env AUDR_REMOTE_DIR=%s\\n" "${AUDR_REMOTE_DIR:-}" >> "$CALLS"\n'
         'printf "notify-call\\n" >> "$CALLS"\n'
         f"exit {notify_rc}\n",
         encoding="utf-8",
@@ -173,6 +177,30 @@ def test_delivered_alert_is_marked_dispatched(tmp_path: Path) -> None:
     assert len(marks) == 1, _lines(calls)
     assert ALERT["id"] in marks[0]
     assert "--error" not in marks[0]
+
+
+def test_notify_inherits_a_remote_dir_even_when_the_caller_sets_none(tmp_path: Path) -> None:
+    """The credentials directory must survive a call that did not export it.
+
+    `notify.sh` and `notify-board.py` look for `paperclip.env`/`telegram.env`
+    under `$AUDR_REMOTE_DIR/secrets/`, falling back to `$REPO_DIR/secrets/` —
+    which on the host is the install directory, where no secret ever lives. So
+    an unset `AUDR_REMOTE_DIR` does not fail: it reports `no channel
+    configured` and spools the alert, a line that looks like a healthy quiet
+    tick in the journal. The systemd unit sets the variable, which is why
+    production was unaffected and why this went unnoticed — it only showed up
+    drilling the script by hand on the stand (AUD-584).
+    """
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT])
+    home = tmp_path / "home"
+    (home / "audr").mkdir(parents=True)
+    env.pop("AUDR_REMOTE_DIR")
+    env["HOME"] = str(home)
+
+    _run(script, env)
+
+    seen = [line for line in _lines(calls) if line.startswith("notify-env ")]
+    assert seen == [f"notify-env AUDR_REMOTE_DIR={home / 'audr'}"], _lines(calls)
 
 
 def test_key_is_passed_and_nothing_resolves(tmp_path: Path) -> None:

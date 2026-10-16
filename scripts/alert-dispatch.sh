@@ -42,6 +42,16 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Where the live stack's compose.yaml lives — `docker compose` is run from there,
 # same convention as stand-watchdog.sh's diagnostics.
 REMOTE_DIR="${AUDR_REMOTE_DIR:-$HOME/audr}"
+# Exported, not merely resolved: notify.sh and notify-board.py find the board
+# and telegram credentials under `$AUDR_REMOTE_DIR/secrets/`, and their only
+# other candidate is `$REPO_DIR/secrets/` — which on the host is the install
+# directory, where no secret ever lives. Without this export the fallback
+# applies and a run that is not started by the systemd unit (the unit sets
+# AUDR_REMOTE_DIR itself) reports `no channel configured` and spools the alert
+# instead of delivering it, which is indistinguishable from a healthy run in
+# the journal. Found by drilling this script by hand on the stand: the DB read
+# worked, the board sink silently did not (AUD-584).
+export AUDR_REMOTE_DIR="$REMOTE_DIR"
 WORKER_SERVICE="${AUDR_WORKER_SERVICE:-worker}"
 NOTIFY="${AUDR_NOTIFY_BIN:-$REPO_DIR/scripts/notify.sh}"
 # Bounded per tick for the same reason the worker side bounds it: a burst must
