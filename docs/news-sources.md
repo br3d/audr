@@ -428,6 +428,42 @@ or a governance proposal outranks a blog post when one lands. The general rule:
 distinguish "no rows yet" from "no source", but do not stop at "wired but
 quiet" while a live first-party feed is still unlooked-for.
 
+##### "Wired but quiet" is not the same as "never polled" — LINK
+
+A feed can also sit at `last_polled_at IS NULL` **forever, correctly**, and that
+reads like a stall unless you know why. `project:chainlink-blog` and
+`release:chainlink` were seeded by 0024 and, as of 2026-10-16, had never been
+polled once in the four days since — while every other enabled feed, including
+ones created the same morning, carried a `last_polled_at` from the latest run.
+
+They are not broken and not failing. `handle_news_refresh` skips any
+project/release feed whose symbols do not intersect the **held** set:
+
+```python
+# jobs/news.py
+for feed in due_feeds:
+    if feed.symbols and not (feed.symbols & held_symbols):
+        continue
+```
+
+`_get_held_assets` is "at least one `balance_observation.raw_amount > 0`", and
+**LINK is not held** — so the two rows are dormant capacity that starts polling
+by itself the moment LINK is acquired. Leave them. (LINK's seat in
+`news_tracked_asset` is the separate tier-3 allow-list, which is also why it
+shows zero rows twice over.)
+
+The diagnostic that settles this class in one pass, rather than re-deriving it:
+
+| `last_polled_at` | `consecutive_failures` | Meaning |
+|---|---|---|
+| NULL | 0 | **Never attempted** — look at the caller's skip filter, not the feed |
+| NULL or stale | > 0 | Attempted and failing — look at the URL and `last_error` |
+| fresh | 0 | Polling fine; zero rows is a *source* question ("wired but quiet") |
+
+A NULL poll time with **zero** failures never means a bad URL or a missing
+`news_feed_symbol` mapping — both were fine here. It means nothing ever called
+it, so the answer is upstream in the job, not in the registry row.
+
 ### Adding a new holding to news coverage
 
 In preference order, best signal first:
