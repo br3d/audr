@@ -3,6 +3,13 @@ import React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
+
+// AlertsBell has its own queryClient/API-dependent tests in AlertsBell.test.tsx;
+// here it would need a QueryClientProvider ancestor for no benefit to these cases.
+vi.mock('../components/AlertsBell', () => ({
+  default: () => null,
+}))
+
 import Layout, { type MainPage } from '../components/Layout'
 import pkg from '../../package.json'
 
