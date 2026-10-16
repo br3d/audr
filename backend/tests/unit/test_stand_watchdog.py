@@ -50,11 +50,19 @@ def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
     scripts.mkdir(parents=True)
     shutil.copy(WATCHDOG, scripts / "stand-watchdog.sh")
 
-    # Stub notify.sh: record the full argv of every call, one line each.
+    # Stub notify.sh: record the full argv of every call as exactly one line.
+    #
+    # The newlines have to be flattened. A real alert body is a single
+    # multi-line argument, so recording it verbatim would spread one call over
+    # ~20 lines and a per-line filter would only ever see its first — which is
+    # how an assertion on the body's percentage can fail against a script that
+    # is in fact emitting it.
     calls = tmp_path / "notify-calls.log"
     notify = scripts / "notify.sh"
     notify.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NOTIFY_CALLS"\nexit 0\n',
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$(printf "%s" "$*" | tr "\\n" " ")" >> "$NOTIFY_CALLS"\n'
+        "exit 0\n",
         encoding="utf-8",
     )
     notify.chmod(0o755)
@@ -97,8 +105,12 @@ def _fake_repo(tmp_path: Path, pct: int) -> tuple[Path, Path, dict[str, str]]:
 
 
 def _run(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
-        ["bash", str(script)],
+    # S603/S607: the argv is this test's own fixture — a copy of a tracked
+    # script under tmp_path — and `bash` is resolved from the test container's
+    # PATH exactly as the host unit resolves it. scripts/*.py carry the same two
+    # ignores wholesale in ruff.toml; here it stays narrowed to this one call.
+    proc = subprocess.run(  # noqa: S603 — argv is the fixture copy of a tracked script
+        ["bash", str(script)],  # noqa: S607 — `bash` from PATH, as the host unit runs it
         env=env,
         capture_output=True,
         text=True,
