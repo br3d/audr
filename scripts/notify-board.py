@@ -44,6 +44,10 @@ a contract with it rather than plain success/failure:
     2  refused — empty message
     3  no credentials; nothing was attempted
 
+`--probe` reports the same codes for a credential it never sends through, which
+is what lets install-watchdog.sh say whether this sink will deliver instead of
+whether its file exists (AUD-594).
+
 Deciding what a non-zero code means is notify.sh's job, not this script's. It
 holds --strict and defaults to swallowing failures, for the reason given in its
 header: every caller is already on a failure path, so an alerting helper that
@@ -231,6 +235,60 @@ def read_open_issue(cfg: dict[str, str], path: str) -> str | None:
     return issue_id
 
 
+def probe(cfg: dict[str, str]) -> int:
+    """Answer the question `test -f secrets/paperclip.env` cannot: does it deliver?
+
+    AUD-594: install-watchdog.sh used to end with "Alert credentials present —
+    alerts will be delivered." on the strength of that file existing. It existed
+    on the stand and the key inside it had expired, so every dispatch spent a
+    401 and then spooled — delivery still happened, by the slow spool->drain
+    path, but the operator had been told the host was doing it directly. A
+    message that promises the thing it did not check is the same class of
+    false-green signal as a timer whose unit is active and whose work is
+    impossible, and it is read the same way: as a reason to stop looking.
+
+    Exit codes are the send path's, so a caller can branch on them identically:
+
+        0  the credential answers; this sink will deliver
+        1  configured, but the API refused it or did not answer
+        3  no credentials; nothing to probe
+
+    This is read-only: GET /api/agents/me, never a POST. A probe that proved
+    delivery by delivering would leave a `critical` issue behind every install,
+    which is AUD-570's mistake with extra steps.
+    """
+    missing = [k for k in REQUIRED if not cfg.get(k)]
+    if missing:
+        log(f"PROBE — no board channel configured ({', '.join(missing)} unset)")
+        return 3
+    try:
+        base = api_base(cfg["PAPERCLIP_API_URL"])
+    except ValueError as exc:
+        log(f"PROBE — {exc}", err=True)
+        return 1
+
+    status_code, body = request(cfg, "GET", "/api/agents/me", None)
+    if status_code == 200:
+        return 0
+    if status_code == 403:
+        # 403 is not a failure here, and reporting it as one would be the same
+        # mistake in the other direction. The credential this file is *supposed*
+        # to hold is a `task_bridge` key scoped to opening one agent's issues
+        # (see the install note below), and a key scoped that narrowly may well
+        # be refused on /api/agents/me while being perfectly able to POST the
+        # alert. What matters is that the server authenticated it at all: an
+        # expired or wrong key answers 401, which is the observed symptom this
+        # probe exists to catch.
+        log(f"PROBE — credential accepted at {base}, but scoped out of /api/agents/me (HTTP 403)")
+        log("PROBE — not expired, so the board sink is expected to deliver")
+        return 0
+
+    detail = str(body.get("error", "")).strip().replace("\n", " ")[:160]
+    where = f"HTTP {status_code}" if status_code else "no answer"
+    log(f"PROBE — credential REJECTED at {base} ({where}): {detail or 'no detail'}", err=True)
+    return 1
+
+
 def title_for(message: str, stamp: str) -> str:
     first = next((ln.strip() for ln in message.splitlines() if ln.strip()), "audr alert")
     room = TITLE_MAX - len(stamp) - 3
@@ -251,8 +309,21 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="resolve credentials and report the dedupe decision; write nothing to the board",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="check whether the configured credential actually answers; send nothing",
+    )
     parser.add_argument("message", nargs="*", help="alert body; read from stdin when omitted")
     args = parser.parse_args(argv)
+
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Ahead of the message handling, which would otherwise block on stdin: a
+    # probe has nothing to send, so requiring a body to ask "can this deliver?"
+    # would make the only honest check awkward enough to skip.
+    if args.probe:
+        return probe(resolve_config(repo_dir))
 
     message = " ".join(args.message) if args.message else sys.stdin.read()
     message = message.strip()
@@ -260,7 +331,6 @@ def main(argv: list[str]) -> int:
         log("refusing to send an empty message", err=True)
         return 2
 
-    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cfg = resolve_config(repo_dir)
     missing = [k for k in REQUIRED if not cfg.get(k)]
     if missing:
@@ -301,6 +371,16 @@ def main(argv: list[str]) -> int:
     # three hours old. Everything above this point is reads only, so the
     # reported decision is the one a real send would take.
     if args.dry_run:
+        # Verify the credential as part of the drill (AUD-594). Everything else
+        # a dry run reports is a local decision, so without this the board half
+        # of `notify.sh --dry-run` was "credentials resolved" = "a file parsed",
+        # and a drill against an expired key reported a healthy sink — the same
+        # false green the installer's old `test -f` produced, from the one tool
+        # whose job is to tell you whether alerting works. The verdict is logged
+        # and does NOT change the exit code: notify.sh reads a non-zero board
+        # result as a delivery failure, and a drill must not render as one.
+        if probe(cfg) != 0:
+            log("DRY RUN — the board sink would NOT have accepted this alert", err=True)
         if args.resolve:
             would = (
                 f"close issue {existing}"
