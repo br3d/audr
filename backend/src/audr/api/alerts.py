@@ -43,6 +43,14 @@ class AlertItem(BaseModel):
     model: str | None
     created_at: str
     read_at: str | None
+    # Pushed at a human, or merely accepted? `dispatched_at` has meant
+    # "notify.sh took it" since ADR-007 rev 2.1, and notify.sh accepts an alert
+    # no sink would take by spooling it for a later replay — so
+    # `dispatched_via = 'spool'` is a row that left the dispatcher's queue
+    # without reaching a channel (AUD-595). NULL is either "not dispatched" or
+    # "dispatched before the road was recorded"; `dispatched_at` separates them.
+    dispatched_at: str | None = None
+    dispatched_via: str | None = None
 
 
 class AlertsResponse(BaseModel):
@@ -91,7 +99,8 @@ async def list_alerts(
         sa.text(
             f"""
             SELECT id, asset_news_id, asset_id, category, severity, summary,
-                   classifier, model, created_at, read_at
+                   classifier, model, created_at, read_at,
+                   dispatched_at, dispatched_via
             FROM news_alert
             {where_clause}
             ORDER BY (read_at IS NULL) DESC, created_at DESC
@@ -113,6 +122,8 @@ async def list_alerts(
             model=row[7],
             created_at=row[8].isoformat(),
             read_at=row[9].isoformat() if row[9] is not None else None,
+            dispatched_at=row[10].isoformat() if row[10] is not None else None,
+            dispatched_via=row[11],
         )
         for row in rows.fetchall()
     ]

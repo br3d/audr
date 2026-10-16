@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Probe the stand's /health/ready and alert on a sustained outage (AUD-444),
-# plus three slower conditions that have no timer of their own: backup staleness
-# (AUD-567), disk pressure (AUD-580) and a mute alert dispatcher (AUD-592).
+# plus four slower conditions that have no timer of their own: backup staleness
+# (AUD-567), disk pressure (AUD-580), a mute alert dispatcher (AUD-592) and an
+# alert spool nobody is draining (AUD-595).
 #
 # Runs on the deploy host from audr-watchdog.timer, once a minute. One tick =
 # one probe; all the state between ticks is a counter in a file.
@@ -154,13 +155,15 @@ DISPATCH_DB_USER="${AUDR_DB_USER:-audr}"
 # it is spooled". A non-zero exit therefore means notify.sh could not run at
 # all, which no amount of waiting improves.
 #
-# NOTE a limit this check inherits from that same contract. Because notify.sh
-# exits 0 on a spool, alert-dispatch.sh marks the row dispatched and it leaves
-# the pending set — so the AUD-584 spool road ("delivered to nobody, and the
-# spool only moves when an agent drains it by hand") is NOT visible here. The
-# pending set is a faithful artefact of road one (the bridge cannot read) and
-# not of road two. Carded separately rather than papered over here, because the
-# fix belongs in the dispatcher's notify.sh contract, not in this query.
+# NOTE a limit this check inherits from that same contract, by design. Because
+# notify.sh exits 0 on a spool, alert-dispatch.sh marks the row dispatched
+# (`dispatched_via = 'spool'` since AUD-595) and it leaves the pending set — so
+# the AUD-584 spool road ("delivered to nobody, and the spool only moves when an
+# agent drains it") is NOT visible here, and must not be: making those rows stay
+# pending would, against a 401 board token, keep every alert pending forever and
+# make this check fire continuously. The pending set stays a faithful artefact
+# of road one; road two has its own artefact and its own check below —
+# check_alert_spool_age, on the age of the oldest line in undelivered.jsonl.
 DISPATCH_LAG_MIN="${AUDR_DISPATCH_LAG_MINUTES:-15}"
 # Hours, like the disk path: the condition is "delivery is broken", which is
 # worth repeating while it lasts but not every minute.
@@ -170,11 +173,37 @@ DISPATCH_KEY="${AUDR_DISPATCH_ALERT_KEY:-alert-dispatch-stale}"
 # behind ix_news_alert_pending; 20s is generous.
 DISPATCH_TIMEOUT="${AUDR_DISPATCH_QUERY_TIMEOUT:-20}"
 
+# --- undrained alert spool (AUD-595) ----------------------------------------
+# The road the dispatch-lag check above cannot see. notify.sh exits 0 when no
+# sink accepted an alert — it parks it in undelivered.jsonl for
+# scripts/drain-alert-spool.py to replay — so the row is marked dispatched
+# (`dispatched_via = 'spool'` since AUD-595) and leaves the pending set. That is
+# correct: spool->drain is an accepted delivery path, and holding the row
+# pending instead would, against the stand's current 401 board token, keep every
+# alert pending forever and make the lag check fire continuously.
+#
+# So the artefact for THIS road is the spool file itself, exactly as AUD-567's
+# backup check watches the dump's mtime rather than the timer: a line that has
+# sat here longer than the drain's cadence means nobody has been pushed at, and
+# no amount of green units says otherwise.
+#
+# Oldest line, not newest: a fresh alert arriving on top of a week-old one must
+# not reset the clock on the week-old one.
+SPOOL_FILE_PATH="${AUDR_NOTIFY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/audr-notify}/undelivered.jsonl"
+# 12h against a drain routine that runs every ~3h (routine 92db1531): four
+# missed drains before this speaks, so a drain that is merely late, or an agent
+# heartbeat that slipped, cannot fire it. It is still far inside the day-scale
+# window in which an undelivered `critical` stops being worth delivering.
+SPOOL_MAX_AGE_H="${AUDR_SPOOL_MAX_AGE_HOURS:-12}"
+SPOOL_REMIND_H="${AUDR_SPOOL_REMIND_HOURS:-12}"
+SPOOL_KEY="${AUDR_SPOOL_ALERT_KEY:-alert-spool-stale}"
+
 mkdir -p "$STATE_DIR" || { echo "[watchdog] cannot create $STATE_DIR" >&2; exit 1; }
 
 BACKUP_STATE_FILE="$STATE_DIR/backup-stale-alerted-at"
 DISK_STATE_FILE="$STATE_DIR/disk-pressure-alerted-at"
 DISPATCH_STATE_FILE="$STATE_DIR/alert-dispatch-alerted-at"
+SPOOL_STATE_FILE="$STATE_DIR/alert-spool-stale-alerted-at"
 
 # Runs before the health probe and deliberately cannot change its outcome: a
 # stale backup and a down stand are independent conditions, and the probe is the
@@ -455,6 +484,151 @@ check_alert_dispatch_lag() {
   echo "[watchdog] ALERT sent — alert dispatch stale (stale=${stale} errored=${errored}, limit ${DISPATCH_LAG_MIN}m)"
 }
 
+# Same contract as the other three: runs before the probe, cannot change its
+# outcome, every failure path returns rather than exits.
+check_alert_spool_age() {
+  local report oldest_h count now last
+
+  [ -f "$SPOOL_FILE_PATH" ] || {
+    # Nothing has ever needed spooling, or the drain cleared the file. Both are
+    # the healthy state — said out loud anyway, like the other three checks, so
+    # that a drained spool and a check that stopped running differ in the
+    # journal.
+    echo "[watchdog] alert spool ok (no spool file at ${SPOOL_FILE_PATH})"
+    [ -f "$SPOOL_STATE_FILE" ] && {
+      "$NOTIFY" --key "$SPOOL_KEY" --resolve -- "$(printf '%s\n' \
+        "✅ audr alert spool is drained" \
+        "" \
+        "${SPOOL_FILE_PATH} is gone as of ${stamp} — every spooled alert has" \
+        "been replayed." \
+        "No action needed.")"
+      rm -f "$SPOOL_STATE_FILE"
+      echo "[watchdog] alert spool drained — stand-down sent"
+    }
+    return 0
+  }
+  now="$(date -u +%s)"
+
+  command -v python3 >/dev/null 2>&1 || {
+    echo "[watchdog] no python3 — alert spool check skipped"
+    return 0
+  }
+
+  # python3 reads the records rather than awk/jq: the file is JSONL whose
+  # `message` field carries newlines, quotes and emoji, and nothing here may
+  # depend on jq being installed (notify.sh already requires python3, so this
+  # adds no dependency).
+  #
+  # Records under this check's OWN key are excluded from the age. The alert
+  # below is itself sent through notify.sh, which on a stand with no working
+  # sink spools it — so counting it would make the condition permanently true
+  # from its own first message and the file could never read as healthy again.
+  report="$(AUDR_SPOOL_PATH="$SPOOL_FILE_PATH" AUDR_SPOOL_SELF_KEY="$SPOOL_KEY" python3 -c '
+import json, os, sys, time
+
+path = os.environ["AUDR_SPOOL_PATH"]
+self_key = os.environ.get("AUDR_SPOOL_SELF_KEY", "")
+now = time.time()
+oldest = None
+count = 0
+try:
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                # A truncated last line (a tick that read the file mid-append)
+                # is not evidence of anything; the next tick sees it whole.
+                continue
+            if record.get("key", "") == self_key:
+                continue
+            count += 1
+            stamp = str(record.get("ts", ""))
+            try:
+                seconds = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+            except ValueError:
+                # No usable timestamp. Treated as old rather than ignored: a
+                # record nobody can date has still not been delivered.
+                seconds = 0.0
+            age = max(0.0, now - seconds)
+            oldest = age if oldest is None else max(oldest, age)
+except OSError as exc:
+    print(f"unreadable: {exc}", file=sys.stderr)
+    sys.exit(1)
+print(f"{count} {int((oldest or 0) // 3600)}")
+' 2>/dev/null)" || {
+    echo "[watchdog] cannot read ${SPOOL_FILE_PATH} — alert spool check skipped"
+    return 0
+  }
+
+  count="${report%% *}"
+  oldest_h="${report##* }"
+  for field in count oldest_h; do
+    case "${!field}" in
+      ''|*[!0-9]*)
+        echo "[watchdog] unexpected spool reading ($field) — alert spool check skipped"
+        return 0
+        ;;
+    esac
+  done
+
+  if [ "$count" = 0 ] || [ "$oldest_h" -lt "$SPOOL_MAX_AGE_H" ]; then
+    if [ -f "$SPOOL_STATE_FILE" ]; then
+      "$NOTIFY" --key "$SPOOL_KEY" --resolve -- "$(printf '%s\n' \
+        "✅ audr alert spool is flowing again" \
+        "" \
+        "${count} spooled alert(s) in ${SPOOL_FILE_PATH}, oldest ${oldest_h}h" \
+        "(limit ${SPOOL_MAX_AGE_H}h), as of ${stamp}." \
+        "No action needed.")"
+      rm -f "$SPOOL_STATE_FILE"
+      echo "[watchdog] alert spool fresh (${count} record(s), oldest ${oldest_h}h) — stand-down sent"
+    else
+      # Said out loud for the same reason as "[watchdog] ok": a drained spool
+      # and a check that silently stopped running must not look identical.
+      echo "[watchdog] alert spool ok (${count} record(s), oldest ${oldest_h}h, limit ${SPOOL_MAX_AGE_H}h)"
+    fi
+    return 0
+  fi
+
+  last=0
+  [ -f "$SPOOL_STATE_FILE" ] && last="$(cat "$SPOOL_STATE_FILE" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ "$last" -ne 0 ] && [ $(( now - last )) -lt $(( SPOOL_REMIND_H * 3600 )) ]; then
+    echo "[watchdog] alert spool stale (${count} record(s), oldest ${oldest_h}h) — already alerted, reminding in $(( (SPOOL_REMIND_H * 3600 - (now - last)) / 3600 ))h"
+    return 0
+  fi
+
+  "$NOTIFY" --key "$SPOOL_KEY" -- "$(printf '%s\n' \
+    "🟠 audr alerts are PARKED ON DISK, not delivered" \
+    "" \
+    "${count} alert(s) are sitting in the spool on $(hostname), the oldest" \
+    "${oldest_h}h old (limit ${SPOOL_MAX_AGE_H}h), as of ${stamp}." \
+    "" \
+    "These were ACCEPTED by notify.sh and recorded as dispatched — news" \
+    "alerts carry dispatched_via = 'spool' — but no sink took them, so" \
+    "nobody has been pushed at. Delivery happens when an agent replays the" \
+    "spool, and that has not happened in ${oldest_h}h:" \
+    "  python3 scripts/drain-alert-spool.py --dry-run   # what would be sent" \
+    "  python3 scripts/drain-alert-spool.py             # send it, clear it" \
+    "" \
+    "The usual cause is the board credential: no secrets/paperclip.env, or a" \
+    "token the API now rejects. Check which, from the host:" \
+    "  cd ${DISPATCH_DIR} && scripts/notify.sh --dry-run --key spool-probe -- probe" \
+    "A line reading 'credential REJECTED ... (HTTP 401)' is the answer; the" \
+    "fix is a fresh long-lived task_bridge key, which only a board user can" \
+    "mint (docs/deploy-runbook.md — 'Alerts the host could not send')." \
+    "" \
+    "This message took the same road it is reporting on, so you are most" \
+    "likely reading it as a replay from that very drain." \
+    "" \
+    "Runbook: docs/deploy-runbook.md — 'When delivery only reaches the spool'.")"
+  echo "$now" > "$SPOOL_STATE_FILE"
+  echo "[watchdog] ALERT sent — alert spool stale (${count} record(s), oldest ${oldest_h}h, limit ${SPOOL_MAX_AGE_H}h)"
+}
+
 fails=0
 [ -f "$STATE_FILE" ] && fails="$(cat "$STATE_FILE" 2>/dev/null || echo 0)"
 case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
@@ -467,6 +641,7 @@ stamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 check_backup_age || true
 check_disk_space || true
 check_alert_dispatch_lag || true
+check_alert_spool_age || true
 
 case "$ready" in
   *'"status":"ok"'*)

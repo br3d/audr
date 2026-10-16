@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.integration
@@ -57,6 +58,7 @@ async def _seed_alert(
     severity: str = "critical",
     summary: str = "heuristic match: 'hacked'",
     read_at: str | None = None,
+    dispatched_via: str | None = None,
 ) -> str:
     alert_id = str(uuid.uuid4())
     async with db_session_factory() as session:
@@ -79,10 +81,10 @@ async def _seed_alert(
                     """
                     INSERT INTO news_alert
                       (id, asset_news_id, asset_id, category, severity, summary,
-                       classifier, read_at)
+                       classifier, read_at, dispatched_at, dispatched_via)
                     VALUES
                       (:id, :article_id, :asset_id, :category, :severity, :summary,
-                       'heuristic', :read_at)
+                       'heuristic', :read_at, :dispatched_at, :dispatched_via)
                     """
                 ),
                 {
@@ -93,6 +95,10 @@ async def _seed_alert(
                     "severity": severity,
                     "summary": summary,
                     "read_at": read_at,
+                    # A road only ever exists on a dispatched row, so the two
+                    # move together — same as the dispatcher's own UPDATE.
+                    "dispatched_at": None if dispatched_via is None else "2026-10-16T12:00:00Z",
+                    "dispatched_via": dispatched_via,
                 },
             )
     return alert_id
@@ -113,6 +119,44 @@ async def test_lists_unread_before_read(
     assert body["unread_count"] == 1
     assert body["alerts"][0]["id"] == unread_id
     assert body["alerts"][0]["read_at"] is None
+
+
+async def test_the_delivery_road_is_visible_in_the_list(
+    seeded_client, db_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """A spooled alert must not read as a push at a human (AUD-595).
+
+    Both roads set `dispatched_at` — spool->drain is a real delivery path, so
+    the row has to leave the dispatcher's queue either way — and this endpoint
+    is where someone looking at the app can tell which happened.
+    """
+    client, _csrf = seeded_client
+    asset_id = await _seed_asset(db_session_factory)
+    spooled = await _seed_alert(db_session_factory, asset_id=asset_id, dispatched_via="spool")
+    pushed = await _seed_alert(db_session_factory, asset_id=asset_id, dispatched_via="board")
+    never = await _seed_alert(db_session_factory, asset_id=asset_id)
+
+    r = await client.get("/api/v1/alerts")
+    assert r.status_code == 200
+    by_id = {a["id"]: a for a in r.json()["alerts"]}
+
+    assert by_id[spooled]["dispatched_via"] == "spool"
+    assert by_id[spooled]["dispatched_at"] is not None
+    assert by_id[pushed]["dispatched_via"] == "board"
+    # Never dispatched: no road, and no timestamp to imply one.
+    assert by_id[never]["dispatched_via"] is None
+    assert by_id[never]["dispatched_at"] is None
+
+
+async def test_the_road_column_rejects_an_invented_value(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # ck_news_alert_dispatched_via (migration 0034) is the backstop behind
+    # alerts_mark's argparse `choices`: the vocabulary is fixed in one place and
+    # anything outside it must not reach the table at all.
+    asset_id = await _seed_asset(db_session_factory)
+    with pytest.raises(IntegrityError):
+        await _seed_alert(db_session_factory, asset_id=asset_id, dispatched_via="carrier-pigeon")
 
 
 async def test_unread_filter(
