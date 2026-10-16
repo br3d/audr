@@ -251,8 +251,15 @@ async def _poll_feed(
     )
 
     target_asset_ids = _targets_for_feed(feed, assets, tracked_symbols)
+    retention_cutoff = datetime.now(UTC) - NEWS_RETENTION
     inserted = 0
     for item in items:
+        if item.published_at < retention_cutoff:
+            # A feed body is the full history upstream still serves, not just
+            # what changed — one of these fed 1288 rows for a 16-row effective
+            # gain (AUD-573 follow-up). _prune_old_news would delete every one
+            # of these anyway; skip the round trip.
+            continue
         for asset_id in target_asset_ids(item):
             inserted += await _insert_news(
                 session,

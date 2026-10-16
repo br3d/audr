@@ -52,7 +52,7 @@ def upgrade() -> None:
             RETURN NEW;
         END;
         $$ LANGUAGE plpgsql;
-        """
+        """  # noqa: S608 -- the only interpolation is _FUNCTION_NAME, a module constant
     )
     op.execute(
         f"""
