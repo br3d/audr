@@ -632,7 +632,11 @@ every critical news alert currently takes the spool road.
    `stand-watchdog.sh`, `--key alert-spool-stale`, firing when the oldest record
    is over 12h old (`AUDR_SPOOL_MAX_AGE_HOURS`, against a drain routine on a
    ~3h cadence). The same shape as AUD-567's backup check, which watches the
-   dump's mtime rather than the timer that writes it.
+   dump's mtime rather than the timer that writes it. It counts
+   `undelivered.jsonl.draining` as well as `undelivered.jsonl`: a drain claims
+   the spool by moving it aside, so an interrupted one strands undelivered
+   records in the claim file, and reading only the live spool would call that
+   state healthy.
 
 **What was rejected, and why it matters.** The one-line fix is to pass
 `--strict` so a spool becomes a non-zero exit, a `dispatch_error`, and a row

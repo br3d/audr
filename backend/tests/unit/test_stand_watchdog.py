@@ -540,11 +540,13 @@ def _spool_calls(calls: Path) -> list[str]:
     ]
 
 
-def _write_spool(env: dict[str, str], records: list[tuple[float, str]]) -> Path:
-    """Write undelivered.jsonl from (age-in-hours, key) pairs."""
+def _write_spool(
+    env: dict[str, str], records: list[tuple[float, str]], *, name: str = "undelivered.jsonl"
+) -> Path:
+    """Write a spool file from (age-in-hours, key) pairs."""
     spool_dir = Path(env["AUDR_NOTIFY_STATE_DIR"])
     spool_dir.mkdir(parents=True, exist_ok=True)
-    path = spool_dir / "undelivered.jsonl"
+    path = spool_dir / name
     now = time.time()
     path.write_text(
         "".join(
@@ -707,3 +709,38 @@ def test_spool_limit_default_clears_the_drain_cadence() -> None:
             assert int(line.split(":-", 1)[1].rstrip('}"')) >= 9
             return
     raise AssertionError("SPOOL_MAX_AGE_H default not found")
+
+
+def test_records_stranded_in_an_interrupted_drain_are_counted(tmp_path: Path) -> None:
+    """A drain claims the spool by MOVING it aside.
+
+    `drain-alert-spool.py` appends to `undelivered.jsonl.draining`, replays from
+    there, and removes it only once every record is delivered — so an
+    interrupted run leaves undelivered records in the claim file, where the next
+    drain will pick them up. A check that read only the live spool would call
+    that state healthy, which is the very blind spot AUD-595 exists to close.
+    """
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    env["AUDR_SPOOL_MAX_AGE_HOURS"] = "12"
+    _write_spool(env, [(20, "news-eth-hack-exploit")], name="undelivered.jsonl.draining")
+
+    proc = _run(script, env)
+
+    sent = _spool_calls(calls)
+    assert len(sent) == 1, sent
+    assert "oldest 20h" in sent[0]
+    assert "1 record(s)" in proc.stdout
+
+
+def test_an_emptied_claim_file_is_not_a_condition(tmp_path: Path) -> None:
+    # What a completed-but-not-cleaned drain leaves behind, and what the stand
+    # has on disk today: a zero-byte claim file. Nothing is undelivered.
+    script, calls, env = _fake_repo(tmp_path, pct=70)
+    spool_dir = Path(env["AUDR_NOTIFY_STATE_DIR"])
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    (spool_dir / "undelivered.jsonl.draining").write_text("", encoding="utf-8")
+
+    proc = _run(script, env)
+
+    assert _spool_calls(calls) == []
+    assert "alert spool ok (0 record(s)" in proc.stdout
