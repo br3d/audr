@@ -454,8 +454,20 @@ sudo journalctl -u audr-alert-dispatch.service -n 50
 # day must not look identical:
 #   [alert-dispatch] no pending critical alerts
 
-# Drill the whole path, delivering nothing and marking nothing:
+# Drill the whole path, delivering nothing and marking nothing. The last line
+# names the sinks that would have taken it — `board=ok` is what you want:
 ~/.local/share/audr-watchdog/scripts/alert-dispatch.sh --dry-run
+
+# If a drill reports `no channel configured` / `reason would have been
+# unconfigured` while ~/audr/secrets/paperclip.env exists, the sinks are fine and
+# AUDR_REMOTE_DIR simply is not reaching notify.sh — that is how it finds
+# secrets/. alert-dispatch.sh exports its own default for exactly this reason,
+# but a bare notify.sh run inherits nothing, so compare the two before
+# concluding the board sink is broken (this cost two runs an hour on AUD-584):
+env -u AUDR_REMOTE_DIR ~/.local/share/audr-watchdog/scripts/notify.sh \
+  --dry-run --key probe -- probe      # -> no channel configured
+AUDR_REMOTE_DIR=~/audr ~/.local/share/audr-watchdog/scripts/notify.sh \
+  --dry-run --key probe -- probe      # -> board=ok
 
 # What is pending and why a previous attempt failed (dispatch_error):
 docker compose exec -T db psql -U audr -d audr -c \
