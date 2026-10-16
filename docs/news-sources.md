@@ -450,6 +450,39 @@ In preference order, best signal first:
 Short, generic or English-word tickers (`T`, `ETH`, `ASSET`, `COW`) belong in
 1 or 2, never in 3.
 
+#### Why tier 3 stayed at four symbols (AUD-578)
+
+After 0031/0032 the open question was whether to extend
+`news_tracked_asset` past its original WETH/UNI/AAVE/LINK to the rest of the
+seeded portfolio (KNC/ENS/LDO/CRV/MATIC/SUSHI/ETH). Measured on the stand
+before deciding, and the answer is no — not as a precaution, but because the
+volume the extension was supposed to buy is not there:
+
+- **The tier it governs produces ~5% of the corpus.** Of 173 rows in the
+  90-day window, 9 came from the press tier (8 Defiant, 1 Cointelegraph) and
+  **0 from GDELT** — despite all four tracked symbols clearing
+  `_GDELT_MIN_SYMBOL_LEN`. The breadth tier of last resort is, in practice,
+  empty.
+- **AAVE's lead is the forum feed, not the press.** Its 53 rows are 45 from
+  `project:aave-governance` plus 8 press. Attributing that gap to tier 3 was
+  the wrong read; the lesson generalises to `news_feed_symbol`, not here.
+- **Five of the seven candidates match nothing.** Across a 179-headline
+  snapshot of the live press feeds (CoinDesk 308'd; Cointelegraph, Decrypt,
+  Defiant, Bitcoin Magazine read), word-boundary matching on symbol-or-name
+  scored KNC 0, ENS 0, LDO 0, CRV 0, SUSHI 0, MATIC 1.
+- **The one symbol that would gain is the one the rule names.** `ETH` scored
+  10/179 (~5.6% of all press headlines) — and matching is on `asset.symbol`
+  **or** `asset.name`, so `\bEthereum\b` fires on every "Ethereum, Altcoins
+  See Outsized Drawdowns"-class market story. That is not an
+  `asset.name` *collision* like `BITCOIN`; it is an over-broad **true** match,
+  which the distinctive-name test does not catch. ETH would bury its own 16
+  exactly-attributed rows in ecosystem noise within days.
+
+So the failure mode to screen for in step 3 is two-sided: a name that matches
+the wrong asset, *and* a name that correctly matches far more than the
+holding. Reopening this needs a measurement that beats the one above, not an
+argument that the names look distinctive.
+
 ### Operational notes
 
 - Retention is 90 days, one constant shared with ADR-007's alert retention.
