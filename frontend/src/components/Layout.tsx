@@ -14,6 +14,7 @@ import {
   IconUser,
 } from './Icons'
 import { BrandMark } from './Logo'
+import AlertsBell from './AlertsBell'
 import { VERSION_LABEL, VERSION_TITLE } from '../version'
 
 // ---- Theme context ----
@@ -251,6 +252,7 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
           <header className="topbar">
             <h1 className="topbar-title">{PAGE_TITLES[page]}</h1>
             <div className="topbar-actions">
+              <AlertsBell />
               <button
                 type="button"
                 className="theme-toggle"
