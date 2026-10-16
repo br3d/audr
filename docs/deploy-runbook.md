@@ -560,6 +560,33 @@ sudo journalctl -u audr-watchdog -n 20 | grep dispatch
 #   [watchdog] cannot read news_alert (exit 1) — dispatch check skipped   quiet, by design
 ```
 
+**Drilling it safely.** Preparing an overdue row means putting a row the
+*dispatcher* will also pick up and deliver into the live database, so a drill
+has to disarm delivery first — and `systemctl stop audr-alert-dispatch.timer`
+is not enough. Stopping a timer does not kill a service instance already
+mid-tick, and a tick takes several seconds. That is how the AUD-592 drill
+itself ended up with its own `AUD-592 DRILL ROW` text spooled under key
+`news-crv-other`, one `drain-alert-spool.py` run away from being published as a
+real `critical` board issue:
+
+```bash
+# BOTH, timer and service — for both units:
+sudo systemctl stop audr-alert-dispatch.timer audr-alert-dispatch.service \
+                    audr-watchdog.timer audr-watchdog.service
+# ... insert the row; run the watchdog by hand with AUDR_NOTIFY_DRY_RUN=1 ...
+# ... delete the row; restart both timers ...
+
+# Then ALWAYS check what the drill left behind. A dry-run watchdog does not
+# spool, but a live dispatcher tick that raced it does:
+grep -c DRILL ~/.local/state/audr-notify/undelivered.jsonl \
+  && : > ~/.local/state/audr-notify/undelivered.jsonl
+```
+
+`AUDR_NOTIFY_DRY_RUN=1` covers the hand-run watchdog only. It cannot cover a
+systemd tick, and an agent run's live `PAPERCLIP_*` environment gives notify.sh
+a working board sink from any directory — which is how the false `critical`
+AUD-570 got published.
+
 The watchdog runs the query on stdin rather than `psql -c`, and that is
 load-bearing: psql interpolates `:'var'` in its own lexer, so with `-c` the
 server gets the colon unparsed and every tick dies on `syntax error at or near
