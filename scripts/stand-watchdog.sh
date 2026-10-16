@@ -190,6 +190,13 @@ DISPATCH_TIMEOUT="${AUDR_DISPATCH_QUERY_TIMEOUT:-20}"
 # Oldest line, not newest: a fresh alert arriving on top of a week-old one must
 # not reset the clock on the week-old one.
 SPOOL_FILE_PATH="${AUDR_NOTIFY_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/audr-notify}/undelivered.jsonl"
+# Both files, because a drain claims the spool by MOVING it aside: it appends to
+# `undelivered.jsonl.draining`, replays from there, and removes it only once
+# every record is delivered. An interrupted drain therefore leaves undelivered
+# records in the claim file, where the next drain picks them up — and where this
+# check would not see them at all if it only read the live spool. That is the
+# same shape of blind spot as the one AUD-595 exists to close.
+SPOOL_CLAIM_PATH="${SPOOL_FILE_PATH}.draining"
 # 12h against a drain routine that runs every ~3h (routine 92db1531): four
 # missed drains before this speaks, so a drain that is merely late, or an agent
 # heartbeat that slipped, cannot fire it. It is still far inside the day-scale
@@ -489,11 +496,11 @@ check_alert_dispatch_lag() {
 check_alert_spool_age() {
   local report oldest_h count now last
 
-  [ -f "$SPOOL_FILE_PATH" ] || {
-    # Nothing has ever needed spooling, or the drain cleared the file. Both are
-    # the healthy state — said out loud anyway, like the other three checks, so
-    # that a drained spool and a check that stopped running differ in the
-    # journal.
+  if [ ! -f "$SPOOL_FILE_PATH" ] && [ ! -f "$SPOOL_CLAIM_PATH" ]; then
+    # Nothing has ever needed spooling, or the drain cleared both files. Both
+    # are the healthy state — said out loud anyway, like the other three
+    # checks, so that a drained spool and a check that stopped running differ
+    # in the journal.
     echo "[watchdog] alert spool ok (no spool file at ${SPOOL_FILE_PATH})"
     [ -f "$SPOOL_STATE_FILE" ] && {
       "$NOTIFY" --key "$SPOOL_KEY" --resolve -- "$(printf '%s\n' \
@@ -506,7 +513,7 @@ check_alert_spool_age() {
       echo "[watchdog] alert spool drained — stand-down sent"
     }
     return 0
-  }
+  fi
   now="$(date -u +%s)"
 
   command -v python3 >/dev/null 2>&1 || {
@@ -523,16 +530,27 @@ check_alert_spool_age() {
   # below is itself sent through notify.sh, which on a stand with no working
   # sink spools it — so counting it would make the condition permanently true
   # from its own first message and the file could never read as healthy again.
-  report="$(AUDR_SPOOL_PATH="$SPOOL_FILE_PATH" AUDR_SPOOL_SELF_KEY="$SPOOL_KEY" python3 -c '
+  report="$(AUDR_SPOOL_PATH="$SPOOL_FILE_PATH" AUDR_SPOOL_CLAIM_PATH="$SPOOL_CLAIM_PATH" \
+    AUDR_SPOOL_SELF_KEY="$SPOOL_KEY" python3 -c '
 import json, os, sys, time
 
-path = os.environ["AUDR_SPOOL_PATH"]
+paths = [os.environ["AUDR_SPOOL_PATH"], os.environ["AUDR_SPOOL_CLAIM_PATH"]]
 self_key = os.environ.get("AUDR_SPOOL_SELF_KEY", "")
 now = time.time()
 oldest = None
 count = 0
-try:
-    with open(path, encoding="utf-8") as fh:
+for path in paths:
+    try:
+        fh = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        # Either file may be absent: the claim file exists only mid-drain or
+        # after an interrupted one, and the live spool only once something has
+        # been spooled.
+        continue
+    except OSError as exc:
+        print(f"unreadable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    with fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -555,9 +573,6 @@ try:
                 seconds = 0.0
             age = max(0.0, now - seconds)
             oldest = age if oldest is None else max(oldest, age)
-except OSError as exc:
-    print(f"unreadable: {exc}", file=sys.stderr)
-    sys.exit(1)
 print(f"{count} {int((oldest or 0) // 3600)}")
 ' 2>/dev/null)" || {
     echo "[watchdog] cannot read ${SPOOL_FILE_PATH} — alert spool check skipped"
