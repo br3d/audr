@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# Install (or re-install) the stand health watchdog on the deploy host (AUD-444).
+# Install (or re-install) the stand's host-side alerting on the deploy host
+# (AUD-444; extended with news alert dispatch by AUD-584).
 #
 #   scripts/install-watchdog.sh            install/update, then show status
 #   scripts/install-watchdog.sh --check     report what is installed; no changes
 #
 # What it puts on the host:
-#   <install dir>/scripts/{stand-watchdog.sh,notify.sh,notify-board.py}
-#                                                         verbatim repo copies
+#   <install dir>/scripts/{stand-watchdog.sh,alert-dispatch.sh,notify.sh,
+#                          notify-board.py}               verbatim repo copies
 #   /etc/systemd/system/audr-watchdog.service             from the .in template
 #   /etc/systemd/system/audr-watchdog.timer
+#   /etc/systemd/system/audr-alert-dispatch.service       from the .in template
+#   /etc/systemd/system/audr-alert-dispatch.timer
+#
+# Two timers, one installer: both are host-side delivery over the same notify.sh
+# and the same secrets directory, so a second install script would only create a
+# way to end up with half of it installed. Why they are nevertheless separate
+# systemd units is argued in ci/host-units/audr-alert-dispatch.timer.
 #
 # Why copies rather than pointing the unit at a git checkout: the only checkout
 # on that host belongs to the CI runner, which rewrites it on every deploy and
@@ -42,11 +50,21 @@ esac
 if [ "$mode" = check ]; then
   "${SSH[@]}" '
     echo "== units =="
-    systemctl list-unit-files audr-watchdog.\* --no-pager 2>/dev/null | head -5 || true
-    echo "== timer =="
-    systemctl list-timers audr-watchdog.timer --no-pager 2>/dev/null | head -3 || true
-    echo "== last run =="
-    systemctl status audr-watchdog.service --no-pager -n 10 2>/dev/null | tail -14 || echo "not installed"
+    systemctl list-unit-files "audr-watchdog.*" "audr-alert-dispatch.*" --no-pager 2>/dev/null | head -8 || true
+    echo "== timers =="
+    systemctl list-timers audr-watchdog.timer audr-alert-dispatch.timer --no-pager 2>/dev/null | head -4 || true
+    # `systemctl status` of a missing unit exits 4 and prints nothing, and the
+    # exit code belongs to the pipeline, not to systemctl — so the absence has
+    # to be tested for explicitly. An empty section reads like "ran and said
+    # nothing", which is the opposite of "the unit does not exist".
+    for unit in audr-watchdog audr-alert-dispatch; do
+      echo "== last $unit run =="
+      if systemctl cat "$unit.service" >/dev/null 2>&1; then
+        systemctl status "$unit.service" --no-pager -n 10 2>/dev/null | tail -14
+      else
+        echo "not installed"
+      fi
+    done
     echo "== credentials =="
     # Either file on its own is a complete channel; both absent is the only
     # state in which a detected outage reaches nobody.
@@ -63,32 +81,44 @@ fi
 remote_home="$("${SSH[@]}" 'echo "$HOME"')"
 abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
 
-echo "==> installing watchdog scripts to $HOST:$abs_install/scripts"
+echo "==> installing host alerting scripts to $HOST:$abs_install/scripts"
 "${SSH[@]}" "mkdir -p '$abs_install/scripts'"
 scp -q -i "$KEY" -o StrictHostKeyChecking=no \
-  "$REPO_DIR/scripts/stand-watchdog.sh" "$REPO_DIR/scripts/notify.sh" \
-  "$REPO_DIR/scripts/notify-board.py" \
+  "$REPO_DIR/scripts/stand-watchdog.sh" "$REPO_DIR/scripts/alert-dispatch.sh" \
+  "$REPO_DIR/scripts/notify.sh" "$REPO_DIR/scripts/notify-board.py" \
   "$HOST:$abs_install/scripts/"
-"${SSH[@]}" "chmod 755 '$abs_install/scripts/stand-watchdog.sh' '$abs_install/scripts/notify.sh' '$abs_install/scripts/notify-board.py'"
+"${SSH[@]}" "chmod 755 '$abs_install/scripts/stand-watchdog.sh' '$abs_install/scripts/alert-dispatch.sh' '$abs_install/scripts/notify.sh' '$abs_install/scripts/notify-board.py'"
 
 echo "==> rendering and installing systemd units (sudo on the host)"
-service="$(sed -e "s|@INSTALL_DIR@|$abs_install|g" -e "s|@REMOTE_DIR@|$REMOTE_DIR|g" \
-  "$REPO_DIR/ci/host-units/audr-watchdog.service.in")"
+render_unit() {
+  sed -e "s|@INSTALL_DIR@|$abs_install|g" -e "s|@REMOTE_DIR@|$REMOTE_DIR|g" "$1"
+}
 
 # Units go in via stdin rather than scp-to-/etc: the SSH user has no write
 # access there, and this keeps the privileged step to one explicit sudo tee.
-printf '%s\n' "$service" | "${SSH[@]}" 'sudo tee /etc/systemd/system/audr-watchdog.service >/dev/null'
+render_unit "$REPO_DIR/ci/host-units/audr-watchdog.service.in" \
+  | "${SSH[@]}" 'sudo tee /etc/systemd/system/audr-watchdog.service >/dev/null'
 "${SSH[@]}" 'sudo tee /etc/systemd/system/audr-watchdog.timer >/dev/null' \
   < "$REPO_DIR/ci/host-units/audr-watchdog.timer"
+render_unit "$REPO_DIR/ci/host-units/audr-alert-dispatch.service.in" \
+  | "${SSH[@]}" 'sudo tee /etc/systemd/system/audr-alert-dispatch.service >/dev/null'
+"${SSH[@]}" 'sudo tee /etc/systemd/system/audr-alert-dispatch.timer >/dev/null' \
+  < "$REPO_DIR/ci/host-units/audr-alert-dispatch.timer"
 
-"${SSH[@]}" 'sudo systemctl daemon-reload && sudo systemctl enable --now audr-watchdog.timer'
+"${SSH[@]}" 'sudo systemctl daemon-reload && sudo systemctl enable --now audr-watchdog.timer audr-alert-dispatch.timer'
 
 echo "==> first probe"
 "${SSH[@]}" 'sudo systemctl start audr-watchdog.service; systemctl status audr-watchdog.service --no-pager -n 15 | tail -12'
 
+echo "==> first alert-dispatch tick"
+# Not --dry-run: a pending critical alert is meant to be delivered, and the
+# install is the moment to find out whether it can be. With no pending alerts
+# this is a no-op that proves the unit, the compose exec and the CLI point.
+"${SSH[@]}" 'sudo systemctl start audr-alert-dispatch.service; systemctl status audr-alert-dispatch.service --no-pager -n 15 | tail -12'
+
 echo
-echo "==> installed. Timer:"
-"${SSH[@]}" 'systemctl list-timers audr-watchdog.timer --no-pager | head -3'
+echo "==> installed. Timers:"
+"${SSH[@]}" 'systemctl list-timers audr-watchdog.timer audr-alert-dispatch.timer --no-pager | head -4'
 echo
 "${SSH[@]}" "test -f '$REMOTE_DIR/secrets/paperclip.env' -o -f '$REMOTE_DIR/secrets/telegram.env'" \
   && echo "==> Alert credentials present — alerts will be delivered." \

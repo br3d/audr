@@ -1,0 +1,29 @@
+# Installed by scripts/install-watchdog.sh as
+# /etc/systemd/system/audr-alert-dispatch.timer. No substitution needed.
+#
+# WHY A UNIT OF ITS OWN RATHER THAN A CHECK INSIDE audr-watchdog.
+# stand-watchdog.sh argues the opposite way for its backup and disk checks: a
+# second timer would need its own liveness proof, so hang them off the one that
+# is observably firing. That argument does not transfer here, for two reasons.
+# One, this tick talks to the stack over `docker compose exec`, and a wedged
+# exec inside the watchdog would delay the /health/ready probe — the most urgent
+# thing on this host — behind news delivery. Two, a dispatcher that stops is not
+# silent the way a missing backup is: alerts accumulate in `news_alert` with
+# `dispatched_at IS NULL` and are visible in-app, so the condition is observable
+# from inside the product rather than only from this host's journal.
+[Unit]
+Description=Dispatch pending audr news alerts every minute (AUD-584)
+
+[Timer]
+# Measured from the end of the last run, like audr-watchdog.timer, so a slow
+# tick cannot overlap itself. ~1 min of delivery latency, which ADR-007 §
+# "Последствия" accepts explicitly: news is not a latency-critical signal.
+OnBootSec=3min
+OnUnitActiveSec=60
+AccuracySec=10s
+# Deliberately NOT Persistent=true. Alerts are not lost by a missed window —
+# they stay pending in the database and the next tick takes them — so replaying
+# missed windows on boot would buy nothing and send a burst at boot time.
+
+[Install]
+WantedBy=timers.target

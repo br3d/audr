@@ -106,6 +106,11 @@ services:
       # Same test also pins the watchdog's alert threshold above host-gc's own
       # escalation point, so it has to read both files to compare them.
       - ./scripts/host-gc.sh:/workspace/scripts/host-gc.sh:ro
+      # AUD-584: tests/unit/test_alert_dispatch.py runs the real news-alert
+      # dispatcher against a stubbed `docker` and notify.sh, for the same reason
+      # — the thing that must not regress (never marking an alert dispatched
+      # that notify.sh refused) lives in the shipped script, not in a copy.
+      - ./scripts/alert-dispatch.sh:/workspace/scripts/alert-dispatch.sh:ro
     profiles:
       - backend
 

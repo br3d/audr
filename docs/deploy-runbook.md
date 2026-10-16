@@ -371,15 +371,17 @@ scripts/install-watchdog.sh            # install or update, then show status
 scripts/install-watchdog.sh --check    # what is installed, and whether creds exist
 ```
 
-The installer copies the three scripts to `~/.local/share/audr-watchdog/scripts/`
-and renders the unit from `ci/host-units/audr-watchdog.service.in`. The copy is
+The installer copies the four scripts to `~/.local/share/audr-watchdog/scripts/`
+and renders both units from `ci/host-units/audr-watchdog.service.in` and
+`ci/host-units/audr-alert-dispatch.service.in` (AUD-584 — see
+[news alert dispatch](#news-alert-dispatch-adr-007-phase-2) below). The copy is
 the point: the only git checkout on that host belongs to the CI runner, which
 rewrites it every deploy and resets it on a failed one, so a watchdog pointed at
 it would lose its code exactly when it is needed.
 
-**Editing `scripts/stand-watchdog.sh`, `scripts/notify.sh` or
-`scripts/notify-board.py` does not reach the host until `install-watchdog.sh`
-runs again.** This is the opposite of the workflows, which ship with the commit
+**Editing `scripts/stand-watchdog.sh`, `scripts/alert-dispatch.sh`,
+`scripts/notify.sh` or `scripts/notify-board.py` does not reach the host until
+`install-watchdog.sh` runs again.** This is the opposite of the workflows, which ship with the commit
 since AUD-443 — remember the difference. (The CI failure path runs from the
 runner's checkout, so it does get the new code with the commit; only the
 watchdog's copies need the installer.)
@@ -411,6 +413,65 @@ better than raising the threshold, because the counter file resets on the first
 healthy probe either way. Note that stopping this timer also stops the
 backup-freshness check, so a maintenance window long enough to span a missed
 03:20 would go unreported — start it again the same day.
+
+## News alert dispatch (ADR-007 phase 2)
+
+The third timer on this host, `audr-alert-dispatch.timer`, installed by the same
+`scripts/install-watchdog.sh` and running `scripts/alert-dispatch.sh` once a
+minute. It is the bridge between the stack and a channel: `news_analyze` writes
+`critical` rows into `news_alert` inside the stack, and this script pushes them
+through the same `notify.sh` the watchdog uses.
+
+```
+docker compose exec -T worker python -m audr.jobs.alerts_pending   # JSON, pending only
+scripts/notify.sh --key news-<asset>-<category> -- <text>          # board + telegram
+docker compose exec -T worker python -m audr.jobs.alerts_mark <id> # dispatched_at = now()
+```
+
+Four things about it are deliberate and worth knowing before you debug it:
+
+- **`dispatched_at` means notify.sh accepted the message (exit 0)**, not that
+  anyone read it. Everything after that point is notify.sh's: its own Telegram
+  retries, and the spool that `drain-alert-spool.py` replays. Do not add retries
+  on top — two schedules over one message is how duplicates become unexplainable.
+- **At-least-once.** If the tick dies between a successful send and the mark, the
+  next tick re-sends. `--key` makes the board sink comment on the issue already
+  open instead of filing a second one, which is the whole reason that trade is
+  acceptable (ADR-007 §1).
+- **Nothing is ever `--resolve`d.** A news story has no "incident over" moment to
+  detect, so the alert issue is closed by the assignee it woke. The follow-up
+  wave of articles is collapsed upstream by `news_analyze`'s 24h cooldown per
+  `(asset, category)` and here by `--key`.
+- **Only `critical` is pushed.** `warning` accumulates in the in-app list on
+  purpose; a channel that reports every headline gets muted, and a muted channel
+  is worse than none.
+
+```bash
+systemctl list-timers audr-alert-dispatch.timer   # next/last tick
+sudo systemctl start audr-alert-dispatch.service  # dispatch right now
+sudo journalctl -u audr-alert-dispatch.service -n 50
+# A quiet tick logs exactly one line, on purpose — a dead timer and a quiet news
+# day must not look identical:
+#   [alert-dispatch] no pending critical alerts
+
+# Drill the whole path, delivering nothing and marking nothing:
+~/.local/share/audr-watchdog/scripts/alert-dispatch.sh --dry-run
+
+# What is pending and why a previous attempt failed (dispatch_error):
+docker compose exec -T db psql -U audr -d audr -c \
+  "SELECT id, severity, category, created_at, dispatched_at, dispatch_error
+     FROM news_alert ORDER BY created_at DESC LIMIT 10"
+```
+
+Tests run in CI, against the shipped script with a stubbed `docker` and
+notify.sh: `backend/tests/unit/test_alert_dispatch.py` (delivery/marking
+handshake, hostile headlines, a down stack) and
+`backend/tests/unit/test_alerts_cli.py` (the two CLI points' contract).
+
+If the stack is down, this script says so in one line and exits 0 — the outage
+itself is `audr-watchdog`'s alert to send, and a unit failing every 60s would
+only repeat it. Alerts are not lost meanwhile: they stay pending in the database
+and the tick after recovery takes them.
 
 ## Installing and inspecting the scheduled backup
 
