@@ -356,8 +356,10 @@ keyword matching.
 
 ### The registries
 
-Everything the job polls lives in a table, not in code. Adding coverage is an
-INSERT; there is no redeploy.
+Everything the job polls lives in a table, not in code, so adding coverage is
+an INSERT and needs no redeploy. Seed coverage through a migration anyway
+(0024/0025/0026/0031 all do): a hand-run INSERT covers the one install it was
+typed against and silently misses a fresh database.
 
 - **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `url`,
   `enabled`). Carries `etag`/`last_modified` for conditional GETs and
@@ -370,15 +372,53 @@ INSERT; there is no redeploy.
   `WETH` and `ETH`). A feed with **no** rows here is a trade-press feed,
   matched by keyword against the allow-list below instead. Any `INSERT` into
   this table — the manual path included, not just application code — resets
-  the target feed's `etag`/`last_modified` (migration 0029, AUD-573): a plain
-  mapping INSERT must not leave the feed's next poll 304'd on a body that was
-  already fetched before the new symbol existed.
+  the target feed's `etag`/`last_modified` **and `last_polled_at`**
+  (migrations 0029/0030, AUD-573): a plain mapping INSERT must not leave the
+  feed's next poll 304'd on a body that was already fetched before the new
+  symbol existed, and clearing the validators alone is not enough — with a
+  live `last_polled_at`, `list_due_feeds` holds the feed back until its
+  15-minute window comes round anyway.
 - **`snapshot_space`** — one row per Snapshot space (`asset_symbol`,
   `space_id`). Governance proposals are attributed by space, never by symbol.
 - **`news_tracked_asset`** — the allow-list of symbols eligible for
   trade-press matching and for a GDELT query. Seeded with the four symbols
   `news_feed` already curates: WETH, UNI, AAVE, LINK. **Being held is not
   enough**; a symbol only becomes eligible when someone opts it in here.
+  Migration 0031 extended coverage to the rest of the real portfolio and
+  deliberately added **no** rows here — see the preference order below.
+
+#### What is actually covered (migration 0031, AUD-568)
+
+0024 seeded four symbols because those were the ones the test fixtures used;
+0031 grew the registries to the holdings that matter. Every source was checked
+live before seeding — HTTP 200 plus a parseable body for a feed, a
+`proposalsCount` over Snapshot's GraphQL API for a space.
+
+| Asset | Share of portfolio | Sources |
+|---|---|---|
+| KNC | ~65% | `blog.kyberswap.com` + `KyberNetwork/kyberswap-interface` releases |
+| ETH | ~11% | `blog.ethereum.org` + `go-ethereum` releases (shared with WETH, AUD-571) |
+| ENS | ~5% | `ensdomains/ens-contracts` releases + Snapshot `ens.eth` |
+| CRV, LDO | dust | `news.curve.finance`; `blog.lido.fi` + Snapshot `lido-snapshot.eth` |
+| MATIC | dust | `maticnetwork/bor` releases |
+| SUSHI | dust | Snapshot `sushigov.eth` |
+
+Left uncovered on purpose, so a later edit has to argue the case rather than
+assume an oversight:
+
+- **FOLD** (~9%) and **OMG** (~5%) — no blog, no releases, and Snapshot spaces
+  with 1 and 0 proposals. Holding value does not create a source.
+- **Snapshot `curve.eth`** — 203 proposals, newest created 2022-04-29. Outside
+  the 90-day retention window, so polling it can only ever insert zero rows.
+- **A SUSHI release feed** — both `sushiswap/sushiswap` and
+  `sushi-labs/sushiswap` serve a valid but entry-less `releases.atom`.
+- **Sub-$1 dust** (ARB, APE, 1INCH, BAL, COW, COMP, DYDX) — Snapshot spaces
+  exist; coverage would be completeness for its own sake.
+
+Two seeded sources are wired but quiet today: `ens-contracts`'s newest release
+is 2026-03-13 and `ens.eth`'s newest proposal is just outside retention. They
+populate on the next release or proposal. That is the mapping working, not a
+dead source — distinguish "no rows yet" from "no source" before re-triaging.
 
 ### Adding a new holding to news coverage
 
@@ -405,6 +445,10 @@ Short, generic or English-word tickers (`T`, `ETH`, `ASSET`, `COW`) belong in
 ### Operational notes
 
 - Retention is 90 days, one constant shared with ADR-007's alert retention.
+  Items older than that are dropped before insertion, not after: a feed body
+  is the whole history upstream still serves, not a delta, and one live poll
+  wrote 1288 rows then pruned 1272 of them in the same run for an effective
+  gain of 16 (AUD-575).
 - Each tier (feeds, GDELT, Snapshot) commits independently, so a late-tier
   failure cannot roll back successful polls earlier in the same run.
 - A failing source degrades to skip-and-log and increments its failure
