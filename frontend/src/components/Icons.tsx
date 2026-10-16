@@ -209,6 +209,21 @@ export function IconZap(props: IconProps) {
   )
 }
 
+export function IconBell(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path
+        d="M10 3a5 5 0 0 0-5 5v2.5c0 1-.4 2-1 2.8l-.6.7h13.2l-.6-.7c-.6-.8-1-1.8-1-2.8V8a5 5 0 0 0-5-5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M8 16.5a2 2 0 0 0 4 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function IconArrowDown(props: IconProps) {
   return (
     <svg {...defaults} {...props}>

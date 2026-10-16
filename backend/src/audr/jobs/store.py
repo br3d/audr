@@ -48,6 +48,7 @@ _DEFAULT_FRESHNESS_S: dict[str, int] = {
     "event_indexer": 300,
     "news_refresh": 900,
     "asset_icon_refresh": 900,
+    "news_analyze": 300,
 }
 _DEFAULT_FRESHNESS_FALLBACK_S = 300
 
@@ -62,6 +63,7 @@ class JobKind(StrEnum):
     EVENT_INDEXER = "event_indexer"
     NEWS_REFRESH = "news_refresh"
     ASSET_ICON_REFRESH = "asset_icon_refresh"
+    NEWS_ANALYZE = "news_analyze"
 
 
 class JobRunStatus(StrEnum):

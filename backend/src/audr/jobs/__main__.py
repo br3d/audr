@@ -22,6 +22,7 @@ from audr.jobs.asset_icons import handle_asset_icon_refresh
 from audr.jobs.canonicality import recheck_canonicality
 from audr.jobs.event_indexer import handle_event_indexer
 from audr.jobs.news import handle_news_refresh
+from audr.jobs.news_analyze import handle_news_analyze
 from audr.jobs.policy import RetryPolicy, get_shared_rpc_rate_limiter
 from audr.jobs.quotes import handle_quote_refresh
 from audr.jobs.store import (
@@ -483,6 +484,7 @@ async def _main() -> None:
     quote_worker = Worker(factory, kind=JobKind.QUOTE_REFRESH, handler=handle_quote_refresh)
     event_worker = Worker(factory, kind=JobKind.EVENT_INDEXER, handler=handle_event_indexer)
     news_worker = Worker(factory, kind=JobKind.NEWS_REFRESH, handler=handle_news_refresh)
+    news_analyze_worker = Worker(factory, kind=JobKind.NEWS_ANALYZE, handler=handle_news_analyze)
     icon_worker = Worker(
         factory, kind=JobKind.ASSET_ICON_REFRESH, handler=handle_asset_icon_refresh
     )
@@ -511,6 +513,7 @@ async def _main() -> None:
             did_work |= await quote_worker.run_once()
             did_work |= await event_worker.run_once()
             did_work |= await news_worker.run_once()
+            did_work |= await news_analyze_worker.run_once()
             did_work |= await icon_worker.run_once()
             did_work |= await valuation_worker.run_once()
             did_work |= await validate_rpc_worker.run_once()
