@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# Probe the stand's /health/ready and alert on a sustained outage (AUD-444).
+# Probe the stand's /health/ready and alert on a sustained outage (AUD-444),
+# plus two slower conditions that have no timer of their own: backup staleness
+# (AUD-567) and disk pressure (AUD-580).
 #
 # Runs on the deploy host from audr-watchdog.timer, once a minute. One tick =
 # one probe; all the state between ticks is a counter in a file.
+#
+# WHY THE SECONDARY CHECKS LIVE HERE. Both watch a condition that would
+# otherwise need a timer of its own — and that timer would then need its own
+# liveness proof, recursively, which is exactly the trap AUD-567 fell into. This
+# unit is observably firing every 60s in the journal, so hanging the checks off
+# it is the one place that needs no new proof. Each is independent of the probe
+# and of the other: they run under `|| true` and cannot change its outcome.
 #
 # WHY THIS EXISTS SEPARATELY FROM CI. The deploy workflow's "Report stand state"
 # step only speaks when a deploy fails, and only to whoever opens the run. The
@@ -67,9 +76,39 @@ BACKUP_MAX_AGE_H="${AUDR_BACKUP_MAX_AGE_HOURS:-26}"
 BACKUP_REMIND_H="${AUDR_BACKUP_REMIND_HOURS:-24}"
 BACKUP_KEY="${AUDR_BACKUP_ALERT_KEY:-backup-stale}"
 
+# --- disk pressure (AUD-580) -------------------------------------------------
+# scripts/host-gc.sh already measures this and already has two escalating WARN
+# paths for it — "root filesystem still at N% after GC" and the much worse
+# "Docker is no longer the thing filling this disk". Both only `echo`. host-gc
+# runs as an `if: always()` step inside build.yaml/ci.yaml, so that output lands
+# in a Gitea job log, and Act Runner's journal carries only its own meta lines:
+# `journalctl -u act_runner | grep host-gc` returns nothing even for runs that
+# did prune. Nobody reads a job log on a green deploy, so the most serious
+# condition host-gc can detect was structurally invisible.
+#
+# The stakes are host-gc's own: "Disk exhaustion on this host does not fail
+# politely: it takes the live stack's database volume down with it."
+#
+# This adds the missing voice, NOT a second GC lever — host-gc's AUD-425 header
+# warns specifically against re-tuning retention, and on 2026-10-16 the windows
+# measured correct: / moved 63% -> 75% in a day purely on merge rate (7 deploys
+# in 11h, each leaving ~2x278MB of non-shared npm/uv exec-mount cache), with the
+# image side provably pinned at its IMAGE_KEEP_COUNT=5 floor.
+DISK_PATH="${AUDR_DISK_PATH:-/}"
+# 85, deliberately ABOVE host-gc's WARN_PCT=80. 80% is the level at which
+# host-gc's escalated pass is *designed* to run and reclaim, so alerting there
+# would fire on every busy merge day and train the channel to be ignored. 85%
+# means escalation has already run and still not recovered — host-gc's
+# "investigate non-Docker growth" state, which is the actionable one.
+DISK_WARN_PCT="${AUDR_DISK_WARN_PCT:-85}"
+# Hours-scale condition: between the outage path's 1h and the backup path's 24h.
+DISK_REMIND_H="${AUDR_DISK_REMIND_HOURS:-6}"
+DISK_KEY="${AUDR_DISK_ALERT_KEY:-disk-pressure}"
+
 mkdir -p "$STATE_DIR" || { echo "[watchdog] cannot create $STATE_DIR" >&2; exit 1; }
 
 BACKUP_STATE_FILE="$STATE_DIR/backup-stale-alerted-at"
+DISK_STATE_FILE="$STATE_DIR/disk-pressure-alerted-at"
 
 # Runs before the health probe and deliberately cannot change its outcome: a
 # stale backup and a down stand are independent conditions, and the probe is the
@@ -136,6 +175,79 @@ check_backup_age() {
   echo "[watchdog] ALERT sent — backups stale (${age_label}, limit ${BACKUP_MAX_AGE_H}h)"
 }
 
+# Same contract as check_backup_age: runs before the probe, cannot change its
+# outcome, every failure path returns rather than exits.
+check_disk_space() {
+  local pct line now last dsdf
+  now="$(date -u +%s)"
+
+  # Field 5 of `df -P` is the use percentage. -P pins POSIX output so a long
+  # device name cannot wrap the row and shift the column.
+  pct="$(df -P "$DISK_PATH" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
+  # A non-numeric reading means df failed or the path is gone. Say so and stay
+  # quiet rather than treating an unreadable disk as either full or healthy —
+  # guessing in either direction is worse than one honest journal line.
+  case "${pct:-}" in
+    ''|*[!0-9]*)
+      echo "[watchdog] cannot read disk usage for ${DISK_PATH}"
+      return 0
+      ;;
+  esac
+  line="$(df -h "$DISK_PATH" 2>/dev/null | awk 'NR==2 {print $3" used, "$4" free ("$5" of "$2")"}')"
+
+  if [ "$pct" -lt "$DISK_WARN_PCT" ]; then
+    if [ -f "$DISK_STATE_FILE" ]; then
+      "$NOTIFY" --key "$DISK_KEY" --resolve -- "$(printf '%s\n' \
+        "✅ audr stand disk pressure cleared" \
+        "" \
+        "${DISK_PATH} is back to ${pct}% (threshold ${DISK_WARN_PCT}%) as of ${stamp}." \
+        "${line}" \
+        "No action needed.")"
+      rm -f "$DISK_STATE_FILE"
+      echo "[watchdog] disk pressure cleared (${pct}%) — stand-down sent"
+    else
+      echo "[watchdog] disk at ${pct}% (limit ${DISK_WARN_PCT}%)"
+    fi
+    return 0
+  fi
+
+  last=0
+  [ -f "$DISK_STATE_FILE" ] && last="$(cat "$DISK_STATE_FILE" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ "$last" -ne 0 ] && [ $(( now - last )) -lt $(( DISK_REMIND_H * 3600 )) ]; then
+    echo "[watchdog] disk at ${pct}% — already alerted, reminding in $(( (DISK_REMIND_H * 3600 - (now - last)) / 3600 ))h"
+    return 0
+  fi
+
+  # Carried in the alert so the first triage question — "is this Docker or
+  # something else?" — is answered without an SSH session, matching the outage
+  # alert's philosophy. Best-effort: a failing diagnostic must not swallow it.
+  dsdf="$(docker system df 2>/dev/null || true)"
+
+  "$NOTIFY" --key "$DISK_KEY" -- "$(printf '%s\n' \
+    "🟠 audr stand disk is FILLING UP" \
+    "" \
+    "${DISK_PATH} is at ${pct}%, at or above the ${DISK_WARN_PCT}% threshold, as of ${stamp}." \
+    "${line}" \
+    "Checked by audr-watchdog on $(hostname)." \
+    "" \
+    "This is past the point where scripts/host-gc.sh escalates on its own" \
+    "(it tightens to 6h windows at 80%), so GC has most likely already run" \
+    "and not recovered the space. Disk exhaustion here takes the db_data" \
+    "volume down with it, so this is worth looking at now." \
+    "" \
+    "${dsdf:-<docker system df unavailable>}" \
+    "" \
+    "First question is whether Docker is still the thing growing:" \
+    "  scripts/host-gc.sh --dry-run    # what is resident, changes nothing" \
+    "  sudo du -xh --max-depth=1 / | sort -rh | head" \
+    "A large non-Docker directory means retention is not the problem." \
+    "" \
+    "Runbook: docs/deploy-runbook.md — 'Disk pressure'.")"
+  echo "$now" > "$DISK_STATE_FILE"
+  echo "[watchdog] ALERT sent — disk at ${pct}% (limit ${DISK_WARN_PCT}%)"
+}
+
 fails=0
 [ -f "$STATE_FILE" ] && fails="$(cat "$STATE_FILE" 2>/dev/null || echo 0)"
 case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
@@ -143,9 +255,10 @@ case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
 ready="$(curl -s -m 10 "$PROBE_URL" 2>/dev/null || true)"
 stamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-# Before the probe's own branches, which all exit. `|| true` so a bug in the
-# freshness check cannot cost us the outage alert.
+# Before the probe's own branches, which all exit. `|| true` so a bug in either
+# secondary check cannot cost us the outage alert.
 check_backup_age || true
+check_disk_space || true
 
 case "$ready" in
   *'"status":"ok"'*)
