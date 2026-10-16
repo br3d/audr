@@ -706,6 +706,46 @@ export function fetchAssetNews(
   return get<AssetNewsResponse>(`/assets/${assetId}/news?${params.toString()}`)
 }
 
+// --- News alerts types ---
+
+export interface AlertItem {
+  id: string
+  asset_news_id: string
+  asset_id: string
+  category: string
+  severity: string
+  summary: string
+  classifier: string
+  model: string | null
+  created_at: string
+  read_at: string | null
+}
+
+export interface AlertsResponse {
+  total: number
+  unread_count: number
+  limit: number
+  offset: number
+  alerts: AlertItem[]
+}
+
+export interface AlertReadResponse {
+  id: string
+  read_at: string
+}
+
+// --- News alerts API ---
+
+export function fetchAlerts(unreadOnly = false): Promise<AlertsResponse> {
+  const params = new URLSearchParams({ limit: '20', offset: '0' })
+  if (unreadOnly) params.set('unread', 'true')
+  return get<AlertsResponse>(`/alerts?${params.toString()}`)
+}
+
+export function markAlertRead(alertId: string): Promise<AlertReadResponse> {
+  return post<AlertReadResponse>(`/alerts/${alertId}/read`)
+}
+
 // --- Events & allowances types ---
 
 export type OnchainEventType = 'transfer_in' | 'transfer_out'

@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from audr.api.alerts import router as alerts_router
 from audr.api.assets import router as assets_router
 from audr.api.auth import router as auth_router
 from audr.api.errors import (
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router)
     app.include_router(events_router)
     app.include_router(news_router)
+    app.include_router(alerts_router)
 
     # Last, and only last: this mounts a catch-all at `/` for the built SPA
     # (AUD-388, replacing the nginx `web` container). Every router above must be
