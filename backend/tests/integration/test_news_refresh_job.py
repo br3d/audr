@@ -471,14 +471,13 @@ async def test_adding_symbol_to_feed_invalidates_conditional_get(
     assert await _news_rows(news_session, asset_id=eth_id) == []
 
     # The manual INSERT path AUD-568 part B drives — no helper call, no
-    # explicit etag reset by the caller.
+    # explicit etag or last_polled_at reset by the caller. The feed was just
+    # polled above, so last_polled_at is seconds old: if the trigger only
+    # cleared etag/last_modified, list_due_feeds would still skip this feed
+    # for the rest of its normal poll window.
     await news_session.execute(
         text("INSERT INTO news_feed_symbol (feed_id, asset_symbol) VALUES (:feed_id, 'ETH')"),
         {"feed_id": str(feed_id)},
-    )
-    await news_session.execute(
-        text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
-        {"id": str(feed_id)},
     )
     await news_session.flush()
 
@@ -745,3 +744,61 @@ async def test_prune_removes_rows_older_than_90_days(news_session: AsyncSession)
 
     rows = await _news_rows(news_session, asset_id=asset_id)
     assert [r["external_id"] for r in rows] == ["boundary"]
+
+
+async def test_feed_items_older_than_retention_are_not_inserted(
+    news_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD-573 follow-up: a feed's full history must not round-trip through
+    `_insert_news` only for `_prune_old_news` to delete it moments later in
+    the same run — one live poll after the symbol-invalidation fix landed
+    did exactly that: feeds_polled=2 inserted=1288 pruned=1272 for a 16-row
+    effective gain.
+    """
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://example.com/eth.xml",
+    )
+
+    calls = 0
+    original_insert_news = news_module._insert_news
+
+    async def _counting_insert_news(*args: object, **kwargs: object) -> int:
+        nonlocal calls
+        calls += 1
+        return await original_insert_news(*args, **kwargs)
+
+    monkeypatch.setattr(news_module, "_insert_news", _counting_insert_news)
+
+    old_updated = (datetime.now(UTC) - timedelta(days=91)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_updated = _RECENT.strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = f"""<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>old-1</id>
+    <title>Ancient upgrade</title>
+    <link href="https://example.com/old" rel="alternate"/>
+    <updated>{old_updated}</updated>
+  </entry>
+  <entry>
+    <id>new-1</id>
+    <title>Fresh upgrade</title>
+    <link href="https://example.com/new" rel="alternate"/>
+    <updated>{new_updated}</updated>
+  </entry>
+</feed>
+""".encode()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/eth.xml").mock(
+            return_value=Response(200, content=body, headers={"etag": '"v1"'})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert calls == 1
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["new-1"]
