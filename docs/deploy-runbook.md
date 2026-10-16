@@ -579,6 +579,55 @@ teardown step could run. That reaper uses `docker image rm` *without* `-f`, so
 an image a container still references is refused rather than pulled out from
 under a live run.
 
+### Disk pressure
+
+Everything above is the *mechanism*. Until AUD-580 none of it had a **voice**:
+`host-gc.sh`'s `WARN: root filesystem still at N% after GC` and the much worse
+`WARN: Docker is no longer the thing filling this disk` only ever `echo`, from a
+step inside a CI job. That output lands in a Gitea job log, and Act Runner's
+journal carries only its own meta lines — `journalctl -u act_runner | grep
+host-gc` returns nothing even for runs that pruned successfully. Nobody reads a
+job log on a green deploy, so the most serious condition the GC could detect was
+structurally invisible on a host where exhaustion takes `db_data` with it.
+
+`scripts/stand-watchdog.sh` now carries a `check_disk_space` alongside its
+backup-freshness check, for the same reason: both watch a slow condition, and
+giving either its own timer would need that timer's own liveness proof,
+recursively (the AUD-567 trap). The watchdog is observably firing every 60s.
+
+It alerts at **85%**, deliberately above host-gc's `WARN_PCT=80`. 80% is where
+host-gc escalates to 6h windows and usually recovers the space by itself, so
+alerting there would fire on every busy merge day and train the channel to be
+ignored. 85% means escalation has already run and not recovered — which is the
+actionable state. Alert key `disk-pressure`, so it is its own board thread, with
+a `--resolve` stand-down once the disk drops back below the threshold, and one
+reminder every 6h while it persists.
+
+When it fires, the first question is whether Docker is still the thing growing.
+The alert body carries `df -h /` and the `docker system df` breakdown so that is
+answerable without an SSH session:
+
+```bash
+ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'bash /tmp/host-gc.sh --dry-run'
+ssh -i id_ed25519 "$AUDR_DEPLOY_HOST" 'sudo du -xh --max-depth=1 / | sort -rh | head'
+```
+
+A large **non-Docker** directory means retention is not the problem and tighter
+GC windows will not help. Note that `/var/lib/containerd` is Docker's own
+content store on this host, not a second runtime, so it is expected to hold
+roughly what `docker system df` reports — do not count it twice.
+
+A high reading is **not by itself** a GC failure. Build cache made purely of
+sub-48h entries is the window working as designed: on 2026-10-16 `/` moved
+63% → 75% in a day on merge rate alone (7 deploys in 11h, each leaving ~2×278MB
+of non-shared `npm ci` / `uv sync` exec-mount cache), while the image side sat
+provably at its `IMAGE_KEEP_COUNT=5` floor. Confirm the cap before touching any
+window — and re-read `host-gc.sh`'s header, which warns against exactly that.
+
+Override the thresholds per-host with `AUDR_DISK_WARN_PCT`, `AUDR_DISK_PATH` and
+`AUDR_DISK_REMIND_HOURS`; drill it without publishing via the `--dry-run` path in
+"Drilling an alert without publishing one" above.
+
 ## Registry tag retention
 
 The registry (`$AUDR_REGISTRY`) is a plain CNCF `distribution` registry

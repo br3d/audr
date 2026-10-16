@@ -97,6 +97,15 @@ services:
       # made it necessary. (It was scripts/release.sh until AUD-546 moved the
       # revert to the step that can prove the new tag exists.)
       - ./scripts/promote-image.py:/workspace/scripts/promote-image.py:ro
+      # AUD-580: tests/unit/test_stand_watchdog.py executes the real watchdog
+      # against a stubbed `df` and a stubbed notify.sh. Mounting the script is
+      # what makes those assertions run on the shipped source rather than on a
+      # copy of it, so a threshold edited in the script cannot pass a test that
+      # still encodes the old one.
+      - ./scripts/stand-watchdog.sh:/workspace/scripts/stand-watchdog.sh:ro
+      # Same test also pins the watchdog's alert threshold above host-gc's own
+      # escalation point, so it has to read both files to compare them.
+      - ./scripts/host-gc.sh:/workspace/scripts/host-gc.sh:ro
     profiles:
       - backend
 
