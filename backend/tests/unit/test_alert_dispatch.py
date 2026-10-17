@@ -86,6 +86,15 @@ def _fake_host(
         "#!/bin/sh\n"
         'printf "docker %s\\n" "$*" >> "$CALLS"\n'
         f"[ {docker_rc} -ne 0 ] && exit {docker_rc}\n"
+        # REJECT_VIA stands in for a worker image older than --via: argparse
+        # exits 2 on an unknown flag, which is what the real module does.
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        '    --via=*) if [ -n "${REJECT_VIA:-}" ]; then\n'
+        '               echo "unrecognized arguments: $arg" >&2; exit 2\n'
+        "             fi ;;\n"
+        "  esac\n"
+        "done\n"
         'for arg in "$@"; do\n'
         '  case "$arg" in\n'
         '    audr.jobs.alerts_pending) cat "$PENDING_JSON"; exit 0 ;;\n'
@@ -341,3 +350,27 @@ def test_pending_is_bounded_per_tick(tmp_path: Path) -> None:
     pending_calls = [line for line in _lines(calls) if "alerts_pending" in line]
     assert len(pending_calls) == 1, _lines(calls)
     assert "--limit 20" in pending_calls[0]
+
+
+def test_a_worker_that_rejects_via_still_gets_the_row_marked(tmp_path: Path) -> None:
+    """Version skew with the host half NEWER than the container half.
+
+    install-watchdog.sh ships these scripts; the worker arrives with the image.
+    Between a merge and the deploy the host can therefore pass `--via` to an
+    `alerts_mark` that has never heard of it, which argparse rejects with exit
+    2. Without a retry the row stays pending and the same alert is re-sent
+    every tick — one board comment and one spool record a minute — so the
+    fallback is to mark it without the road.
+    """
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT], road="spool")
+    env["REJECT_VIA"] = "1"
+
+    out = _run(script, env)
+
+    assert "retrying without the road" in out.stderr
+    # Not the "could not mark it" path: the mark did happen.
+    assert "could not mark it" not in out.stderr
+    marks = _marks(calls)
+    assert len(marks) == 2, _lines(calls)
+    assert "--via=spool" in marks[0]
+    assert "--via" not in marks[1]

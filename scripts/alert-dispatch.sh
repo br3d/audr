@@ -234,6 +234,20 @@ while IFS=$'\t' read -r id key symbol category summary title url news_site publi
     fi
     if ! mark_out="$(worker_exec python -m audr.jobs.alerts_mark \
       "${mark_args[@]+"${mark_args[@]}"}" "$id" 2>&1)"; then
+      # VERSION SKEW, the other way round from the one alerts_mark handles in
+      # SQL. These scripts are installed by install-watchdog.sh while the
+      # worker arrives with the image, so the host half can be the NEWER one —
+      # it is, for the minutes between a merge and the deploy. An `alerts_mark`
+      # that has never heard of --via exits 2 on it, and without this retry the
+      # row would stay pending and the SAME alert be re-sent every tick (60s)
+      # until the image caught up, spooling a record each time. The road is
+      # bookkeeping; the mark is what stops the duplicate.
+      if [ "${#mark_args[@]}" -gt 0 ]; then
+        echo "[alert-dispatch] alerts_mark rejected ${mark_args[0]} (worker predates it?) — retrying without the road" >&2
+        if mark_out="$(worker_exec python -m audr.jobs.alerts_mark "$id" 2>&1)"; then
+          continue
+        fi
+      fi
       # Delivered but not marked: the next tick will send it again and --key
       # will collapse it. Say so rather than failing, so the journal explains
       # the duplicate somebody may see on the board.
