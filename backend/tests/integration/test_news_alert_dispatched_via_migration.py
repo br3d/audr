@@ -48,7 +48,7 @@ def _alembic_config() -> Config:
     raise RuntimeError("alembic.ini not found")
 
 
-async def _reset_scratch_db(admin_url: str, *, create: bool) -> None:
+async def _reset_scratch_db(admin_url: str, *, create: bool, db: str = _SCRATCH_DB) -> None:
     admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
     async with admin_engine.connect() as conn:
         await conn.execute(
@@ -56,12 +56,27 @@ async def _reset_scratch_db(admin_url: str, *, create: bool) -> None:
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
                 " WHERE datname = :db AND pid <> pg_backend_pid()"
             ),
-            {"db": _SCRATCH_DB},
+            {"db": db},
         )
-        await conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{_SCRATCH_DB}"'))
+        await conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{db}"'))
         if create:
-            await conn.execute(sa.text(f'CREATE DATABASE "{_SCRATCH_DB}"'))
+            await conn.execute(sa.text(f'CREATE DATABASE "{db}"'))
     await admin_engine.dispose()
+
+
+async def _road_check_name(conn: object) -> str | None:
+    """The actual name of the CHECK guarding `dispatched_via`, or None."""
+    row = (
+        await conn.execute(  # type: ignore[attr-defined]
+            sa.text(
+                "SELECT c.conname FROM pg_constraint c"
+                " JOIN pg_class t ON t.oid = c.conrelid"
+                " WHERE t.relname = 'news_alert' AND c.contype = 'c'"
+                "   AND pg_get_constraintdef(c.oid) LIKE '%dispatched_via%'"
+            )
+        )
+    ).first()
+    return None if row is None else str(row[0])
 
 
 async def test_0034_upgrade_and_downgrade() -> None:
@@ -134,6 +149,66 @@ async def test_0034_upgrade_and_downgrade() -> None:
     finally:
         os.environ["DATABASE_URL"] = old_db_url
         await _reset_scratch_db(base_url, create=False)
+
+
+async def test_0034_downgrade_on_a_legacy_constraint_name() -> None:
+    """The rollback must work on a database migrated BEFORE the name was fixed.
+
+    This is the case the forward-only test above cannot see, and the one that
+    actually exists in production. 0034 originally passed the already-prefixed
+    `ck_news_alert_dispatched_via` to `op.create_check_constraint`, and the
+    `ck_%(table_name)s_%(constraint_name)s` convention expanded it a second
+    time, so every database migrated under that spelling — the stand included,
+    measured 2026-10-17 — carries:
+
+        ck_news_alert_ck_news_alert_dispatched_via
+
+    An applied migration never re-runs, so renaming it in the migration does
+    not rename it there. Pinning the *new* spelling in `downgrade()` therefore
+    failed with `UndefinedObject` against precisely the databases a rollback
+    would be run against, while passing a fresh-DB test, because on a fresh DB
+    `create` and `drop` expand the same literal and agree by construction.
+
+    Both names are reproduced here by renaming the constraint to the legacy
+    form after the upgrade, which is cheaper and more honest than checking out
+    the superseded migration file.
+    """
+    legacy_db = _SCRATCH_DB + "_legacy_name"
+    base_url = os.environ["DATABASE_URL"]
+    scratch_url = base_url.rsplit("/", 1)[0] + f"/{legacy_db}"
+
+    await _reset_scratch_db(base_url, create=True, db=legacy_db)
+
+    cfg = _alembic_config()
+    old_db_url = os.environ["DATABASE_URL"]
+    os.environ["DATABASE_URL"] = scratch_url
+    try:
+        await asyncio.to_thread(command.upgrade, cfg, "0034")
+        scratch_engine = create_async_engine(scratch_url)
+
+        legacy = "ck_news_alert_ck_news_alert_dispatched_via"
+        async with scratch_engine.begin() as conn:
+            current = await _road_check_name(conn)
+            assert current is not None, "0034 must leave a CHECK on dispatched_via"
+            if current != legacy:
+                await conn.execute(
+                    sa.text(f'ALTER TABLE news_alert RENAME CONSTRAINT "{current}" TO "{legacy}"')
+                )
+
+        async with scratch_engine.connect() as conn:
+            assert await _road_check_name(conn) == legacy, "failed to stage the stand's shape"
+
+        # The assertion: this must not raise UndefinedObject.
+        await asyncio.to_thread(command.downgrade, cfg, "0033")
+
+        async with scratch_engine.connect() as conn:
+            assert await _column(conn, "dispatched_via") is None
+            assert await _road_check_name(conn) is None, "the legacy CHECK outlived its column"
+
+        await scratch_engine.dispose()
+    finally:
+        os.environ["DATABASE_URL"] = old_db_url
+        await _reset_scratch_db(base_url, create=False, db=legacy_db)
 
 
 async def _column(conn: object, name: str) -> tuple[str, str, str | None] | None:
