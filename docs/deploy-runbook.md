@@ -628,6 +628,12 @@ every critical news alert currently takes the spool road.
 2. **`news_alert.dispatched_via` records it** — migration 0034, written by
    `alerts_mark --via`, exposed on `GET /api/v1/alerts`. `dispatched_via =
    'spool'` reads as "out of the dispatcher's queue, nobody pushed yet".
+   It records the road **the dispatcher** took and a later drain does not
+   rewrite it, deliberately: the drain runs from an agent host with no database
+   access, and what it produces as proof is the board issue itself. So an old
+   `'spool'` row means "this alert was never pushed from the host", not
+   necessarily "still undelivered" — for the undelivered question, read the
+   spool, which is what the watchdog check below does.
 3. **The spool's own age is the watched artefact** — `check_alert_spool_age` in
    `stand-watchdog.sh`, `--key alert-spool-stale`, firing when the oldest record
    is over 12h old (`AUDR_SPOOL_MAX_AGE_HOURS`, against a drain routine on a

@@ -24,6 +24,13 @@ stays optional: a dispatcher that does not pass it — an install directory that
 predates this, a hand-run — still marks the row and records no road, which is
 honest rather than invented.
 
+The value is the road THIS dispatch took and nothing rewrites it later: the
+drain that eventually replays a spooled alert runs from an agent host with no
+database access, and the proof it produces is the board issue itself. So an old
+`'spool'` row says "never pushed from the host", not "still undelivered" — the
+spool file answers that second question (stand-watchdog.sh's
+check_alert_spool_age).
+
 AT-LEAST-ONCE IS ACCEPTED, not a bug to fix here: if the dispatcher dies between
 notify.sh returning 0 and this marking the row, the next tick sends the alert
 again. The `--key` dedupe on the board sink collapses that into a comment on the
