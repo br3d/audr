@@ -209,12 +209,31 @@ while IFS=$'\t' read -r id key symbol category summary title url news_site publi
   printf '%s\n' "$notify_out" | sed 's/^/[alert-dispatch]   /'
 
   if [ "$notify_rc" -eq 0 ]; then
-    sent=$((sent + 1))
     # One word, from notify.sh's own mouth. Anything unexpected (an empty file
     # because this notify.sh predates --road-file, a word the worker's
     # constraint would reject) is dropped rather than guessed at: the mark must
     # still happen, and `dispatched_via IS NULL` honestly says "road unknown".
     road="$(tr -d '[:space:]' < "$ROAD_FILE" 2>/dev/null || true)"
+
+    # `none` with exit 0 is the single outcome where nothing at all holds the
+    # alert: no sink took it AND the spool write failed (no python3, or the
+    # state directory is unwritable). Marking that row dispatched would retire
+    # the only record of an alert nobody will ever see — the AUD-595 failure in
+    # its purest form. So it is treated as a failed attempt instead: the row
+    # stays pending, the next tick retries, and check_alert_dispatch_lag sees
+    # the dispatch_error with no grace.
+    if [ "$road" = none ]; then
+      failed=$((failed + 1))
+      echo "[alert-dispatch] $id reached NOBODY — no sink took it and it could not be spooled" >&2
+      [ "$dry" = 1 ] && continue
+      worker_exec python -m audr.jobs.alerts_mark \
+        "--error=notify.sh delivered to no sink and could not spool (road=none)" "$id" \
+        >/dev/null 2>&1 \
+        || echo "[alert-dispatch] could not record dispatch_error for $id" >&2
+      continue
+    fi
+
+    sent=$((sent + 1))
     case "$road" in
       board|telegram|board+telegram|spool) ;;
       *) [ -n "$road" ] && echo "[alert-dispatch] notify.sh reported an unknown road '${road}' — marking without it" >&2

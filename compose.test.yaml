@@ -118,6 +118,12 @@ services:
       # mount the check that stops the installer promising delivery it never
       # verified would not run anywhere.
       - ./scripts/notify-board.py:/workspace/scripts/notify-board.py:ro
+      # AUD-595: tests/unit/test_notify_road.py runs the real notify.sh and
+      # asserts the `--road-file` contract — which word it writes on each exit
+      # path, and that spooling still exits 0. Both halves are load-bearing:
+      # alert-dispatch.sh writes `news_alert.dispatched_via` from that word, and
+      # every other caller reads the exit status as "is alerting itself broken".
+      - ./scripts/notify.sh:/workspace/scripts/notify.sh:ro
     profiles:
       - backend
 

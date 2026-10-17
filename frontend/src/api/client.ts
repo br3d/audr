@@ -719,6 +719,15 @@ export interface AlertItem {
   model: string | null
   created_at: string
   read_at: string | null
+  /** When notify.sh accepted this alert for delivery — null if it never has. */
+  dispatched_at: string | null
+  /**
+   * Which road that was (AUD-595): a sink name means a human was pushed at,
+   * `'spool'` means it only reached the host's undelivered.jsonl and the
+   * spool drain owns it now. Null is "not dispatched", or dispatched before
+   * the road was recorded — `dispatched_at` separates those two.
+   */
+  dispatched_via: 'board' | 'telegram' | 'board+telegram' | 'spool' | null
 }
 
 export interface AlertsResponse {

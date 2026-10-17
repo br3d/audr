@@ -52,8 +52,14 @@ _ROADS = ("board", "telegram", "board+telegram", "spool")
 
 def upgrade() -> None:
     op.add_column("news_alert", sa.Column("dispatched_via", sa.Text(), nullable=True))
+    # BARE name, not the full one. `audr.models`' naming convention is
+    # `ck_%(table_name)s_%(constraint_name)s` and alembic applies it to the
+    # op-level helpers too, so "ck_news_alert_dispatched_via" here would create
+    # `ck_news_alert_ck_news_alert_dispatched_via` — the same way the 0001
+    # baseline ended up with `ck_asset_ck_asset_address_lower` — and the
+    # downgrade below would then fail to find it.
     op.create_check_constraint(
-        "ck_news_alert_dispatched_via",
+        "dispatched_via",
         "news_alert",
         "dispatched_via IS NULL OR dispatched_via = ANY (ARRAY["
         + ", ".join(f"'{road}'::text" for road in _ROADS)
@@ -62,5 +68,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_news_alert_dispatched_via", "news_alert", type_="check")
+    # Bare name here too — the convention is applied on the way out as well.
+    op.drop_constraint("dispatched_via", "news_alert", type_="check")
     op.drop_column("news_alert", "dispatched_via")

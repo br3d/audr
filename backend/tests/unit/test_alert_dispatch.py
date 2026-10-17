@@ -242,6 +242,28 @@ def test_a_notify_that_reports_no_road_still_marks_the_alert(tmp_path: Path) -> 
     assert "--via" not in marks[0]
 
 
+def test_an_alert_that_reached_nobody_stays_pending(tmp_path: Path) -> None:
+    """Road `none` with exit 0: no sink took it and the spool write failed too.
+
+    This is the only outcome where nothing at all holds the alert — there is no
+    sink, and no record for `drain-alert-spool.py` to replay. Marking it
+    dispatched would retire the last trace of an alert nobody will ever see, so
+    it is recorded as a `dispatch_error` instead: the row stays pending, the
+    next tick retries, and `check_alert_dispatch_lag` (AUD-592) reports it with
+    no grace. `alerts_mark --via` rejects `none` by design, so it must not
+    arrive there either.
+    """
+    script, calls, env = _fake_host(tmp_path, pending=[ALERT], road="none")
+    out = _run(script, env)
+
+    assert "reached NOBODY" in out.stderr
+    assert "1 pending, 0 dispatched (0 of them spooled, not pushed), 1 failed" in out.stdout
+    marks = _marks(calls)
+    assert len(marks) == 1, _lines(calls)
+    assert "--error" in marks[0]
+    assert "--via" not in marks[0]
+
+
 def test_an_unknown_road_is_dropped_not_passed_through(tmp_path: Path) -> None:
     """`--via` is constrained at both ends (argparse choices, a CHECK
     constraint), so a word this script does not recognise must never reach the

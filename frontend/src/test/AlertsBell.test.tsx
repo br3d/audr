@@ -41,6 +41,10 @@ function makeAlert(overrides: Partial<AlertItem> = {}): AlertItem {
     model: null,
     created_at: '2026-01-01T00:00:00Z',
     read_at: null,
+    // A `warning` is never pushed outside the app (ADR-007 §2), so undispatched
+    // is the right default for this fixture (AUD-595).
+    dispatched_at: null,
+    dispatched_via: null,
     ...overrides,
   }
 }
