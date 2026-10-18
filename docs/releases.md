@@ -136,9 +136,23 @@ real registry:
   flag, and the beacon writer in `audr.jobs.__main__` — each inline healthcheck
   is swapped for the module form only if its own answer is yes (AUD-544).
 
+Then, once it knows a rewrite is actually due, one question about the repository
+rather than the image: `vX.Y.Z` must be an ancestor of `origin/main` and no more
+than 20 commits behind it. Because step 2 is a human click, a tag can sit cut
+but unpublished for days — and promoting it afterwards is what decides the
+backend every `git clone && docker compose up -d` installs from then on. v0.1.2
+spent a week in that state and ended up 106 commits back; publishing and
+promoting it would have passed every check above and still pinned fresh clones
+to a backend missing the AUD-597 and AUD-595 fixes. The guard's advice in that
+case is to cut a fresh release from `main` instead of promoting the overtaken
+one; `--allow-stale` overrides it when pinning the older release is deliberate.
+
 Run it before step 2 and it refuses, printing the dispatch URL. Run it twice and
-the second run finds nothing to do. `python3 scripts/test_promote_image.py`
-covers the rewrite offline.
+the second run finds nothing to do — the staleness check deliberately sits after
+that exit, so an already-promoted release does not start failing its own
+`--check` as `main` moves on. `python3 scripts/test_promote_image.py` covers the
+rewrite offline; `backend/tests/unit/test_promote_image_drift.py` covers the
+staleness guard in CI.
 
 #### Why it is split this way
 

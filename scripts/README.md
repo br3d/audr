@@ -31,7 +31,7 @@ or an SSH key, and they act on infrastructure outside your installation.
 | `smoke-test.sh` | Post-deploy health probe against a live instance; non-zero exit on any failed check |
 | `ci.sh` | The whole pipeline end to end — build → test → deploy → smoke-test — with per-stage skip flags |
 | `release.sh` | Cuts a semantic-version release: rewrites the version in the five in-repo files that carry it, commits, and creates the annotated tag. Pushing is opt-in (`--push`) because a pushed `v*` tag triggers the deploy pipeline. Deliberately does **not** touch `compose.yaml` — see `promote-image.py` |
-| `promote-image.py` | Step 3 of a release: points `compose.yaml`'s `x-backend-image` at `<version>` *after* proving that tag is in GHCR and was built from the release commit, and restores the inlined healthchecks the same way. Refuses, naming the dispatch, when the publish has not run; idempotent when it has (AUD-546) |
+| `promote-image.py` | Step 3 of a release: points `compose.yaml`'s `x-backend-image` at `<version>` *after* proving that tag is in GHCR and was built from the release commit, and restores the inlined healthchecks the same way. Refuses, naming the dispatch, when the publish has not run; idempotent when it has (AUD-546). Also refuses to promote a release `main` has overtaken — off-`main`, or more than 20 commits behind — because the pin decides what every fresh clone installs; `--allow-stale` overrides |
 | `sync-ci-overlay.sh` | Reconciles `ci/gitea-overlay/workflows/` with the deploy host's mirror overlay. Maintenance only: the mirror reads the workflows out of the `main` commit, so this is not a step in shipping a workflow change |
 
 ## Internal — maintenance and generated files

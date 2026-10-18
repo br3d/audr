@@ -2,7 +2,12 @@
 # The backend source is bind-mounted at /workspace/backend at runtime.
 FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# git is here for tests of the release machinery: scripts/promote-image.py asks
+# git how far behind `main` the release being promoted is, and
+# tests/unit/test_promote_image_drift.py builds throwaway repositories in
+# tmp_path to check the answers. Without it those cases skip, which reads as
+# coverage while providing none.
+RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 
 WORKDIR /deps

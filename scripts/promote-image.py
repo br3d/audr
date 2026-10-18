@@ -45,6 +45,12 @@ they call:
    the beacon writer in `audr.jobs.__main__` is a question `git cat-file` can
    answer offline. Each healthcheck revert is gated on its own answer.
 
+A fourth check asks a different question — not "is this image the release?" but
+"is this release still the one to pin?". `v<version>` must be an ancestor of
+`main` and no more than `MAX_DRIFT` commits behind it, because promotion is what
+decides which backend every future `git clone && docker compose up -d` installs.
+See the comment above `MAX_DRIFT` for the near-miss that put it here.
+
 (3) is what closes AUD-544: the worker's inline probe is only swapped for
 `python -m audr.operations.healthcheck --worker` against a *published* tag
 proven to contain both the flag and the writer that feeds it, so the false
@@ -211,6 +217,93 @@ def release_commit(root: pathlib.Path, version: str) -> str:
         ) from exc
 
 
+# --- how far behind `main` the release being promoted is ---------------------
+#
+# Everything above proves the published image *is* the release tag. None of it
+# asks whether that tag is still worth pinning, and promotion is exactly where
+# that question gets answered for every future clone: `x-backend-image` is what
+# `docker compose up -d` pulls, so a stale promotion is a stale install.
+#
+# This is not hypothetical. On 2026-10-18 v0.1.2 was a cut-but-unpublished tag
+# sitting 106 commits behind `main`, and the last step anyone had written down
+# was "dispatch the publish, then promote". The image would have been genuine,
+# built from the v0.1.2 commit, carrying the healthcheck module — so all three
+# checks above pass — and promoting it would have pinned fresh clones to a
+# seven-day-old backend missing the AUD-597 migration-rollback fix, the AUD-595
+# spool fixes and the AUD-562 backup work. That trade was caught by hand and
+# refused; a tag cut once and published days later is the normal shape of the
+# `workflow_dispatch` gate, so it will come round again. Hence a guard.
+
+# The healthy flow leaves `main` 0-3 commits ahead of the tag at promotion time
+# (release.sh commits the tag itself; anything merged while the dispatch waits
+# adds to the count). 20 is roughly ten times that and still far below the 106
+# that prompted this, which is the point: fire on "the release has been
+# overtaken", stay quiet on "a couple of things landed during the dispatch".
+MAX_DRIFT = 20
+
+# `origin/main` first: it is what a fresh clone gets, which is whose install
+# this pin decides. Local `main` is the fallback for a clone with no remote ref
+# fetched (CI checkouts, the stand).
+MAIN_REFS = ("refs/remotes/origin/main", "refs/heads/main")
+
+
+def main_ref(root: pathlib.Path) -> str | None:
+    """The most authoritative `main` this clone has, or None if it has neither."""
+    for ref in MAIN_REFS:
+        try:
+            git(root, "rev-parse", "--verify", "--quiet", ref)
+        except subprocess.CalledProcessError:
+            continue
+        return ref
+    return None
+
+
+def measure_drift(root: pathlib.Path, commit: str, ref: str) -> tuple[bool, int]:
+    """`(commit is an ancestor of ref, commits on ref since commit)`."""
+    ancestor = (
+        subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", commit, ref],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+    return ancestor, int(git(root, "rev-list", "--count", f"{commit}..{ref}"))
+
+
+def assess_drift(version: str, ref: str, *, ancestor: bool, behind: int) -> None:
+    """Raise `Refused` when `v<version>` is no longer fit to pin. Pure; testable."""
+    if not ancestor:
+        raise Refused(
+            f"tag v{version} is not an ancestor of {ref}.\n"
+            "\n"
+            "Whatever that image contains, it is not code that is on `main` — so "
+            "promoting it would pin every clone to a backend this repository does "
+            "not describe. Either the tag was cut on a branch that never merged, or "
+            "`main` was rewritten under it.\n"
+            "\n"
+            "Reconcile the two before promoting. Re-run with --allow-stale only if "
+            "you have established that pinning off-main code is what you want."
+        )
+    if behind > MAX_DRIFT:
+        raise Refused(
+            f"tag v{version} is {behind} commits behind {ref} (limit {MAX_DRIFT}).\n"
+            "\n"
+            "The image is genuine, but it is no longer the backend this repository "
+            "ships: promoting it writes that stale tag into compose.yaml, and from "
+            "then on `git clone && docker compose up -d` installs it.\n"
+            "\n"
+            "Cut a release from current `main` instead and publish that — "
+            "`./scripts/release.sh patch --push`, then dispatch\n"
+            "\n"
+            f"    {DISPATCH_URL}\n"
+            "\n"
+            "against the new tag. A release that was overtaken while waiting for its "
+            "publish click is better replaced than promoted.\n"
+            "\n"
+            "--allow-stale overrides this if pinning the older release is deliberate."
+        )
+
+
 # --- compose.yaml rewrite ---------------------------------------------------
 #
 # Both healthcheck blocks are anchored on the first line of the comment that
@@ -336,19 +429,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Verify the image and report what would change; never write.",
     )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="Promote even if the release tag has been overtaken by main. See MAX_DRIFT.",
+    )
     args = parser.parse_args(argv)
 
     root = pathlib.Path(__file__).resolve().parent.parent
     version = args.version or (root / "VERSION").read_text().strip()
 
     try:
-        return _promote(root, version, push=args.push, check=args.check)
+        return _promote(
+            root, version, push=args.push, check=args.check, allow_stale=args.allow_stale
+        )
     except Refused as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 1
 
 
-def _promote(root: pathlib.Path, version: str, *, push: bool, check: bool) -> int:
+def _promote(
+    root: pathlib.Path, version: str, *, push: bool, check: bool, allow_stale: bool = False
+) -> int:
     print(f"==> promoting {IMAGE}:{version}")
 
     commit = release_commit(root, version)
@@ -383,6 +485,26 @@ def _promote(root: pathlib.Path, version: str, *, push: bool, check: bool) -> in
         return 0
     for change in changes:
         print(f"    {change}")
+
+    # Deliberately after the nothing-to-do exit above. Drift grows on its own
+    # as `main` advances, so a promoted release goes stale in place: asking the
+    # question on a run that would change nothing would make a second run of an
+    # already-correct promotion start failing weeks later, which breaks the
+    # idempotence this script's docstring promises.
+    ref = main_ref(root)
+    if ref is None:
+        print("    drift: no main ref in this clone — staleness unchecked")
+    else:
+        ancestor, behind = measure_drift(root, commit, ref)
+        if allow_stale:
+            print(
+                f"    drift: {behind} commits behind {ref}"
+                f"{'' if ancestor else ', NOT an ancestor'} — --allow-stale given"
+            )
+        else:
+            assess_drift(version, ref, ancestor=ancestor, behind=behind)
+            print(f"    drift: {behind} commits behind {ref} (limit {MAX_DRIFT})")
+
     if check:
         print("==> --check: nothing written.")
         return 0
