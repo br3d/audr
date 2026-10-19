@@ -1,9 +1,10 @@
 """Integration tests for the portfolio news-coverage seeds (AUD-568 part B).
 
-Covers migrations 0031 and 0032 together: 0032 only exists because 0031's two
-ENS sources both turned out to sit outside the retention window, so the pair
-is one coverage decision and asserting them separately would let a later edit
-drop one half without a red test.
+Covers migrations 0031, 0032 and 0035 together: 0032 only exists because 0031's
+two ENS sources both turned out to sit outside the retention window, and 0035
+exists because 0024's two ETH sources publish weekly, so the set is one running
+coverage decision and asserting the migrations separately would let a later edit
+drop a half without a red test.
 
 Runs the real migration chain against a disposable, dedicated database (same
 discipline as `test_news_misattribution_purge_migration.py`) so the seeded
@@ -43,6 +44,9 @@ _EXPECTED_FEEDS = {
     # 0032 — ENS's live sources; 0031's two were both outside retention.
     "project:ens-blog": ("project", {"ENS"}),
     "release:ensjs": ("release", {"ENS"}),
+    # 0035 — ETH's daily sources; 0024's two publish about weekly (AUD-623).
+    "project:ethresearch": ("project", {"ETH", "WETH"}),
+    "project:ethereum-magicians": ("project", {"ETH", "WETH"}),
 }
 
 _EXPECTED_SPACES = {("ENS", "ens.eth"), ("LDO", "lido-snapshot.eth"), ("SUSHI", "sushigov.eth")}

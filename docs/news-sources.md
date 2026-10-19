@@ -397,7 +397,7 @@ live before seeding — HTTP 200 plus a parseable body for a feed, a
 | Asset | Share of portfolio | Sources |
 |---|---|---|
 | KNC | ~65% | `blog.kyberswap.com` + `KyberNetwork/kyberswap-interface` releases |
-| ETH | ~11% | `blog.ethereum.org` + `go-ethereum` releases (shared with WETH, AUD-571) |
+| ETH | ~11% | `blog.ethereum.org` + `go-ethereum` releases (shared with WETH, AUD-571), plus `ethresear.ch` + `ethereum-magicians.org` forum feeds (0035) |
 | ENS | ~5% | `blog.ens.domains` + `ensdomains/ensjs` releases (0032), plus `ens-contracts` releases + Snapshot `ens.eth` |
 | CRV, LDO | dust | `news.curve.finance`; `blog.lido.fi` + Snapshot `lido-snapshot.eth` |
 | MATIC | dust | `maticnetwork/bor` releases |
@@ -427,6 +427,20 @@ and `ensjs`. Keep them anyway — low-volume is not dead, and a contract release
 or a governance proposal outranks a blog post when one lands. The general rule:
 distinguish "no rows yet" from "no source", but do not stop at "wired but
 quiet" while a live first-party feed is still unlooked-for.
+
+##### Forum feeds, declined for ENS and accepted for ETH (0035, AUD-623)
+
+The forum tier the bullet above declines on volume grounds was accepted for ETH
+in 0035, and the difference is the asset, not a change of mind. ETH/WETH is the
+largest position, so it is the first card on the page — and its two first-party
+sources publish weekly, which is what produced the "news stopped three days
+ago" report that opened AUD-623 while AAVE, ENS and UNI all carried rows from
+that morning. `ethresear.ch/latest.rss` and `ethereum-magicians.org/latest.rss`
+both post daily, map explicitly to `ETH`/`WETH`, and need no API key. The trade
+— a card that moves daily with technical forum noise against one that moves
+weekly with announcements — was put to the founder and accepted. ENS's card is
+fifth and its blog already posts within the window, so the same trade is still
+not worth making there.
 
 ##### "Wired but quiet" is not the same as "never polled" — LINK
 
