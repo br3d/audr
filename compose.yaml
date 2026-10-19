@@ -22,7 +22,9 @@ name: audr
 # `manifest unknown` (AUD-442). The rule, enforced offline by
 # backend/tests/unit/test_version.py::test_compose_image_tag_matches and online by
 # promote-image.py, is that this pin may trail VERSION but never lead it (AUD-545,
-# AUD-546). VERSION says 0.1.2, whose dispatch has not run. See docs/releases.md.
+# AUD-546). So when this pin and VERSION disagree, read it as: the release VERSION
+# names is cut but its dispatch has not run, and promote-image.py closes the gap
+# once it does. See docs/releases.md.
 x-backend-image: &backend_image ghcr.io/br3d/audr-backend:0.2.1
 
 services:
