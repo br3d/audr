@@ -26,6 +26,7 @@ dependency pins in a release, with licence attribution.
 | [engineering-workflow.md](engineering-workflow.md) | Branches, the shared checkout and worktrees, when to self-merge vs. escalate, the QA gate, planning artifacts |
 | [containers.md](containers.md) | Why each compose service exists, what was removed, what could still go |
 | [security-at-rest-design.md](security-at-rest-design.md) | The at-rest option space (LUKS, `pg_tde`, `pgcrypto`, wider envelope encryption), the rotki comparison, and the settled key-model decision (option 1, 2026-10-11) |
+| [llm-access.md](llm-access.md) | Proposal (nothing built yet): what would have to change for Claude/ChatGPT to read a live instance — read-only API tokens, a context-window-shaped read surface, an MCP server, discovery, and the security line (AUD-622) |
 | [news-sources.md](news-sources.md) | How news can be collected with no paid API: public feeds, protocol/governance sources, search aggregators, self-hosted bridges, keyless APIs — pros, cons and the staged recommendation (AUD-503) |
 | [releases.md](releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [deploy-runbook.md](deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
