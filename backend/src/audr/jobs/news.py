@@ -331,8 +331,18 @@ async def _poll_snapshot_space(
 
     await record_space_success(session, space_id=space.id)
 
+    # Same retention gate the feed tier applies (see `_poll_feed`): a space's
+    # proposal list is its whole history, and Snapshot spaces that have gone
+    # quiet (0031 seeded two whose newest proposal is ~96 days old) served
+    # nothing but out-of-retention rows. Without this, every run inserted
+    # them and the run's own `_prune_old_news` deleted them again — staging
+    # logged a steady `inserted=54 pruned=54` churn per run for zero visible
+    # news (AUD-623).
+    retention_cutoff = datetime.now(UTC) - NEWS_RETENTION
     inserted = 0
     for proposal in proposals:
+        if proposal.start < retention_cutoff:
+            continue
         for asset_id in asset_ids:
             inserted += await _upsert_snapshot_proposal(
                 session, asset_id=asset_id, proposal=proposal

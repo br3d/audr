@@ -275,3 +275,40 @@ async def test_snapshot_does_not_use_symbol_keyword_matching(news_session: Async
     assert len(uni_rows) == 1
     assert uni_rows[0]["source"] == "snapshot"
     assert zoo_rows == []
+
+
+async def test_snapshot_proposal_outside_retention_is_not_inserted(
+    news_session: AsyncSession,
+) -> None:
+    """A space whose newest proposal predates `NEWS_RETENTION` writes nothing.
+
+    0031 seeded spaces that have gone quiet, and a proposal list is the
+    space's whole history — inserting those rows only to have the same run's
+    prune delete them again burned a write cycle every 15 minutes for news
+    nobody could ever see (AUD-623).
+    """
+    uni_id = await _hold_asset(news_session, symbol="UNI", name="Uniswap")
+    await _insert_space(news_session, asset_symbol="UNI", space_id="uniswap")
+    stale = datetime.now(UTC) - timedelta(days=120)
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(_SNAPSHOT_URL).mock(
+            return_value=Response(
+                200,
+                json=_graphql_response(
+                    [
+                        {
+                            **_proposal(proposal_id="0xstale", title="Ancient vote"),
+                            "start": int(stale.timestamp()),
+                            "end": int((stale + timedelta(days=7)).timestamp()),
+                        },
+                        _proposal(proposal_id="0xfresh", title="Raise the fee"),
+                    ]
+                ),
+            )
+        )
+        mock.get(_GDELT_URL).mock(return_value=Response(200, json={"articles": []}))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=uni_id)
+    assert [r["external_id"] for r in rows] == ["0xfresh"]
