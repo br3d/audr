@@ -400,7 +400,7 @@ live before seeding — HTTP 200 plus a parseable body for a feed, a
 | ETH | ~11% | `blog.ethereum.org` + `go-ethereum` releases (shared with WETH, AUD-571), plus `ethresear.ch` + `ethereum-magicians.org` forum feeds (0035) |
 | ENS | ~5% | `blog.ens.domains` + `ensdomains/ensjs` releases (0032), plus `ens-contracts` releases + Snapshot `ens.eth` |
 | CRV, LDO | dust | `news.curve.finance`; `blog.lido.fi` + Snapshot `lido-snapshot.eth` |
-| MATIC | dust | `maticnetwork/bor` releases |
+| MATIC | dust | `maticnetwork/bor` releases — retired by 0038, now `forum.polygon.technology` Announcements |
 | SUSHI | dust | Snapshot `sushigov.eth` |
 
 Left uncovered on purpose, so a later edit has to argue the case rather than
@@ -519,6 +519,47 @@ dropping a *release* tagged `v2.10.2-beta5`.
 When adding a release feed, read the repo's last ten release titles first. A
 node, client or contracts repo is signal; an SDK, a front-end app or a
 monorepo that tags per package is not.
+
+##### …and the tier itself was the mistake (0038, AUD-640 reopened)
+
+The paragraph above is kept because the reasoning is still worth reading, but
+its conclusion was wrong. The founder reopened AUD-640 on the MATIC card —
+against the rows 0037 had *deliberately kept* as signal:
+
+    v2.10.3 · v2.10.2 · v2.10.1-hotfix2 · v2.10.1-hotfix
+
+Nothing is filterable there. That is simply what a release-tier row looks
+like: a `releases.atom` entry has no headline, the title *is* the tag, so the
+row renders as a version number next to a source label. Whether the release
+is a security fix or a dependency bump is not in the data we store, and a
+reader cannot tell. "Protocol software vs. developer artefact" was the wrong
+axis; the format was the problem all along.
+
+0038 therefore sets `enabled = false` on the whole tier (`polygon-bor`,
+`go-ethereum`, `ens-contracts`, `uniswap-v3-core`, `aave-v3-core`,
+`chainlink`) and purges the stored rows. `is_noisy_release()` stays in the
+ingestion path as a backstop, and `ck_news_feed_tier` still allows `release`,
+so re-enabling is one UPDATE if a future feed earns it.
+
+The disable bar from 0037 — *the asset must not lose its last source* — held
+for five of the six. MATIC failed it: `release:polygon-bor` was its only feed,
+and an asset with no enabled project/release feed falls through to the GDELT
+breadth tier (`covered_asset_symbols`), which for a three-symbol ticker is
+close to nothing. So 0038 seeds `project:polygon-forum-announcements`
+(`forum.polygon.technology/c/announcements/6.rss`) first.
+
+Picking that URL took five probes; the migration docstring lists them, and
+the shape generalises. Polygon has no blog feed at all (`/rss.xml`,
+`/blog/rss.xml` → 404 on an Astro site; `blog.polygon.technology/feed/` → 301
+to HTML). Discourse always has `.rss`, but **`/latest.rss` is the
+unmoderated firehose** — on this forum "Best 10 Real Estate CRM Development
+Companies in Columbus" sits between the Heimdall releases, and the same spam
+leaks into `/c/polygon-improvement-proposals/80.rss`. Take the moderated
+category feed, `/c/<slug>/<id>.rss`, and read its titles before seeding;
+`/c/announcements/6.rss` gives sentences ("Bor v2.10.3 Release Mainnet and
+Testnet POS", "Polygon PoS RPC Incident — Post-Incident Summary") — the same
+events the bor tags were gesturing at, written for a reader. Category ids come
+from `/categories.json`.
 
 ### Adding a new holding to news coverage
 

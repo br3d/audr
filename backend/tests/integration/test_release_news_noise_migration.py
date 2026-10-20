@@ -1,4 +1,10 @@
-"""Integration test for migration 0037 — release-tier noise purge (AUD-640).
+"""Integration test for migrations 0037 + 0038 — release tier (AUD-640).
+
+Asserts the end state of the chain, not 0037 alone: 0037 disabled two
+noise-only feeds and filtered noise-shaped titles on the rest, then 0038
+retired the tier outright, so every `release:*` row goes and the two rows
+0037 kept (`v2.10.3`, `v2.10.1-hotfix2`) are exactly the ones the founder
+reopened the issue about. The test keeps them in the fixture for that reason.
 
 Runs the real migration chain against a disposable, dedicated database
 (created and dropped by this test) rather than the shared test database, so a
@@ -79,25 +85,26 @@ _INSERT_NEWS = sa.text(
     """
 )
 
-# (source, external_id, title, survives_0037)
+# (source, external_id, title, survives)
 _ROWS: list[tuple[str, str, str, bool]] = [
-    # Disabled feeds — every row goes, noise-shaped or not.
+    # The whole release tier goes — noise-shaped or not, feed disabled by
+    # 0037 or retired by 0038.
     ("release:ensjs", "ensjs-1", "@ensdomains/ensjs@5.2.4", False),
     ("release:ensjs", "ensjs-2", "ENS JS client 5.2", False),
     ("release:kyberswap-interface", "ksi-1", "KyberSwap Interface - v7.11.10", False),
-    # Feeds that stay — only the noise-shaped rows go.
     ("release:polygon-bor", "bor-1", "v2.10.2-beta5", False),
     ("release:polygon-bor", "bor-2", "v2.10.2-preconf (Testing Only)", False),
-    ("release:polygon-bor", "bor-3", "v2.10.3", True),
-    ("release:polygon-bor", "bor-4", "v2.10.1-hotfix2", True),
-    ("release:go-ethereum", "geth-1", "Protein Sludge Pack (v1.17.8)", True),
+    # The two 0037 kept and the founder reopened AUD-640 about.
+    ("release:polygon-bor", "bor-3", "v2.10.3", False),
+    ("release:polygon-bor", "bor-4", "v2.10.1-hotfix2", False),
+    ("release:go-ethereum", "geth-1", "Protein Sludge Pack (v1.17.8)", False),
     # Non-release tiers are untouched, including a blog post about a beta.
     ("project:ens-blog", "blog-1", "Our beta is live", True),
     ("press:coindesk", "press-1", "Alpha leak hits markets", True),
 ]
 
 
-async def test_upgrade_0037_drops_release_noise_and_nothing_else() -> None:
+async def test_release_tier_is_retired_and_matic_keeps_a_source() -> None:
     base_url = os.environ["DATABASE_URL"]
     admin_url = base_url
     scratch_url = base_url.rsplit("/", 1)[0] + f"/{_SCRATCH_DB}"
@@ -148,10 +155,33 @@ async def test_upgrade_0037_drops_release_noise_and_nothing_else() -> None:
                 .scalars()
                 .all()
             )
+            enabled_release = (
+                await conn.execute(
+                    sa.text("SELECT count(*) FROM news_feed WHERE enabled AND tier = 'release'")
+                )
+            ).scalar_one()
+            # MATIC's only feed was release-tier; 0038 must not leave it bare.
+            matic_feeds = set(
+                (
+                    await conn.execute(
+                        sa.text(
+                            """
+                            SELECT nf.key FROM news_feed nf
+                            JOIN news_feed_symbol nfs ON nfs.feed_id = nf.id
+                            WHERE nf.enabled AND nfs.asset_symbol = 'MATIC'
+                            """
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
         await scratch_engine.dispose()
     finally:
         os.environ["DATABASE_URL"] = old_db_url
         await _drop_scratch_db(admin_url)
 
     assert surviving == {external_id for _s, external_id, _t, survives in _ROWS if survives}
-    assert disabled == {"release:ensjs", "release:kyberswap-interface"}
+    assert enabled_release == 0
+    assert {"release:ensjs", "release:kyberswap-interface", "release:polygon-bor"} <= disabled
+    assert matic_feeds == {"project:polygon-forum-announcements"}
