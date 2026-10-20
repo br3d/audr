@@ -1,0 +1,39 @@
+# Opt-in overlay: the audr-mcp streamable-HTTP transport (AUD-632, stage 3 of
+# docs/llm-access.md). Off by default on two independent axes — this file is
+# never included by compose.yaml, and the process itself refuses to bind
+# unless MCP_ENABLED=true, so merely enabling this overlay without also
+# setting that flag still does nothing.
+#
+# The recommended path for Claude Desktop / Claude Code is stdio, which needs
+# none of this — see docs/mcp.md. Use this overlay only for a hosted
+# connector that cannot launch a local process, and only after reading
+# docs/mcp.md's warning about what a token pasted into a hosted assistant
+# hands that vendor.
+#
+#     docker compose -f compose.yaml -f compose.mcp.yaml up -d --build mcp
+#
+# with MCP_ENABLED=true and AUDR_MCP_TOKEN set in .env.
+
+services:
+  mcp:
+    build:
+      context: audr-mcp
+      dockerfile: Dockerfile
+    image: audr-mcp:dev
+    restart: unless-stopped
+    environment:
+      AUDR_BASE_URL: http://api:8000
+      AUDR_TOKEN: ${AUDR_MCP_TOKEN:?AUDR_MCP_TOKEN is unset - mint a read-only token on the Settings page}
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_PORT: "8800"
+    depends_on:
+      api:
+        condition: service_healthy
+    # Bound to localhost only: reaching this from anywhere but the host
+    # itself requires the operator to deliberately widen this bind or put a
+    # reverse proxy in front of it.
+    ports:
+      - "127.0.0.1:${MCP_HTTP_PORT:-8800}:8800"
+    networks:
+      - internal

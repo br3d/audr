@@ -257,6 +257,15 @@ cost of the JSON. `GET /context` is capped (top-8 allocations, 5 headlines, 5
 alerts) to stay near the ~2k-token budget regardless of portfolio size; what
 a cap hides is always named in `caveats`, never silently dropped.
 
+### MCP server
+
+Stage 3 of [docs/llm-access.md](llm-access.md): `audr-mcp`, a thin client
+over the two routes above (plus holdings, history, news, alerts, and status)
+exposed as MCP tools for Claude Desktop and Claude Code. stdio by default —
+the token never leaves the machine running it. Setup instructions, the full
+tool list, and the opt-in streamable-HTTP transport are in
+[docs/mcp.md](mcp.md).
+
 ### Integrations
 
 | Method | Path | Auth | Purpose |
