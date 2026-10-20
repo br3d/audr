@@ -227,7 +227,7 @@ async def mint_token(
         redact_addresses=redact_addresses,
     )
     db.add(token)
-    await db.flush()
+    await db.commit()
     return plaintext, token
 
 

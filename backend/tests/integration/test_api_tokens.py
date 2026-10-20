@@ -35,7 +35,7 @@ _PASSWORD = "correct-horse-battery-staple-99"
 
 _ALLOWED_ROUTES = [
     "/api/v1/portfolio",
-    "/api/v1/holdings",
+    "/api/v1/portfolio/holdings",
     "/api/v1/assets",
     "/api/v1/history",
     "/api/v1/events",
@@ -108,16 +108,30 @@ async def _mint_token_via_api(
     csrf: str,
     name: str = "test-token",
     expires_days: int = 90,
+    redact_addresses: bool = False,
 ) -> tuple[str, str]:
     """Create token via API; return (token_id, plaintext)."""
     r = await client.post(
         "/api/v1/tokens",
-        json={"name": name, "expires_days": expires_days},
+        json={"name": name, "expires_days": expires_days, "redact_addresses": redact_addresses},
         headers={"x-csrf-token": csrf},
     )
     assert r.status_code == 201
     data = r.json()
     return data["id"], data["token"]
+
+
+async def _add_wallet_via_api(
+    client: httpx.AsyncClient, csrf: str, address: str, label: str = ""
+) -> str:
+    """Create a tracked wallet via API; return its id."""
+    r = await client.post(
+        "/api/v1/wallets",
+        json={"address": address, "label": label},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 201
+    return r.json()["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -233,13 +247,19 @@ async def test_patch_with_token_is_forbidden(http_client: httpx.AsyncClient) -> 
 async def test_blocked_routes_return_403_with_token(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_login(http_client)
     _, plaintext = await _mint_token_via_api(http_client, csrf)
+    # Otherwise the still-valid session cookie from setup/login would grant
+    # these routes access on its own, masking whether the allow-list itself
+    # actually blocks the token.
+    http_client.cookies.clear()
 
     for route in _BLOCKED_ROUTES:
         r = await http_client.get(
             route,
             headers={"Authorization": f"Bearer {plaintext}"},
         )
-        assert r.status_code == 403, f"Expected 403 for {route}, got {r.status_code}"
+        # Session-only routes 401 (they never look at Authorization at all);
+        # allow-list-checked routes 403. Both mean "a token can't read this".
+        assert r.status_code in (401, 403), f"Expected 401/403 for {route}, got {r.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -294,12 +314,13 @@ async def test_integrations_endpoint_not_reachable_by_token(
 ) -> None:
     csrf = await _setup_and_login(http_client)
     _, plaintext = await _mint_token_via_api(http_client, csrf)
+    http_client.cookies.clear()
 
     r = await http_client.get(
         "/api/v1/integrations",
         headers={"Authorization": f"Bearer {plaintext}"},
     )
-    assert r.status_code == 403
+    assert r.status_code in (401, 403)
 
 
 async def test_settings_endpoint_not_reachable_by_token(
@@ -307,12 +328,13 @@ async def test_settings_endpoint_not_reachable_by_token(
 ) -> None:
     csrf = await _setup_and_login(http_client)
     _, plaintext = await _mint_token_via_api(http_client, csrf)
+    http_client.cookies.clear()
 
     r = await http_client.get(
         "/api/v1/settings",
         headers={"Authorization": f"Bearer {plaintext}"},
     )
-    assert r.status_code == 403
+    assert r.status_code in (401, 403)
 
 
 # ---------------------------------------------------------------------------
@@ -332,8 +354,13 @@ async def test_allowed_routes_respond_with_token(http_client: httpx.AsyncClient)
     # version is unauthenticated so it doesn't check the token at all — just 200
     assert r.status_code == 200
 
-    for route in ["/api/v1/portfolio", "/api/v1/holdings", "/api/v1/assets",
-                  "/api/v1/alerts", "/api/v1/status"]:
+    for route in [
+        "/api/v1/portfolio",
+        "/api/v1/portfolio/holdings",
+        "/api/v1/assets",
+        "/api/v1/alerts",
+        "/api/v1/status",
+    ]:
         r = await http_client.get(
             route,
             headers={"Authorization": f"Bearer {plaintext}"},
@@ -351,6 +378,7 @@ async def test_tokens_endpoint_not_accessible_with_token(
 ) -> None:
     csrf = await _setup_and_login(http_client)
     _, plaintext = await _mint_token_via_api(http_client, csrf)
+    http_client.cookies.clear()
 
     r = await http_client.get(
         "/api/v1/tokens",
@@ -363,6 +391,62 @@ async def test_tokens_endpoint_not_accessible_with_token(
 # ---------------------------------------------------------------------------
 # Revoked list shows only active tokens
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# redact_addresses flag masks wallet addresses in holdings responses
+# ---------------------------------------------------------------------------
+
+
+async def test_redact_addresses_masks_wallet_address_in_holdings(
+    http_client: httpx.AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from audr.portfolio.balances import record_balance
+
+    csrf = await _setup_and_login(http_client)
+    address = "0x" + "a" * 40
+    token_address = "0x" + "b" * 40
+    wallet_id = await _add_wallet_via_api(http_client, csrf, address, label="Cold storage")
+
+    async with db_session_factory() as session:
+        async with session.begin():
+            await record_balance(
+                session,
+                wallet_address=address,
+                token_address=token_address,
+                raw_amount=1,
+                block_number=1,
+            )
+
+    _, redacted_token = await _mint_token_via_api(
+        http_client, csrf, name="redacted", redact_addresses=True
+    )
+    _, plain_token = await _mint_token_via_api(
+        http_client, csrf, name="plain", redact_addresses=False
+    )
+
+    r = await http_client.get(
+        f"/api/v1/wallets/{wallet_id}/holdings",
+        headers={"Authorization": f"Bearer {redacted_token}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert address not in body["wallet_address"]
+    assert "Cold storage" in body["wallet_address"]
+    assert all(address not in h["wallet_address"] for h in body["holdings"])
+
+    r2 = await http_client.get(
+        f"/api/v1/wallets/{wallet_id}/holdings",
+        headers={"Authorization": f"Bearer {plain_token}"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["wallet_address"] == address
+
+    # Session auth is unaffected by any token's redact_addresses flag.
+    r3 = await http_client.get(f"/api/v1/wallets/{wallet_id}/holdings")
+    assert r3.status_code == 200
+    assert r3.json()["wallet_address"] == address
 
 
 async def test_revoked_token_disappears_from_list(http_client: httpx.AsyncClient) -> None:

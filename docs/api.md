@@ -27,6 +27,7 @@ SPA fallback; nothing else is.
 | *public* | No credentials. |
 | *session* | A valid, unrevoked, unexpired `sid` cookie. |
 | *session + CSRF* | The above, plus `X-CSRF-Token` matching the session token, plus `Origin` netloc equal to `Host` when `Origin` is present. |
+| *session or token* | The `sid` cookie, **or** an `Authorization: Bearer audr_pat_…` API token — GET/HEAD only, and only for routes on the token allow-list (§3, "API tokens"). |
 
 Every mutating route is *session + CSRF*. Obtain the token from the response
 body of `/setup`, `/auth/login` or `/auth/session`; it is a double-submit header
@@ -102,6 +103,43 @@ route and are documented inline.
 | POST | `/api/v1/auth/logout` | session + CSRF | Revoke this session, clear the cookie. 204. |
 | PATCH | `/api/v1/auth/password` | session + CSRF | Change the password. Revokes **every** session and clears the cookie. 204; 403 if the current password is wrong. |
 
+### API tokens
+
+Read-only Bearer tokens for scripts and LLM tools that should never see the
+owner's password or session cookie. A token looks like `audr_pat_<random>`,
+is shown in full exactly once at creation, and only its SHA-256 hash is ever
+stored.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/tokens` | session | List active (non-revoked) tokens — never the plaintext. |
+| POST | `/api/v1/tokens` | session + CSRF | Mint a token: `name`, `expires_days` (default 90), `redact_addresses`. 201 with the plaintext `token`, returned only in this response. |
+| DELETE | `/api/v1/tokens/{id}` | session + CSRF | Revoke immediately. 404 if unknown. |
+
+A minted token authenticates exactly like the examples in §5, substituting the
+header `Authorization: Bearer audr_pat_...` for the `sid` cookie — with three
+restrictions, enforced by a single dependency next to the session checks:
+
+- **GET/HEAD only.** Any other method with a token → `403`, even on a route a
+  session could otherwise mutate.
+- **Allow-listed routes only.** A token may read `/api/v1/portfolio`,
+  `/api/v1/holdings` (including `/wallets/{id}/holdings`), `/api/v1/assets`,
+  `/api/v1/history`, `/api/v1/events`, `/api/v1/allowances`, `/api/v1/news`,
+  `/api/v1/alerts`, `/api/v1/status` and `/api/v1/version`. Everything else —
+  `/integrations`, `/settings*`, `/jobs*`, `/data/*`, `/exports/*`, `/wallets`
+  itself (list/detail/label/stop/reactivate) and `/tokens*` — is unreachable:
+  `403` if the route is checked against the allow-list, `401` if the route
+  only ever looks at the session cookie and never inspects `Authorization` at
+  all. Either way, no token reaches an operator surface or a secret.
+- **Must be live.** A revoked or expired token is `401`. Each token also has
+  its own failed-attempt throttle (database rows, same pattern as login
+  attempts) — too many failures in the window is `429`.
+
+**`redact_addresses`** (opt-in, per token): holdings responses show
+`"<wallet label> (0x1234…abcd)"` instead of the full wallet address, so a
+token can be pasted into a hosted assistant without handing it the owner's
+raw addresses. Off by default.
+
 ### Wallets
 
 | Method | Path | Auth | Purpose |
@@ -121,9 +159,9 @@ case-insensitively. Tracking an address asserts nothing about controlling it.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/wallets/{wallet_id}/holdings` | session | Latest balances for one wallet. |
-| GET | `/api/v1/portfolio/holdings` | session | Latest balances across all wallets. |
-| GET | `/api/v1/portfolio` | session | The full portfolio envelope from the latest published snapshot. |
+| GET | `/api/v1/wallets/{wallet_id}/holdings` | session or token | Latest balances for one wallet. |
+| GET | `/api/v1/portfolio/holdings` | session or token | Latest balances across all wallets. |
+| GET | `/api/v1/portfolio` | session or token | The full portfolio envelope from the latest published snapshot. |
 
 The `/portfolio` envelope carries `snapshot_id`, `valuation_time`,
 `currency: "USD"`, `priced_subtotal_usd`, `total_usd`, `unpriced_asset_count`,
@@ -161,11 +199,11 @@ to ~100%. `unpriced_asset_count` counts distinct unpriced assets, not lines.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/assets` | session | List assets. `excluded`, `held`, `cursor`, `limit` (default 50, max 200). |
+| GET | `/api/v1/assets` | session or token | List assets. `excluded`, `held`, `cursor`, `limit` (default 50, max 200). |
 | POST | `/api/v1/assets/manual` | session + CSRF | Add a manual contract. 201; 409 with `existing_id` on conflict. |
 | PATCH | `/api/v1/assets/{asset_id}` | session + CSRF | Update `excluded` or `decimals_override`. |
-| GET | `/api/v1/assets/{asset_id}/icon` | session | Serve cached icon bytes. Sets its own `Cache-Control`. |
-| GET | `/api/v1/assets/{asset_id}/news` | session | Cached news for an asset, newest first. `limit`, `offset`. |
+| GET | `/api/v1/assets/{asset_id}/icon` | session or token | Serve cached icon bytes. Sets its own `Cache-Control`. |
+| GET | `/api/v1/assets/{asset_id}/news` | session or token | Cached news for an asset, newest first. `limit`, `offset`. |
 
 The icon route serves **only what is already cached** and returns 404 on a cold
 cache — it never fetches upstream inline, so a cold cache cannot slow down a
@@ -179,8 +217,8 @@ CoinGecko key and returns early without one.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/history` | session | Value history. `period ∈ 24h\|7d\|30d\|90d\|1y\|all` (default `7d`), `cursor`, `limit`. |
-| GET | `/api/v1/history/{snapshot_id}` | session | The constituent lines of one snapshot, with `observation_id` provenance, ordered by value descending. |
+| GET | `/api/v1/history` | session or token | Value history. `period ∈ 24h\|7d\|30d\|90d\|1y\|all` (default `7d`), `cursor`, `limit`. |
+| GET | `/api/v1/history/{snapshot_id}` | session or token | The constituent lines of one snapshot, with `observation_id` provenance, ordered by value descending. |
 
 History contains no zero-filled intervals, no synthetic backfill and no PnL
 field. Temporal discontinuities are preserved as explicit gap markers rather
@@ -190,8 +228,8 @@ than smoothed over.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/events` | session | Indexed ERC-20 Transfer events. Filters: `wallet_id`, `event_type ∈ transfer_in\|transfer_out`, `token_address`; `limit`, `offset`. Ordered block desc, log index desc. |
-| GET | `/api/v1/allowances` | session | Current ERC-20 approvals derived from indexed Approval events. Filters: `wallet_id`, `unlimited_only`; `limit`, `offset`. Flags `is_unlimited`. |
+| GET | `/api/v1/events` | session or token | Indexed ERC-20 Transfer events. Filters: `wallet_id`, `event_type ∈ transfer_in\|transfer_out`, `token_address`; `limit`, `offset`. Ordered block desc, log index desc. |
+| GET | `/api/v1/allowances` | session or token | Current ERC-20 approvals derived from indexed Approval events. Filters: `wallet_id`, `unlimited_only`; `limit`, `offset`. Flags `is_unlimited`. |
 
 These are implemented extensions beyond the release-1 spec.
 
@@ -251,7 +289,7 @@ hard budget, and manual triggers share the same budget.
 | GET | `/api/v1/jobs` | session | Job history, newest first. `cursor`, `limit` (≤100, default 20), optional `kind`. |
 | GET | `/api/v1/jobs/{job_id}` | session | One run: state, checkpoints, counts and sanitized errors. |
 | POST | `/api/v1/jobs/{job_id}/cancel` | session + CSRF | Request cancellation. The worker stops between bounded batches. |
-| GET | `/api/v1/status` | session | Operational status: database, worker heartbeat, recovery state, catalog, quotes, schedules, version. |
+| GET | `/api/v1/status` | session or token | Operational status: database, worker heartbeat, recovery state, catalog, quotes, schedules, version. |
 
 Coalescing is why repeatedly mashing refresh produces one scan and one snapshot
 rather than several.

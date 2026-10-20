@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import uuid
 from datetime import UTC
 from typing import Annotated
@@ -66,8 +67,18 @@ _TOKEN_ALLOWED_PREFIXES: frozenset[str] = frozenset(
 )
 
 
+# GET /api/v1/wallets/{wallet_id}/holdings lives under /wallets, not /holdings,
+# but is a "holdings" read for allow-list purposes — matched explicitly so the
+# rest of /api/v1/wallets (list, detail, label, stop/reactivate) stays out of
+# token reach.
+_WALLET_HOLDINGS_PATH = re.compile(r"^/api/v1/wallets/[^/]+/holdings$")
+
+
 def _is_token_allowed_path(path: str) -> bool:
+    if _WALLET_HOLDINGS_PATH.match(path):
+        return True
     return any(path.startswith(prefix) for prefix in _TOKEN_ALLOWED_PREFIXES)
+
 
 router = APIRouter(prefix="/api/v1")
 

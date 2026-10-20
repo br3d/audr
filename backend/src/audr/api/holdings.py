@@ -10,14 +10,20 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import ReadPrincipal, _require_read_auth
+from audr.api.auth import ReadPrincipal, TokenContext, _require_read_auth
 from audr.db import get_db
 from audr.portfolio.balances import get_holdings
 from audr.portfolio.money import format_decimal, raw_to_quantity
 from audr.portfolio.snapshot import get_latest_snapshot_lines
-from audr.wallets.service import get_wallet
+from audr.wallets.service import get_wallet, list_wallets
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _redact(address: str, label: str | None) -> str:
+    """Replace a wallet address with "label (0x1234…abcd)" for redact_addresses tokens."""
+    short = f"{address[:6]}…{address[-4:]}" if len(address) > 10 else address
+    return f"{label} ({short})" if label else short
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +68,16 @@ async def get_wallet_holdings(
     address = wallet.address
 
     observations = await get_holdings(db, wallet_address=address)
+    out_address = (
+        _redact(address, wallet.label)
+        if isinstance(_auth, TokenContext) and _auth.redact_addresses
+        else address
+    )
     return WalletHoldingsResponse(
-        wallet_address=address,
+        wallet_address=out_address,
         holdings=[
             HoldingResponse(
-                wallet_address=obs.wallet_address,
+                wallet_address=out_address,
                 token_address=obs.token_address,
                 raw_amount=str(obs.raw_amount) if obs.raw_amount is not None else None,
                 block_number=obs.block_number,
@@ -88,6 +99,12 @@ async def get_portfolio_holdings(
     is never coerced to zero).
     """
     lines = await get_latest_snapshot_lines(db)
+
+    redact = isinstance(_auth, TokenContext) and _auth.redact_addresses
+    labels_by_address: dict[str, str | None] = {}
+    if redact:
+        labels_by_address = {w.address: w.label or None for w in await list_wallets(db)}
+
     response: list[HoldingResponse] = []
     for line in lines:
         raw_str: str | None = line["raw_amount"]  # type: ignore[assignment]
@@ -101,9 +118,13 @@ async def get_portfolio_holdings(
             except Exception:
                 quantity_str = None
 
+        wallet_address = str(line["wallet_address"])
+        if redact:
+            wallet_address = _redact(wallet_address, labels_by_address.get(wallet_address))
+
         response.append(
             HoldingResponse(
-                wallet_address=str(line["wallet_address"]),
+                wallet_address=wallet_address,
                 token_address=str(line["token_address"]),
                 symbol=str(line["symbol"]) if line["symbol"] else None,
                 decimals=decimals,
