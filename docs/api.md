@@ -125,7 +125,8 @@ restrictions, enforced by a single dependency next to the session checks:
 - **Allow-listed routes only.** A token may read `/api/v1/portfolio`,
   `/api/v1/holdings` (including `/wallets/{id}/holdings`), `/api/v1/assets`,
   `/api/v1/history`, `/api/v1/events`, `/api/v1/allowances`, `/api/v1/news`,
-  `/api/v1/alerts`, `/api/v1/status` and `/api/v1/version`. Everything else —
+  `/api/v1/alerts`, `/api/v1/status`, `/api/v1/version` and `/api/v1/llm/*`.
+  Everything else —
   `/integrations`, `/settings*`, `/jobs*`, `/data/*`, `/exports/*`, `/wallets`
   itself (list/detail/label/stop/reactivate) and `/tokens*` — is unreachable:
   `403` if the route is checked against the allow-list, `401` if the route
@@ -232,6 +233,29 @@ than smoothed over.
 | GET | `/api/v1/allowances` | session or token | Current ERC-20 approvals derived from indexed Approval events. Filters: `wallet_id`, `unlimited_only`; `limit`, `offset`. Flags `is_unlimited`. |
 
 These are implemented extensions beyond the release-1 spec.
+
+### LLM read surface
+
+Stage 2 of [docs/llm-access.md](llm-access.md): a context-window-shaped
+projection for an assistant, not a dashboard feed. Computes nothing new and
+calls no provider — it re-reads the latest published snapshot, `history_point`,
+and the `asset_news`/`news_alert` caches through the same paths as the routes
+above.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/llm/context` | session or token | One portfolio snapshot: `total_usd`, priced subtotal, quality flags, top-8 allocations by value, 24h/7d/30d change, the 5 newest headlines, unread alerts, per-subsystem freshness. |
+| GET | `/api/v1/llm/asset/{ref}` | session or token | One asset: quantity, value, price, portfolio share, a 30-day value series (downsampled to ≤30 points), its news, its alerts. |
+
+`{ref}` accepts a symbol (case-insensitive), a contract address, or the
+asset's UUID — tried in that order. Every response carries `as_of` and a
+plain-English `caveats` array (e.g. "3 asset(s) are unpriced, so total_usd is
+null, not zero", "this asset is not currently held"); an unpriced holding is
+always `null`, never `0`. Both routes also answer `Accept: text/markdown`
+with a compact Markdown rendering of the same data, roughly half the token
+cost of the JSON. `GET /context` is capped (top-8 allocations, 5 headlines, 5
+alerts) to stay near the ~2k-token budget regardless of portfolio size; what
+a cap hides is always named in `caveats`, never silently dropped.
 
 ### Integrations
 

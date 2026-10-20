@@ -24,6 +24,7 @@ from audr.api.health import router as health_router
 from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
 from audr.api.integrations import router as integrations_router
+from audr.api.llm import router as llm_router
 from audr.api.networks import router as networks_router
 from audr.api.news import router as news_router
 from audr.api.portfolio import router as portfolio_router
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(news_router)
     app.include_router(alerts_router)
     app.include_router(tokens_router)
+    app.include_router(llm_router)
 
     # Last, and only last: this mounts a catch-all at `/` for the built SPA
     # (AUD-388, replacing the nginx `web` container). Every router above must be

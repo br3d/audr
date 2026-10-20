@@ -59,6 +59,7 @@ _TOKEN_ALLOWED_PREFIXES: frozenset[str] = frozenset(
         "/api/v1/history",
         "/api/v1/events",
         "/api/v1/allowances",
+        "/api/v1/llm",
         "/api/v1/news",
         "/api/v1/alerts",
         "/api/v1/status",
