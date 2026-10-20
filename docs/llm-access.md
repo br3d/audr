@@ -1,11 +1,15 @@
 # Making audr readable by an LLM (AUD-622)
 
-A design proposal, not an implementation record. It answers one question: what
-would have to change so that an assistant like Claude or ChatGPT could answer
-"how is my portfolio doing, and is there news I should care about?" against a
-live audr instance.
+A design proposal, not an implementation record for stage 4 onward. It
+answers one question: what would have to change so that an assistant like
+Claude or ChatGPT could answer "how is my portfolio doing, and is there news
+I should care about?" against a live audr instance.
 
-Nothing here is built yet. §7 names the staged work and the order.
+**Stages 1–3 are built.** Stage 1 (read-only API tokens) shipped as AUD-629;
+stage 2 (the `/api/v1/llm/*` read surface) as AUD-630; stage 3 (`audr-mcp`,
+the MCP server — see [docs/mcp.md](mcp.md)) as AUD-632. Stage 4 (curated
+OpenAPI document, `/.well-known/llms.txt`) is not yet built. §7 names the
+staged work and the order.
 
 ---
 

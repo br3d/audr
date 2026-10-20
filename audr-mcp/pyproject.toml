@@ -1,0 +1,45 @@
+[project]
+name = "audr-mcp"
+version = "0.1.0"
+description = "MCP server exposing a read-only view of an audr instance (AUD-632)"
+requires-python = ">=3.10"
+dependencies = [
+    # Model Context Protocol server SDK (MCPServer, stdio + streamable-http transports).
+    "mcp==2.3.0",
+    # HTTP client used by the thin GET-only wrapper over /api/v1/llm/* etc.
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+audr-mcp = "audr_mcp.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "respx==0.23.1",
+    "ruff==0.16.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audr_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra -q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ANN"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "ANN"]
