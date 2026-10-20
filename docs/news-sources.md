@@ -561,6 +561,15 @@ Testnet POS", "Polygon PoS RPC Incident — Post-Incident Summary") — the same
 events the bor tags were gesturing at, written for a reader. Category ids come
 from `/categories.json`.
 
+That category is a *validator announcements* board, so its subject matter is
+releases even though its tier is `project` — 1 of its 25 entries is
+"Heimdall-v2 v0.12.2-beta-2 (Amoy)", a testnet build post. `should_drop_feed_item`
+in `jobs/news.py` therefore applies the pre-release half of the filter to the
+feeds named in `_RELEASE_SHAPED_PROJECT_FEEDS`, and the whole filter to the
+release tier. Membership is by feed key, not by tier: a general project blog
+posting "Our beta is live" is an announcement and must survive. If you seed
+another release-centric forum category, add its key to that set.
+
 ### Adding a new holding to news coverage
 
 In preference order, best signal first:
