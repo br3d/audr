@@ -298,9 +298,7 @@ async def revoke_token(db: AsyncSession, token_id: UUID) -> bool:
 async def list_tokens(db: AsyncSession) -> list[ApiToken]:
     """Return all non-revoked tokens, newest first."""
     result = await db.execute(
-        select(ApiToken)
-        .where(ApiToken.revoked_at.is_(None))
-        .order_by(ApiToken.created_at.desc())
+        select(ApiToken).where(ApiToken.revoked_at.is_(None)).order_by(ApiToken.created_at.desc())
     )
     return list(result.scalars().all())
 

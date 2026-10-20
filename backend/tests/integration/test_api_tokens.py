@@ -278,9 +278,7 @@ async def test_expired_token_returns_401(
     async with db_session_factory() as session:
         async with session.begin():
             await session.execute(
-                sa.text(
-                    "UPDATE api_token SET expires_at = :t WHERE token_hash = :h"
-                ),
+                sa.text("UPDATE api_token SET expires_at = :t WHERE token_hash = :h"),
                 {
                     "t": datetime.now(UTC) - timedelta(hours=1),
                     "h": __import__("hashlib").sha256(plaintext.encode()).hexdigest(),
@@ -409,6 +407,13 @@ async def test_redact_addresses_masks_wallet_address_in_holdings(
     token_address = "0x" + "b" * 40
     wallet_id = await _add_wallet_via_api(http_client, csrf, address, label="Cold storage")
 
+    # The app under test reads through its own session, so the seed rows have to
+    # be committed rather than written on the rolled-back `db_session` fixture —
+    # which makes cleaning them up this test's own job. Leaving an asset row
+    # behind is not harmless: the asset_icon_refresh job picks up every asset
+    # lacking an icon, so a leaked one makes test_asset_icon_refresh_job fetch an
+    # un-mocked logo URL, and test_asset_icon_endpoint's teardown trip over the
+    # balance_observation still referencing it.
     async with db_session_factory() as session:
         async with session.begin():
             await record_balance(
@@ -419,34 +424,52 @@ async def test_redact_addresses_masks_wallet_address_in_holdings(
                 block_number=1,
             )
 
-    _, redacted_token = await _mint_token_via_api(
-        http_client, csrf, name="redacted", redact_addresses=True
-    )
-    _, plain_token = await _mint_token_via_api(
-        http_client, csrf, name="plain", redact_addresses=False
-    )
+    try:
+        _, redacted_token = await _mint_token_via_api(
+            http_client, csrf, name="redacted", redact_addresses=True
+        )
+        _, plain_token = await _mint_token_via_api(
+            http_client, csrf, name="plain", redact_addresses=False
+        )
 
-    r = await http_client.get(
-        f"/api/v1/wallets/{wallet_id}/holdings",
-        headers={"Authorization": f"Bearer {redacted_token}"},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert address not in body["wallet_address"]
-    assert "Cold storage" in body["wallet_address"]
-    assert all(address not in h["wallet_address"] for h in body["holdings"])
+        r = await http_client.get(
+            f"/api/v1/wallets/{wallet_id}/holdings",
+            headers={"Authorization": f"Bearer {redacted_token}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert address not in body["wallet_address"]
+        assert "Cold storage" in body["wallet_address"]
+        assert all(address not in h["wallet_address"] for h in body["holdings"])
 
-    r2 = await http_client.get(
-        f"/api/v1/wallets/{wallet_id}/holdings",
-        headers={"Authorization": f"Bearer {plain_token}"},
-    )
-    assert r2.status_code == 200
-    assert r2.json()["wallet_address"] == address
+        r2 = await http_client.get(
+            f"/api/v1/wallets/{wallet_id}/holdings",
+            headers={"Authorization": f"Bearer {plain_token}"},
+        )
+        assert r2.status_code == 200
+        assert r2.json()["wallet_address"] == address
 
-    # Session auth is unaffected by any token's redact_addresses flag.
-    r3 = await http_client.get(f"/api/v1/wallets/{wallet_id}/holdings")
-    assert r3.status_code == 200
-    assert r3.json()["wallet_address"] == address
+        # Session auth is unaffected by any token's redact_addresses flag.
+        r3 = await http_client.get(f"/api/v1/wallets/{wallet_id}/holdings")
+        assert r3.status_code == 200
+        assert r3.json()["wallet_address"] == address
+    finally:
+        async with db_session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    sa.text(
+                        "DELETE FROM balance_observation WHERE asset_id IN"
+                        " (SELECT id FROM asset WHERE token_address = :addr)"
+                    ),
+                    {"addr": token_address.lower()},
+                )
+                await session.execute(
+                    sa.text("DELETE FROM asset WHERE token_address = :addr"),
+                    {"addr": token_address.lower()},
+                )
+                await session.execute(
+                    sa.text("DELETE FROM wallet WHERE id = :id"), {"id": wallet_id}
+                )
 
 
 async def test_revoked_token_disappears_from_list(http_client: httpx.AsyncClient) -> None:
