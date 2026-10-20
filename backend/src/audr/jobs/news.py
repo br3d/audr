@@ -89,13 +89,31 @@ _PRERELEASE_RE = re.compile(
 )
 
 
-def is_noisy_release(title: str) -> bool:
-    """True when a release-feed entry is a package tag or a pre-release build.
+# Project feeds whose subject matter is releases, so the pre-release half of
+# the filter applies to them as well as to the release tier. Opt-in by key
+# rather than by tier: `project:polygon-forum-announcements` (0038) is a
+# validator-announcements category, and a testnet build post
+# ("Heimdall-v2 v0.12.2-beta-2 (Amoy)", 1 of its 25 current entries) is the
+# same non-news as the bor `-beta` tags it replaced. A general project blog
+# posting "Our beta is live" is an announcement and must still survive, which
+# is why this is a named set and not a tier rule.
+_RELEASE_SHAPED_PROJECT_FEEDS = frozenset({"project:polygon-forum-announcements"})
 
-    Applied to the `release` tier only — a project blog post titled "Beta is
-    live" is an announcement and must survive.
-    """
+
+def is_noisy_release(title: str) -> bool:
+    """True when a release-feed entry is a package tag or a pre-release build."""
     return bool(_PACKAGE_TAG_RE.search(title) or _PRERELEASE_RE.search(title))
+
+
+def should_drop_feed_item(*, tier: str, key: str, title: str) -> bool:
+    """True when a feed item is release noise rather than news.
+
+    The `release` tier is checked in full; a project feed is checked only when
+    its subject matter is releases (`_RELEASE_SHAPED_PROJECT_FEEDS`).
+    """
+    if tier == "release":
+        return is_noisy_release(title)
+    return key in _RELEASE_SHAPED_PROJECT_FEEDS and bool(_PRERELEASE_RE.search(title))
 
 
 @dataclass(frozen=True)
@@ -287,9 +305,9 @@ async def _poll_feed(
             # gain (AUD-573 follow-up). _prune_old_news would delete every one
             # of these anyway; skip the round trip.
             continue
-        if feed.tier == "release" and is_noisy_release(item.title):
+        if should_drop_feed_item(tier=feed.tier, key=feed.key, title=item.title):
             # Package tags and pre-release builds (AUD-640) — see
-            # is_noisy_release.
+            # should_drop_feed_item.
             continue
         for asset_id in target_asset_ids(item):
             inserted += await _insert_news(

@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from audr.jobs.news import HeldAsset, is_noisy_release, match_assets
+from audr.jobs.news import HeldAsset, is_noisy_release, match_assets, should_drop_feed_item
 
 _WETH = HeldAsset(id=uuid.uuid4(), symbol="WETH", name="Wrapped Ether")
 _UNI = HeldAsset(id=uuid.uuid4(), symbol="UNI", name="Uniswap")
@@ -82,3 +82,57 @@ class TestIsNoisyRelease:
     )
     def test_real_releases_survive(self, title: str) -> None:
         assert is_noisy_release(title) is False
+
+
+@pytest.mark.unit
+class TestShouldDropFeedItem:
+    """Which feeds the filter applies to (AUD-640 reopened).
+
+    Titles are the real ones on `forum.polygon.technology/c/announcements`,
+    MATIC's source since 0038 retired `release:polygon-bor`.
+    """
+
+    def test_release_tier_drops_package_tags_and_prereleases(self) -> None:
+        for title in ("@ensdomains/ensjs@5.2.4", "v2.10.2-beta5"):
+            assert should_drop_feed_item(tier="release", key="release:ensjs", title=title) is True
+
+    def test_release_shaped_project_feed_drops_testnet_builds(self) -> None:
+        assert (
+            should_drop_feed_item(
+                tier="project",
+                key="project:polygon-forum-announcements",
+                title="Heimdall-v2 v0.12.2-beta-2 (Amoy)",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Bor v2.10.3 Release Mainnet and Testnet POS",
+            "Security release review – Heimdall v0.12.1 (Lugano HF)",
+            "Polygon PoS RPC Incident — Post-Incident Summary",
+        ],
+    )
+    def test_real_announcements_survive_on_that_feed(self, title: str) -> None:
+        assert (
+            should_drop_feed_item(
+                tier="project", key="project:polygon-forum-announcements", title=title
+            )
+            is False
+        )
+
+    def test_other_project_feeds_keep_beta_announcements(self) -> None:
+        """A blog post about a beta is news; only release-shaped feeds are filtered."""
+        assert (
+            should_drop_feed_item(tier="project", key="project:ens-blog", title="Our beta is live")
+            is False
+        )
+
+    def test_press_tier_is_never_filtered(self) -> None:
+        assert (
+            should_drop_feed_item(
+                tier="press", key="press:coindesk", title="Alpha leak hits markets"
+            )
+            is False
+        )
