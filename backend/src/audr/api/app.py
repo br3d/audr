@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -27,12 +28,14 @@ from audr.api.integrations import router as integrations_router
 from audr.api.llm import router as llm_router
 from audr.api.networks import router as networks_router
 from audr.api.news import router as news_router
+from audr.api.openapi_curated import build_curated_openapi
 from audr.api.portfolio import router as portfolio_router
 from audr.api.settings import router as settings_router
 from audr.api.spa import mount_spa
 from audr.api.tokens import router as tokens_router
 from audr.api.version import router as version_router
 from audr.api.wallets import router as wallets_router
+from audr.api.wellknown import router as wellknown_router
 from audr.config import get_spa_settings
 from audr.version import __version__
 
@@ -48,6 +51,12 @@ def create_app() -> FastAPI:
         version=__version__,
         docs_url=None,
         redoc_url=None,
+        # FastAPI's default auto-generated schema describes every route,
+        # including the session-only operator surfaces — publishing that at
+        # the conventional /openapi.json would be a security regression, not
+        # a docs feature. openapi_url=None kills the default route; the
+        # curated replacement below takes the same path (AUD-633).
+        openapi_url=None,
     )
 
     app.add_middleware(
@@ -108,6 +117,15 @@ def create_app() -> FastAPI:
     app.include_router(alerts_router)
     app.include_router(tokens_router)
     app.include_router(llm_router)
+    app.include_router(wellknown_router)
+
+    # Unauthenticated on purpose (AUD-633): this is API *shape*, not
+    # portfolio data, curated down to the token-readable routes above so it
+    # can safely sit outside the session/token gate. See
+    # audr.api.openapi_curated for what gets filtered out and why.
+    @app.get("/openapi.json", include_in_schema=False)
+    async def get_curated_openapi() -> dict[str, Any]:
+        return build_curated_openapi(app)
 
     # Last, and only last: this mounts a catch-all at `/` for the built SPA
     # (AUD-388, replacing the nginx `web` container). Every router above must be

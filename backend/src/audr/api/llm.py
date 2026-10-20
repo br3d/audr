@@ -28,7 +28,7 @@ from typing import Annotated
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import ReadPrincipal, _require_read_auth
@@ -62,120 +62,237 @@ _STALE_PRICE_LAG_NOTE = (
 
 
 class PortfolioBlockOut(BaseModel):
-    as_of: str | None
-    total_usd: str | None
-    priced_subtotal_usd: str | None
-    unpriced_asset_count: int
-    incomplete: bool
-    stale_balances: bool
-    stale_prices: bool
+    as_of: str | None = Field(
+        description=(
+            "RFC3339 timestamp of the valuation snapshot these figures come from, "
+            "or null if no snapshot has ever been published — in which case every "
+            "other field in this block is also null."
+        )
+    )
+    total_usd: str | None = Field(
+        description=(
+            "Exact decimal string, never a JSON float. Null means at least one "
+            "held asset is unpriced or no snapshot exists yet — null is 'unknown', "
+            "never zero."
+        )
+    )
+    priced_subtotal_usd: str | None = Field(
+        description=(
+            "Sum of only the assets that do have a price, as an exact decimal "
+            "string. Useful when total_usd is null: this is the best lower bound "
+            "available. Null under the same conditions as total_usd."
+        )
+    )
+    unpriced_asset_count: int = Field(
+        description="Count of held assets with no price, the reason total_usd can be null."
+    )
+    incomplete: bool = Field(
+        description="True if the snapshot omits at least one wallet or asset that should be in it."
+    )
+    stale_balances: bool = Field(
+        description="True if at least one balance was carried forward from an earlier scan."
+    )
+    stale_prices: bool = Field(
+        description="True if no fresh price quote has been fetched recently."
+    )
 
 
 class TopAllocationOut(BaseModel):
-    asset_id: str
-    symbol: str
-    name: str
-    value_usd: str | None
-    percentage: str | None
-    quantity: str | None
-    price_usd: str | None
+    asset_id: str = Field(
+        description="Internal UUID of the asset; also valid as an /llm/asset/{ref}."
+    )
+    symbol: str = Field(description="Ticker symbol; also valid as an /llm/asset/{ref}.")
+    name: str = Field(description="Human-readable asset name.")
+    value_usd: str | None = Field(
+        description="Exact decimal string. Null means this asset is unpriced, not worth zero."
+    )
+    percentage: str | None = Field(
+        description="Share of total_usd, exact decimal string. Null whenever value_usd is null."
+    )
+    quantity: str | None = Field(
+        description="Exact decimal string quantity held. Null only if the balance is unknown."
+    )
+    price_usd: str | None = Field(
+        description="Exact decimal string unit price. Null means no price is currently available."
+    )
 
 
 class DeltasOut(BaseModel):
-    pct_24h: str | None
-    pct_7d: str | None
-    pct_30d: str | None
+    pct_24h: str | None = Field(
+        description=(
+            "Percent change in total_usd over the last 24h, as an exact decimal "
+            "string. Null means no historical snapshot was close enough in time "
+            "to compute it — not a 0% change."
+        )
+    )
+    pct_7d: str | None = Field(
+        description="Percent change over 7 days. Null means it could not be computed, not 0%."
+    )
+    pct_30d: str | None = Field(
+        description="Percent change over 30 days. Null means it could not be computed, not 0%."
+    )
 
 
 class HeadlineOut(BaseModel):
-    asset_symbol: str
-    title: str
-    url: str
-    news_site: str
-    published_at: str
+    asset_symbol: str = Field(description="Ticker symbol of the asset this headline is about.")
+    title: str = Field(description="Headline title, as cached from the source site.")
+    url: str = Field(description="Source URL of the article.")
+    news_site: str = Field(description="Publisher name.")
+    published_at: str = Field(description="RFC3339 timestamp the source reported for this article.")
 
 
 class AlertSummaryOut(BaseModel):
-    asset_symbol: str
-    severity: str
-    summary: str
-    created_at: str
-    read_at: str | None
+    asset_symbol: str = Field(description="Ticker symbol of the asset this alert is about.")
+    severity: str = Field(description="Alert severity, e.g. info/warning/critical.")
+    summary: str = Field(description="Plain-English summary of what triggered the alert.")
+    created_at: str = Field(description="RFC3339 timestamp the alert was generated.")
+    read_at: str | None = Field(
+        description="RFC3339 timestamp the owner marked this alert read, or null if still unread."
+    )
 
 
 class AlertsBlockOut(BaseModel):
-    as_of: str | None
-    unread_count: int
-    items: list[AlertSummaryOut]
+    as_of: str | None = Field(
+        description="RFC3339 timestamp of the most recent alert, or null if there are none."
+    )
+    unread_count: int = Field(description="Count of alerts across all assets with read_at null.")
+    items: list[AlertSummaryOut] = Field(
+        description="Most recent alerts, unread first; capped — see the caveats array if truncated."
+    )
 
 
 class FreshnessOut(BaseModel):
-    balances_as_of: str | None
-    quotes_as_of: str | None
-    news_as_of: str | None
-    alerts_as_of: str | None
+    balances_as_of: str | None = Field(
+        description="RFC3339 timestamp of the last balance scan, or null if none has ever run."
+    )
+    quotes_as_of: str | None = Field(
+        description="RFC3339 timestamp of the last completed price refresh, or null if never run."
+    )
+    news_as_of: str | None = Field(
+        description="RFC3339 timestamp of the newest cached news, or null if the cache is empty."
+    )
+    alerts_as_of: str | None = Field(
+        description="RFC3339 timestamp of the most recent alert, or null if none have ever fired."
+    )
 
 
 class LlmContextResponse(BaseModel):
-    as_of: str
-    currency: str
-    portfolio: PortfolioBlockOut
-    top_allocations: list[TopAllocationOut]
-    deltas: DeltasOut
-    headlines: list[HeadlineOut]
-    alerts: AlertsBlockOut
-    freshness: FreshnessOut
-    caveats: list[str]
-    request_id: str
+    as_of: str = Field(
+        description="RFC3339 timestamp this response was generated — not when the data changed."
+    )
+    currency: str = Field(description="ISO currency code every *_usd field is denominated in.")
+    portfolio: PortfolioBlockOut = Field(
+        description="Whole-portfolio totals and data-quality flags."
+    )
+    top_allocations: list[TopAllocationOut] = Field(
+        description="Largest holdings by value_usd, descending. Capped — see caveats if truncated."
+    )
+    deltas: DeltasOut = Field(
+        description="Percent change in total_usd over three lookback windows."
+    )
+    headlines: list[HeadlineOut] = Field(
+        description="Most recent cached news across all held assets."
+    )
+    alerts: AlertsBlockOut = Field(description="Unread-first summary of recent news alerts.")
+    freshness: FreshnessOut = Field(
+        description="Per-subsystem timestamp of the last successful refresh."
+    )
+    caveats: list[str] = Field(
+        description=(
+            "Plain-English warnings about this specific response — e.g. stale "
+            "balances, truncated lists, or why a figure is null. Always read "
+            "this before stating any figure above as fact."
+        )
+    )
+    request_id: str = Field(
+        description="Opaque identifier for this response, for support correlation only."
+    )
 
 
 class AssetHoldingOut(BaseModel):
-    quantity: str | None
-    value_usd: str | None
-    price_usd: str | None
-    portfolio_share_pct: str | None
-    wallet_count: int
-    included: bool
+    quantity: str | None = Field(
+        description="Exact decimal string quantity held across all wallets. Null means unknown."
+    )
+    value_usd: str | None = Field(
+        description="Exact decimal string. Null means this asset is unpriced, not worth zero."
+    )
+    price_usd: str | None = Field(
+        description="Exact decimal string unit price. Null means no price is currently available."
+    )
+    portfolio_share_pct: str | None = Field(
+        description="Share of the whole portfolio's total_usd. Null whenever value_usd is null."
+    )
+    wallet_count: int = Field(description="Number of distinct wallets holding this asset.")
+    included: bool = Field(description="Whether this holding counts toward the portfolio total.")
 
 
 class AssetSeriesPointOut(BaseModel):
-    as_of: str
-    value_usd: str | None
-    price_usd: str | None
+    as_of: str = Field(description="RFC3339 timestamp this historical snapshot was taken.")
+    value_usd: str | None = Field(
+        description="Exact decimal string. Null means this asset was unpriced at that time."
+    )
+    price_usd: str | None = Field(
+        description="Exact decimal string unit price at that point in time, or null if unpriced."
+    )
 
 
 class AssetNewsItemOut(BaseModel):
-    title: str
-    url: str
-    news_site: str
-    published_at: str
+    title: str = Field(description="Headline title, as cached from the source site.")
+    url: str = Field(description="Source URL of the article.")
+    news_site: str = Field(description="Publisher name.")
+    published_at: str = Field(description="RFC3339 timestamp the source reported for this article.")
 
 
 class AssetAlertItemOut(BaseModel):
-    severity: str
-    summary: str
-    created_at: str
-    read_at: str | None
+    severity: str = Field(description="Alert severity, e.g. info/warning/critical.")
+    summary: str = Field(description="Plain-English summary of what triggered the alert.")
+    created_at: str = Field(description="RFC3339 timestamp the alert was generated.")
+    read_at: str | None = Field(
+        description="RFC3339 timestamp the owner marked this alert read, or null if still unread."
+    )
 
 
 class AssetAlertsBlockOut(BaseModel):
-    unread_count: int
-    items: list[AssetAlertItemOut]
+    unread_count: int = Field(description="Count of this asset's alerts with read_at null.")
+    items: list[AssetAlertItemOut] = Field(
+        description="This asset's recent alerts, unread first; capped — see caveats if truncated."
+    )
 
 
 class LlmAssetResponse(BaseModel):
-    as_of: str
-    asset_id: str
-    symbol: str
-    name: str
-    contract_address: str | None
-    is_native: bool
-    holding: AssetHoldingOut | None
-    series_30d: list[AssetSeriesPointOut]
-    news: list[AssetNewsItemOut]
-    alerts: AssetAlertsBlockOut
-    caveats: list[str]
-    request_id: str
+    as_of: str = Field(
+        description="RFC3339 timestamp this response was generated — not when the data changed."
+    )
+    asset_id: str = Field(description="Internal UUID of the resolved asset.")
+    symbol: str = Field(description="Ticker symbol of the resolved asset.")
+    name: str = Field(description="Human-readable name of the resolved asset.")
+    contract_address: str | None = Field(
+        description="ERC-20 contract address, lowercase. Null for native ETH, which has none."
+    )
+    is_native: bool = Field(description="True for native ETH, false for any ERC-20 token.")
+    holding: AssetHoldingOut | None = Field(
+        description=(
+            "This asset's quantity, value and price. Null means the asset is not "
+            "currently held in any tracked wallet — unknown, not a zero balance."
+        )
+    )
+    series_30d: list[AssetSeriesPointOut] = Field(
+        description="Value/price over the last 30 days, downsampled; see caveats if thinned."
+    )
+    news: list[AssetNewsItemOut] = Field(description="Most recent cached news for this asset.")
+    alerts: AssetAlertsBlockOut = Field(
+        description="Unread-first summary of this asset's news alerts."
+    )
+    caveats: list[str] = Field(
+        description=(
+            "Plain-English warnings about this specific response — e.g. that "
+            "this asset isn't held, or why a figure is null. Always read this "
+            "before stating any figure above as fact."
+        )
+    )
+    request_id: str = Field(
+        description="Opaque identifier for this response, for support correlation only."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +707,7 @@ def _asset_to_markdown(body: LlmAssetResponse) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/context")
+@router.get("/context", response_model=LlmContextResponse)
 async def get_llm_context(
     request: Request,
     auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
@@ -700,7 +817,7 @@ async def get_llm_context(
     return _render(body, _context_to_markdown(body), request)
 
 
-@router.get("/asset/{ref}")
+@router.get("/asset/{ref}", response_model=LlmAssetResponse)
 async def get_llm_asset(
     ref: str,
     request: Request,
