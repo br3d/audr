@@ -18,6 +18,10 @@ function formatDate(iso: string | null): string {
   })
 }
 
+function isExpired(token: ApiTokenItem): boolean {
+  return token.expires_at !== null && new Date(token.expires_at).getTime() <= Date.now()
+}
+
 function TokenRow({
   token,
   onRevoke,
@@ -27,6 +31,7 @@ function TokenRow({
 }) {
   const [confirming, setConfirming] = useState(false)
   const [revoking, setRevoking] = useState(false)
+  const expired = isExpired(token)
 
   async function handleRevoke() {
     setRevoking(true)
@@ -43,7 +48,16 @@ function TokenRow({
       <td>{token.name}</td>
       <td className="text-secondary">{formatDate(token.created_at)}</td>
       <td className="text-secondary">{formatDate(token.expires_at)}</td>
-      <td className="text-secondary">{formatDate(token.last_used_at)}</td>
+      <td className="text-secondary">
+        {token.last_used_at ? formatDate(token.last_used_at) : 'Never used'}
+      </td>
+      <td>
+        {expired ? (
+          <span className="badge badge-warning">Expired</span>
+        ) : (
+          <span className="badge badge-ok">Active</span>
+        )}
+      </td>
       <td>
         {confirming ? (
           <span className="row gap-8">
@@ -273,7 +287,11 @@ export default function ApiTokensPage() {
         )}
 
         {!tokensQuery.isPending && tokens.length === 0 && (
-          <p className="muted-text mb-16">No active tokens.</p>
+          <p className="muted-text mb-16">
+            No active tokens. Create one to connect a local LLM client — Claude Desktop,
+            ChatGPT, or your own script — to this portfolio over its read-only API. A token
+            grants read access to your entire portfolio, so treat it like a password.
+          </p>
         )}
 
         {tokens.length > 0 && (
@@ -285,6 +303,7 @@ export default function ApiTokensPage() {
                   <th>Created</th>
                   <th>Expires</th>
                   <th>Last used</th>
+                  <th>Status</th>
                   <th />
                 </tr>
               </thead>
