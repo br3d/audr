@@ -6,6 +6,7 @@ import {
   IconClock,
   IconActivity,
   IconZap,
+  IconKey,
   IconPlug,
   IconSettings,
   IconSun,
@@ -41,6 +42,7 @@ export const MAIN_PAGES = [
   'schedules',
   'status',
   'account',
+  'api-tokens',
   // AUD-436: the assistant is a canned-response prototype, not a working
   // feature. It keeps a route so the intended interface can still be shown
   // on purpose (`#/assistant-prototype`), but it is deliberately absent from
@@ -77,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'status', label: 'Status', Icon: IconActivity },
       { page: 'connections', label: 'Connections', Icon: IconPlug },
       { page: 'account', label: 'Account & Data', Icon: IconSettings },
+      { page: 'api-tokens', label: 'API Tokens', Icon: IconKey },
       // AUD-436: no Assistant entry — see MAIN_PAGES.
     ],
   },
@@ -91,6 +94,7 @@ const PAGE_TITLES: Record<MainPage, string> = {
   schedules: 'Schedules',
   status: 'Status',
   account: 'Account & Data',
+  'api-tokens': 'API Tokens',
   'assistant-prototype': 'Assistant (prototype)',
 }
 

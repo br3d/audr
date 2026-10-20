@@ -248,3 +248,14 @@ export function IconRefresh(props: IconProps) {
     </svg>
   )
 }
+
+export function IconKey(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <circle cx="7.5" cy="12.5" r="3.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 10l7-7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M15 5l2 2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M13 7l2 2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}

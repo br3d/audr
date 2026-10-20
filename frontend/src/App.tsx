@@ -13,6 +13,7 @@ import ConnectionsPage from './pages/ConnectionsPage'
 import SchedulesPage from './pages/SchedulesPage'
 import StatusPage from './pages/StatusPage'
 import AccountDataPage from './pages/AccountDataPage'
+import ApiTokensPage from './pages/ApiTokensPage'
 // AUD-436: prototype only, reachable at #/assistant-prototype and nowhere in the nav.
 import AssistantPrototypePage from './pages/AssistantPrototypePage'
 
@@ -96,6 +97,7 @@ export default function App() {
       {page === 'schedules' && <SchedulesPage />}
       {page === 'status' && <StatusPage />}
       {page === 'account' && <AccountDataPage />}
+      {page === 'api-tokens' && <ApiTokensPage />}
       {page === 'assistant-prototype' && <AssistantPrototypePage />}
     </Layout>
   )

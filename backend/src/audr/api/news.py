@@ -17,8 +17,7 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_session
-from audr.auth.models import Session
+from audr.api.auth import ReadPrincipal, _require_read_auth
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
@@ -49,7 +48,7 @@ class AssetNewsResponse(BaseModel):
 @router.get("/assets/{asset_id}/news", response_model=AssetNewsResponse)
 async def get_asset_news(
     asset_id: str,
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     limit: int = _DEFAULT_LIMIT,
     offset: int = 0,

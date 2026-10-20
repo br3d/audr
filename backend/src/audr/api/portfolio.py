@@ -17,9 +17,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_session
+from audr.api.auth import ReadPrincipal, _require_read_auth
 from audr.assets.constants import is_native_eth
-from audr.auth.models import Session
 from audr.db import get_db
 from audr.portfolio.money import format_decimal, raw_to_quantity
 
@@ -220,7 +219,7 @@ _EMPTY_QUALITY = PortfolioQualityOut(
 
 @router.get("/portfolio", response_model=PortfolioResponseOut)
 async def get_portfolio(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     wallet_id: str | None = None,
 ) -> PortfolioResponseOut:

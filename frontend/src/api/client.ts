@@ -624,6 +624,47 @@ export function exportHistoryUrl(
   return `${BASE}/exports/history?${params.toString()}`
 }
 
+// --- API Token types ---
+
+export interface ApiTokenItem {
+  id: string
+  name: string
+  scopes: string
+  expires_at: string | null
+  created_at: string
+  last_used_at: string | null
+  redact_addresses: boolean
+}
+
+export interface ApiTokenCreated extends ApiTokenItem {
+  /** Plaintext token — returned exactly once on creation. */
+  token: string
+}
+
+export interface ApiTokensResponse {
+  items: ApiTokenItem[]
+}
+
+export interface CreateTokenInput {
+  name: string
+  expires_days?: number
+  redact_addresses?: boolean
+}
+
+// --- API Token API ---
+
+export function fetchApiTokens(): Promise<ApiTokensResponse> {
+  return get<ApiTokensResponse>('/tokens')
+}
+
+export function createApiToken(input: CreateTokenInput): Promise<ApiTokenCreated> {
+  return post<ApiTokenCreated>('/tokens', input)
+}
+
+export function revokeApiToken(id: string): Promise<void> {
+  return del<void>(`/tokens/${id}`)
+}
+
 // --- Purge API ---
 
 export function fetchPurgePreview(provider: string): Promise<PurgePreviewResponse> {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import uuid
 from datetime import UTC
 from typing import Annotated
 from urllib.parse import urlparse
@@ -24,8 +26,48 @@ from audr.auth.service import (
     login,
     revoke_session,
     setup_owner,
+    verify_bearer_token,
 )
 from audr.db import get_db
+
+# ---------------------------------------------------------------------------
+# Token auth context and allow-list
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TokenContext:
+    """Represents a successfully authenticated API token request."""
+
+    token_id: uuid.UUID
+    redact_addresses: bool
+
+
+# Union type returned by _require_read_auth — either a live Session or a
+# validated TokenContext.  Route functions that don't use the value can use
+# `_auth` (underscore prefix).
+ReadPrincipal = Session | TokenContext
+
+# Paths (prefix-matched) that Bearer tokens may access.  Everything else
+# returns 403 — route allow-list, not deny-list.
+_TOKEN_ALLOWED_PREFIXES: frozenset[str] = frozenset(
+    {
+        "/api/v1/portfolio",
+        "/api/v1/holdings",
+        "/api/v1/assets",
+        "/api/v1/history",
+        "/api/v1/events",
+        "/api/v1/allowances",
+        "/api/v1/news",
+        "/api/v1/alerts",
+        "/api/v1/status",
+        "/api/v1/version",
+    }
+)
+
+
+def _is_token_allowed_path(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in _TOKEN_ALLOWED_PREFIXES)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -165,6 +207,69 @@ async def _require_session(
             detail="Session expired or invalid",
         )
 
+    return session
+
+
+async def _require_read_auth(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    sid: Annotated[str | None, Cookie(alias="sid")] = None,
+    db: AsyncSession = Depends(get_db),
+) -> ReadPrincipal:
+    """Accept either a session cookie or a Bearer API token for read routes.
+
+    Token path: only GET/HEAD methods; only routes in the allow-list.
+    Non-safe method with a token → 403.
+    Route not in allow-list → 403.
+    Invalid/expired/revoked token → 401.
+    """
+    if authorization is not None:
+        lower = authorization.lower()
+        if lower.startswith("bearer "):
+            plaintext = authorization[7:]
+            if request.method not in ("GET", "HEAD"):
+                raise HTTPException(
+                    status_code=http_status.HTTP_403_FORBIDDEN,
+                    detail="API tokens are read-only; use a session for mutations",
+                )
+            if not _is_token_allowed_path(request.url.path):
+                raise HTTPException(
+                    status_code=http_status.HTTP_403_FORBIDDEN,
+                    detail="Route not accessible with an API token",
+                )
+            try:
+                token = await verify_bearer_token(db, plaintext)
+            except ThrottledError:
+                raise HTTPException(
+                    status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed requests for this token",
+                ) from None
+            if token is None:
+                raise HTTPException(
+                    status_code=http_status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid, expired, or revoked token",
+                )
+            return TokenContext(token_id=token.id, redact_addresses=token.redact_addresses)
+
+    # Fall through to session-cookie auth.
+    if sid is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+
+    try:
+        session_uuid = UUID(sid)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
+        ) from exc
+
+    session = await get_valid_session(db, session_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or invalid",
+        )
     return session
 
 

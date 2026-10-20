@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
+from audr.api.auth import ReadPrincipal, _require_csrf, _require_read_auth, _require_session
 from audr.assets.catalog import get_catalog_status
 from audr.auth.models import Session
 from audr.auth.service import AuthenticationError
@@ -703,7 +703,7 @@ async def cancel_job(
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
     """Return system operational status in the frontend-expected shape."""

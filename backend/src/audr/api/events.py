@@ -28,8 +28,7 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_session
-from audr.auth.models import Session
+from audr.api.auth import ReadPrincipal, _require_read_auth
 from audr.db import get_db
 from audr.operations.init_key import get_master_key
 from audr.portfolio.money import (
@@ -105,7 +104,7 @@ class EventsResponse(BaseModel):
 
 @router.get("/events", response_model=EventsResponse)
 async def get_events(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     wallet_id: str | None = Query(default=None),
     event_type: Literal["transfer_in", "transfer_out"] | None = Query(default=None),
@@ -287,7 +286,7 @@ class AllowancesResponse(BaseModel):
 
 @router.get("/allowances", response_model=AllowancesResponse)
 async def get_allowances(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     wallet_id: str | None = Query(default=None),
     unlimited_only: bool = Query(default=False),

@@ -22,8 +22,8 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
-from audr.auth.models import Session
+from audr.api.auth import ReadPrincipal, _require_csrf, _require_read_auth
+from audr.auth.models import Session  # still used in CSRF-protected route
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
@@ -68,7 +68,7 @@ class AlertReadResponse(BaseModel):
 
 @router.get("/alerts", response_model=AlertsResponse)
 async def list_alerts(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     unread: bool = False,
     limit: int = _DEFAULT_LIMIT,

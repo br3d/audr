@@ -16,10 +16,10 @@ from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf, _require_session
+from audr.api.auth import ReadPrincipal, _require_csrf, _require_read_auth
 from audr.assets.catalog import get_latest_catalog_version
 from audr.assets.constants import is_native_eth
-from audr.auth.models import Session
+from audr.auth.models import Session  # still used in CSRF-protected routes
 from audr.db import get_db
 
 router = APIRouter(prefix="/api/v1")
@@ -192,7 +192,7 @@ async def _get_asset_by_id(db: AsyncSession, asset_id: uuid.UUID) -> dict | None
 
 @router.get("/assets", response_model=AssetsResponseOut)
 async def list_assets(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
     excluded: bool | None = None,
     held: bool | None = None,
@@ -283,7 +283,7 @@ async def list_assets(
 
 @router.get("/catalog", response_model=CatalogOut)
 async def get_catalog(
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
 ) -> CatalogOut:
     """Report the pinned catalog snapshot's source, version and coverage.
@@ -429,7 +429,7 @@ async def patch_asset(
 @router.get("/assets/{asset_id}/icon")
 async def get_asset_icon(
     asset_id: uuid.UUID,
-    _session: Annotated[Session, Depends(_require_session)],
+    _auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Serve a cached asset icon (AUD-385), or 404 if none is cached.

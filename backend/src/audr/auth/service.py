@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.auth.models import LoginAttempt, Owner, Session
+from audr.auth.models import ApiToken, LoginAttempt, Owner, Session, TokenAttempt
 
 # Argon2id with OWASP-recommended parameters (RFC 9106 minimum config).
 _hasher = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=2)
@@ -183,6 +184,125 @@ async def revoke_session(db: AsyncSession, session_id: UUID) -> None:
     """Mark *session_id* as revoked (logout)."""
     await db.execute(update(Session).where(Session.id == session_id).values(revoked=True))
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# API token operations
+# ---------------------------------------------------------------------------
+
+TOKEN_PREFIX = "audr_pat_"  # noqa: S105 — not a password; it's the public token prefix
+TOKEN_DEFAULT_EXPIRY_DAYS = 90
+
+# Per-token throttle — max failures in window before locking.
+TOKEN_THROTTLE_WINDOW = timedelta(minutes=15)
+TOKEN_THROTTLE_MAX_FAILURES = 1000
+
+
+def _hash_token(plaintext: str) -> str:
+    """Return the SHA-256 hex digest of *plaintext*."""
+    return hashlib.sha256(plaintext.encode()).hexdigest()
+
+
+async def mint_token(
+    db: AsyncSession,
+    *,
+    name: str,
+    expires_days: int = TOKEN_DEFAULT_EXPIRY_DAYS,
+    redact_addresses: bool = False,
+) -> tuple[str, ApiToken]:
+    """Generate a new read-only API token.
+
+    Returns (plaintext, ApiToken) — the plaintext is shown exactly once and
+    must be returned to the caller immediately; only the hash is persisted.
+    """
+    plaintext = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    now = _utcnow()
+    token = ApiToken(
+        id=uuid.uuid4(),
+        name=name,
+        token_hash=_hash_token(plaintext),
+        scopes="read",
+        expires_at=now + timedelta(days=expires_days),
+        created_at=now,
+        redact_addresses=redact_addresses,
+    )
+    db.add(token)
+    await db.flush()
+    return plaintext, token
+
+
+async def _is_token_throttled(db: AsyncSession, token_id: UUID) -> bool:
+    window_start = _utcnow() - TOKEN_THROTTLE_WINDOW
+    result = await db.execute(
+        select(func.count())
+        .select_from(TokenAttempt)
+        .where(TokenAttempt.token_id == token_id)
+        .where(TokenAttempt.success.is_(False))
+        .where(TokenAttempt.attempted_at >= window_start)
+    )
+    count: int = result.scalar_one()
+    return count >= TOKEN_THROTTLE_MAX_FAILURES
+
+
+async def _record_token_attempt(db: AsyncSession, token_id: UUID, *, success: bool) -> None:
+    attempt = TokenAttempt(
+        id=uuid.uuid4(),
+        token_id=token_id,
+        attempted_at=_utcnow(),
+        success=success,
+    )
+    db.add(attempt)
+    await db.flush()
+
+
+async def verify_bearer_token(db: AsyncSession, plaintext: str) -> ApiToken | None:
+    """Validate a bearer token string.
+
+    Returns the ApiToken on success, None on failure.
+    Updates last_used_at and records an attempt row.
+    Raises ThrottledError when the per-token failure rate is exceeded.
+    """
+    digest = _hash_token(plaintext)
+    result = await db.execute(select(ApiToken).where(ApiToken.token_hash == digest))
+    token = result.scalar_one_or_none()
+
+    if token is None:
+        return None
+
+    if await _is_token_throttled(db, token.id):
+        raise ThrottledError()
+
+    now = _utcnow()
+    if token.revoked_at is not None or (token.expires_at is not None and token.expires_at <= now):
+        await _record_token_attempt(db, token.id, success=False)
+        await db.commit()
+        return None
+
+    token.last_used_at = now
+    await _record_token_attempt(db, token.id, success=True)
+    await db.commit()
+    return token
+
+
+async def revoke_token(db: AsyncSession, token_id: UUID) -> bool:
+    """Revoke a token by id.  Returns True if found and revoked, False if not found."""
+    result = await db.execute(select(ApiToken).where(ApiToken.id == token_id))
+    token = result.scalar_one_or_none()
+    if token is None:
+        return False
+    token.revoked_at = _utcnow()
+    await db.commit()
+    return True
+
+
+async def list_tokens(db: AsyncSession) -> list[ApiToken]:
+    """Return all non-revoked tokens, newest first."""
+    result = await db.execute(
+        select(ApiToken)
+        .where(ApiToken.revoked_at.is_(None))
+        .order_by(ApiToken.created_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 async def change_password(
