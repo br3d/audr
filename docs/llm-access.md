@@ -1,11 +1,17 @@
 # Making audr readable by an LLM (AUD-622)
 
-A design proposal, not an implementation record. It answers one question: what
-would have to change so that an assistant like Claude or ChatGPT could answer
-"how is my portfolio doing, and is there news I should care about?" against a
-live audr instance.
+A design proposal, not an implementation record — kept as the rationale for
+what shipped, even after it ships. It answers one question: what would have
+to change so that an assistant like Claude or ChatGPT could answer "how is my
+portfolio doing, and is there news I should care about?" against a live audr
+instance.
 
-Nothing here is built yet. §7 names the staged work and the order.
+**Status:** Stage 1 (AUD-629, read-only API tokens), stage 2 (AUD-630,
+`/api/v1/llm/*`) and stage 4 (AUD-633, curated `GET /openapi.json` and
+`GET /.well-known/llms.txt`) are built and merged. Stage 3 (an MCP server) is
+not built. §5 below is updated to describe stage 4 as implemented, including
+the one place it diverged from the original proposal; §2–4 and §7 otherwise
+still read as proposal text.
 
 ---
 
@@ -136,21 +142,41 @@ us no way to withhold a route.
 Cost: a new package and a compose service, both additive. Nothing in the backend
 changes.
 
-## 5. Stage 4 — discovery for everything that is not MCP
+## 5. Stage 4 — discovery for everything that is not MCP (AUD-633, built)
 
-Cheap, and best done alongside stage 2.
+Cheap, and done alongside stage 2.
 
-- Serve a **curated OpenAPI document** at `GET /api/v1/openapi.json`, auth-gated,
-  containing the token-visible read routes only — not the mutating ones. That is
-  precisely what a ChatGPT action, a codegen client or a one-off script wants.
-  Keep `docs_url=None`: a schema for authenticated clients is not the same thing
-  as a public Swagger page.
-- A static, unauthenticated `/.well-known/llms.txt`: what this instance is, that
-  it is single-owner and private, where the schema and the MCP endpoint are, and
-  how to authenticate. It must contain no portfolio data and no instance
-  specifics beyond that — it is reachable by anyone who can reach the host.
-- An "automation and LLM access" section in `api.md`, since that document is the
-  discoverable contract by design.
+- A **curated OpenAPI document** at `GET /openapi.json` — not
+  `/api/v1/openapi.json` as first proposed here, and **unauthenticated**, not
+  auth-gated: it describes API *shape* only, never portfolio data, so there is
+  nothing in it worth gating. `FastAPI(openapi_url=None)` kills the framework's
+  own auto-generated schema (which, unfiltered, would have described every
+  session-only operator route too — the exact regression this guards
+  against), and an explicit route at the same conventional path serves the
+  curated replacement instead. `docs_url=None` stays: Swagger UI is still off.
+  `audr.api.openapi_curated.build_curated_openapi()` takes FastAPI's generated
+  schema and keeps only the GET operations on
+  `audr.api.auth._is_token_allowed_path` — the same predicate
+  `_require_read_auth` enforces on a live request, so the curated document and
+  live enforcement can't drift apart. `tests/unit/test_openapi_curated.py`
+  pins the exact path set and independently asserts no private-route prefix
+  (`/integrations`, `/settings`, `/jobs`, `/data`, `/exports`, `/auth`,
+  `/tokens`, bare `/wallets`, …) ever appears, including a regression test
+  that adds a brand-new route under a forbidden prefix to a throwaway app and
+  confirms the curator drops it unprompted.
+- A static, unauthenticated `GET /.well-known/llms.txt`
+  (`audr.api.wellknown`): what this instance is, that it is single-owner and
+  private, which routes to read, how to authenticate with a Bearer token, a
+  link to `/openapi.json`, and the staleness / `null`-is-not-zero warning.
+  Contains no portfolio data and no instance-specific detail — safe to be
+  reachable by anyone who can reach the host. Does not mention MCP, since
+  stage 3 isn't built.
+- Every `/api/v1/llm/*` field now carries a `Field(description=...)` in
+  `audr.api.llm` explaining what `null` means for that field and what moment
+  `as_of` refers to — consumed by the curated schema, checked by
+  `tests/unit/test_llm_api_schema_docs.py`.
+- An "automation and LLM access" section in `api.md` (§7 there), since that
+  document is the discoverable contract by design.
 
 ---
 

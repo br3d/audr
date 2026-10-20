@@ -2,7 +2,10 @@
 
 The API **as implemented**, at migration head `0016`. Swagger and Redoc are
 deliberately disabled (`docs_url=None` in `api/app.py`), so this document is the
-discoverable surface.
+discoverable surface for a human. §2 covers the machine-readable equivalent:
+a curated `GET /openapi.json` and `GET /.well-known/llms.txt`, both
+unauthenticated and both scoped to the read-only routes below — never the
+full, auto-generated schema FastAPI would otherwise publish at that path.
 
 The *normative* contract this was written against — including routes that were
 specified but never built — lives in the internal release-1 Spec Kit artefacts,
@@ -85,11 +88,14 @@ route and are documented inline.
 | GET | `/api/v1/setup/status` | `{setup_required}`. Exposes no operational secrets. |
 | POST | `/api/v1/setup` | Create the singleton owner. Password 12–128 characters. 201 with `csrf_token` and a session cookie; **409** if an owner already exists. |
 | POST | `/api/v1/auth/login` | Verify the password, set the `sid` cookie, return `csrf_token`. 429 with `Retry-After: 900` when throttled. |
+| GET | `/openapi.json` | Curated OpenAPI 3.1 document (AUD-633): only the GET routes an API token could also reach (§3 "API tokens"), with `description`s on every `/api/v1/llm/*` field explaining `null` and `as_of`. Built by `audr.api.openapi_curated.build_curated_openapi()` from the same allow-list predicate `_require_read_auth` enforces, so it cannot drift from live behaviour. Mutating and operator routes (`/integrations`, `/settings*`, `/jobs*`, `/data/*`, `/exports/*`, bare `/wallets`, …) never appear here — `tests/unit/test_openapi_curated.py` fails the build if one does. |
+| GET | `/.well-known/llms.txt` | Static plain-text pointer (AUD-633) for an LLM/automation client: what this instance is, which routes to read, how to send `Authorization: Bearer audr_pat_...`, a link to `/openapi.json`, and an explicit staleness / `null`-is-not-zero warning. No portfolio data. |
 
 > `GET /health/ready` is the only trustworthy external health signal, and you
 > must assert on the body. The SPA fallback serves `index.html` for anything
 > outside `/api` and `/health`, so a bare `GET /` returns 200 whenever the
 > process is up — including when the database behind it is unreachable.
+> `/openapi.json` is reserved against that same fallback (`api/spa.py`).
 
 ---
 
@@ -255,7 +261,10 @@ always `null`, never `0`. Both routes also answer `Accept: text/markdown`
 with a compact Markdown rendering of the same data, roughly half the token
 cost of the JSON. `GET /context` is capped (top-8 allocations, 5 headlines, 5
 alerts) to stay near the ~2k-token budget regardless of portfolio size; what
-a cap hides is always named in `caveats`, never silently dropped.
+a cap hides is always named in `caveats`, never silently dropped. Every field
+on both response schemas carries an OpenAPI `description` explaining what
+`null` means there and what moment `as_of` refers to — visible in the
+curated `GET /openapi.json` above (§2).
 
 ### Integrations
 
