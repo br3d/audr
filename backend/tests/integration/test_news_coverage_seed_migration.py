@@ -47,6 +47,18 @@ _EXPECTED_FEEDS = {
     # 0035 — ETH's daily sources; 0024's two publish about weekly (AUD-623).
     "project:ethresearch": ("project", {"ETH", "WETH"}),
     "project:ethereum-magicians": ("project", {"ETH", "WETH"}),
+    # 0038 — MATIC's replacement for `release:polygon-bor`, which was its only
+    # feed before the release tier was retired (AUD-640).
+    "project:polygon-forum-announcements": ("project", {"MATIC"}),
+}
+
+# Disabled along the way, so the rows above are "seeded", not "polled":
+# 0037 retired two developer-artefact feeds, 0038 the rest of the tier.
+_EXPECTED_DISABLED = {
+    "release:kyberswap-interface",
+    "release:ens-contracts",
+    "release:polygon-bor",
+    "release:ensjs",
 }
 
 _EXPECTED_SPACES = {("ENS", "ens.eth"), ("LDO", "lido-snapshot.eth"), ("SUSHI", "sushigov.eth")}
@@ -156,6 +168,11 @@ async def test_upgrade_seeds_news_coverage_idempotently() -> None:
             tracked_rows = (
                 await conn.execute(sa.text("SELECT asset_symbol FROM news_tracked_asset"))
             ).all()
+            disabled_keys = set(
+                (await conn.execute(sa.text("SELECT key FROM news_feed WHERE NOT enabled")))
+                .scalars()
+                .all()
+            )
         await scratch_engine.dispose()
     finally:
         os.environ["DATABASE_URL"] = old_db_url
@@ -170,6 +187,8 @@ async def test_upgrade_seeds_news_coverage_idempotently() -> None:
         assert {t for t, _s in matching} == {tier}
         assert {s for _t, s in matching} == symbols
     assert keys.count("project:lido-blog") == 1
+    assert _EXPECTED_DISABLED <= disabled_keys
+    assert not (disabled_keys & (set(_EXPECTED_FEEDS) - _EXPECTED_DISABLED))
 
     spaces = [(symbol, space) for symbol, space in space_rows]
     assert _EXPECTED_SPACES <= set(spaces)

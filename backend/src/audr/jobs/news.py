@@ -70,22 +70,17 @@ _GDELT_QUERY_DELAY_S = 1.0
 # (AUD-337) — do not invent a second number here.
 NEWS_RETENTION = timedelta(days=90)
 
-# Release-tier noise (AUD-640). The release tier earns its place when a feed
-# ships protocol-level software — a go-ethereum or bor release is a node
-# operator's news. Two shapes of entry on the same feeds are not news to a
-# portfolio owner and crowded the cards they came from:
+# Release-tier noise (AUD-640). Backstop only: 0038 disabled every
+# release-tier feed in the registry, because a `releases.atom` entry's title
+# *is* the version tag — `v2.10.3`, `@ensdomains/ensjs@5.2.4` — and a bare
+# tag is unreadable on a portfolio card whether or not the release itself
+# matters. Coverage moved to project feeds (docs/news-sources.md §9).
 #
-#   * monorepo package tags — `@ensdomains/ensjs@5.2.4`, four of them in a
-#     week, each a published npm artifact rather than an ENS announcement;
-#   * pre-release and test builds — `v2.10.2-beta5`,
-#     `v2.10.2-preconf (Testing Only)`, `v2.10.1-hotfix2` on `polygon-bor`,
-#     which shipped 8 of its 10 rows as betas and testing tags.
-#
-# Filtered at ingestion rather than in the API or the UI so the row never
-# occupies retention, an alert pass, or a card slot. A feed whose *every*
-# entry is one of these shapes is the registry's problem, not this filter's
-# — 0037 disabled `release:ensjs` and `release:kyberswap-interface` for
-# exactly that reason.
+# Kept in the ingestion path so that re-enabling a release feed, or seeding a
+# new one, cannot quietly reintroduce the two worst shapes: monorepo package
+# tags and pre-release/test builds (`v2.10.2-beta5`,
+# `v2.10.2-preconf (Testing Only)`). Filtered here rather than in the API or
+# the UI so a dropped row costs no retention, no alert pass and no card slot.
 _PACKAGE_TAG_RE = re.compile(r"@v?\d+\.\d+")
 _PRERELEASE_RE = re.compile(
     r"(?<![a-z])(?:alpha|beta|rc|nightly|canary|preconf|pre-?release|unstable)(?![a-z])"
