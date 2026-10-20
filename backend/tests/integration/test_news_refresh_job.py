@@ -802,3 +802,79 @@ async def test_feed_items_older_than_retention_are_not_inserted(
     assert calls == 1
     rows = await _news_rows(news_session, asset_id=asset_id)
     assert [r["external_id"] for r in rows] == ["new-1"]
+
+
+async def test_release_tier_noise_is_not_ingested(news_session: AsyncSession) -> None:
+    """AUD-640: package tags and pre-release builds never reach the table.
+
+    Filtered at ingestion, not in the API or the UI, so the row costs no
+    retention, no alert pass and no card slot.
+    """
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    await _insert_feed(
+        news_session,
+        key="release:ens-contracts",
+        tier="release",
+        symbols=["ENS"],
+        url="https://example.com/ens.atom",
+    )
+
+    updated = _RECENT.strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = f"""<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>pkg-1</id>
+    <title>@ensdomains/ensjs@5.2.4</title>
+    <link href="https://example.com/pkg" rel="alternate"/>
+    <updated>{updated}</updated>
+  </entry>
+  <entry>
+    <id>beta-1</id>
+    <title>v2.10.2-beta5</title>
+    <link href="https://example.com/beta" rel="alternate"/>
+    <updated>{updated}</updated>
+  </entry>
+  <entry>
+    <id>real-1</id>
+    <title>ENS Name Wrapper v1.0</title>
+    <link href="https://example.com/real" rel="alternate"/>
+    <updated>{updated}</updated>
+  </entry>
+</feed>
+""".encode()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens.atom").mock(
+            return_value=Response(200, content=body, headers={"etag": '"v1"'})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real-1"]
+
+
+async def test_non_release_tier_keeps_announcement_about_a_beta(
+    news_session: AsyncSession,
+) -> None:
+    """The filter is release-tier only — a blog post about a beta is news."""
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    await _insert_feed(
+        news_session,
+        key="project:ens-blog",
+        tier="project",
+        symbols=["ENS"],
+        url="https://example.com/ens-blog.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens-blog.xml").mock(
+            return_value=Response(
+                200,
+                content=_atom("blog-1", "Our beta is live", "https://example.com/blog"),
+                headers={"etag": '"v1"'},
+            )
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["blog-1"]

@@ -1,4 +1,5 @@
-"""Unit tests for asset-news keyword matching (AUD-308)."""
+"""Unit tests for asset-news keyword matching (AUD-308) and release-tier
+noise filtering (AUD-640)."""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ import uuid
 
 import pytest
 
-from audr.jobs.news import HeldAsset, match_assets
+from audr.jobs.news import HeldAsset, is_noisy_release, match_assets
 
 _WETH = HeldAsset(id=uuid.uuid4(), symbol="WETH", name="Wrapped Ether")
 _UNI = HeldAsset(id=uuid.uuid4(), symbol="UNI", name="Uniswap")
@@ -43,3 +44,41 @@ class TestMatchAssets:
         """An asset appears once even if both its symbol and name match."""
         matched = match_assets("Uniswap's UNI token gains", [_UNI])
         assert matched == [_UNI.id]
+
+
+@pytest.mark.unit
+class TestIsNoisyRelease:
+    """Titles are the real ones observed on staging (AUD-640)."""
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "@ensdomains/ensjs@5.2.4",
+            "@ensdomains/ensjs-abi@5.0.3",
+            "@ensdomains/ensjs-react@5.0.0",
+            "viem@2.21.0",
+            "v2.10.2-beta5",
+            "v2.10.2-preconf (Testing Only)",
+            "v1.18.0-rc1",
+            "Nightly build 2026-10-19",
+            "v3.0.0-alpha.2",
+            "v3.0.0-pre-release",
+        ],
+    )
+    def test_noise_is_filtered(self, title: str) -> None:
+        assert is_noisy_release(title) is True
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Protein Sludge Pack (v1.17.8)",
+            "v2.10.3",
+            "v2.10.1-hotfix2",
+            "KyberSwap Interface - v7.11.10",
+            "ENS Name Wrapper v1.0",
+            "Alphanet support lands",
+            "Dencun mainnet release",
+        ],
+    )
+    def test_real_releases_survive(self, title: str) -> None:
+        assert is_noisy_release(title) is False
