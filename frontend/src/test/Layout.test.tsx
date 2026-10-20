@@ -103,7 +103,13 @@ describe('Layout', () => {
     const itemsOf = (group: Element) =>
       Array.from(group.querySelectorAll('.nav-item')).map((b) => b.textContent)
     expect(itemsOf(groups[0])).toEqual(['Dashboard', 'Wallets', 'Events'])
-    expect(itemsOf(groups[1])).toEqual(['Schedules', 'Status', 'Connections', 'Account & Data'])
+    expect(itemsOf(groups[1])).toEqual([
+      'Schedules',
+      'Status',
+      'Connections',
+      'Account & Data',
+      'API Tokens',
+    ])
     expect(groups[1].classList.contains('nav-group-secondary')).toBe(true)
     expect(groups[0].classList.contains('nav-group-secondary')).toBe(false)
   })
