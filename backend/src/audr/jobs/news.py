@@ -70,6 +70,38 @@ _GDELT_QUERY_DELAY_S = 1.0
 # (AUD-337) — do not invent a second number here.
 NEWS_RETENTION = timedelta(days=90)
 
+# Release-tier noise (AUD-640). The release tier earns its place when a feed
+# ships protocol-level software — a go-ethereum or bor release is a node
+# operator's news. Two shapes of entry on the same feeds are not news to a
+# portfolio owner and crowded the cards they came from:
+#
+#   * monorepo package tags — `@ensdomains/ensjs@5.2.4`, four of them in a
+#     week, each a published npm artifact rather than an ENS announcement;
+#   * pre-release and test builds — `v2.10.2-beta5`,
+#     `v2.10.2-preconf (Testing Only)`, `v2.10.1-hotfix2` on `polygon-bor`,
+#     which shipped 8 of its 10 rows as betas and testing tags.
+#
+# Filtered at ingestion rather than in the API or the UI so the row never
+# occupies retention, an alert pass, or a card slot. A feed whose *every*
+# entry is one of these shapes is the registry's problem, not this filter's
+# — 0037 disabled `release:ensjs` and `release:kyberswap-interface` for
+# exactly that reason.
+_PACKAGE_TAG_RE = re.compile(r"@v?\d+\.\d+")
+_PRERELEASE_RE = re.compile(
+    r"(?<![a-z])(?:alpha|beta|rc|nightly|canary|preconf|pre-?release|unstable)(?![a-z])"
+    r"|testing only",
+    re.IGNORECASE,
+)
+
+
+def is_noisy_release(title: str) -> bool:
+    """True when a release-feed entry is a package tag or a pre-release build.
+
+    Applied to the `release` tier only — a project blog post titled "Beta is
+    live" is an announcement and must survive.
+    """
+    return bool(_PACKAGE_TAG_RE.search(title) or _PRERELEASE_RE.search(title))
+
 
 @dataclass(frozen=True)
 class HeldAsset:
@@ -259,6 +291,10 @@ async def _poll_feed(
             # what changed — one of these fed 1288 rows for a 16-row effective
             # gain (AUD-573 follow-up). _prune_old_news would delete every one
             # of these anyway; skip the round trip.
+            continue
+        if feed.tier == "release" and is_noisy_release(item.title):
+            # Package tags and pre-release builds (AUD-640) — see
+            # is_noisy_release.
             continue
         for asset_id in target_asset_ids(item):
             inserted += await _insert_news(

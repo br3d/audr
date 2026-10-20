@@ -55,7 +55,7 @@ tiers of feed, in descending signal quality:
 | Tier | Examples | Why it matters |
 |---|---|---|
 | Project-native | `blog.ethereum.org/en/feed.xml`, Mirror (`mirror.xyz/<addr>/feed/atom`), Medium (`medium.com/feed/@org`), protocol blogs | First-party announcements: upgrades, incidents, tokenomics |
-| Release/engineering | `github.com/<org>/<repo>/releases.atom`, `/commits/<branch>.atom`, `/tags.atom` | Ships before the press writes about it; zero noise |
+| Release/engineering | `github.com/<org>/<repo>/releases.atom`, `/commits/<branch>.atom`, `/tags.atom` | Ships before the press writes about it — but only for protocol software; see §9 "Release feeds are not automatically signal" |
 | Trade press | CoinDesk, Cointelegraph, Decrypt, The Defiant, Bitcoin Magazine | Breadth, context, market reaction |
 
 **Pros**
@@ -477,6 +477,48 @@ The diagnostic that settles this class in one pass, rather than re-deriving it:
 A NULL poll time with **zero** failures never means a bad URL or a missing
 `news_feed_symbol` mapping — both were fine here. It means nothing ever called
 it, so the answer is upstream in the job, not in the registry row.
+
+##### Release feeds are not automatically signal (0037, AUD-640)
+
+§2 called the release tier "zero noise". The live data disagreed: the founder
+opened AUD-640 on an ENS card showing four `@ensdomains/ensjs@5.2.x` rows in a
+week. Counted across the whole release tier at the time of the report:
+
+| Feed | Rows | What they were |
+|---|---|---|
+| `release:ensjs` | 14 | npm package tags across four packages of one monorepo (`ensjs`, `ensjs-abi`, `ensjs-react`, `ensjs-query-core`) |
+| `release:kyberswap-interface` | 11 | front-end app builds, `KyberSwap Interface - v7.11.x` |
+| `release:polygon-bor` | 10 | 8 of them `-beta`, `-preconf (Testing Only)`, `-hotfix` tags; 2 stable |
+| `release:go-ethereum` | 8 | 4 node releases, each on both ETH and WETH |
+
+Two distinct problems, and they need different fixes — this is the part worth
+carrying forward:
+
+1. **A feed that publishes developer artefacts and nothing else** is a registry
+   mistake, not a filtering problem. `ensjs` and `kyberswap-interface` have
+   never produced a single entry a portfolio owner would want, so a title
+   filter would only turn them into two permanently empty polls. 0037 sets
+   `enabled = false` on both. The bar for disabling rather than filtering: the
+   asset must not lose its last source. ENS keeps `project:ens-blog`,
+   `release:ens-contracts` and Snapshot `ens.eth`; KNC keeps
+   `project:kyberswap-blog`. Note the irony against 0032, which added `ensjs`
+   *because* ENS had zero rows — volume from the wrong repo is not coverage.
+2. **A good feed that also publishes pre-release tags** is a filtering problem.
+   `polygon-bor` ships genuine node releases interleaved with betas and
+   testing-only builds. `is_noisy_release()` in `jobs/news.py` drops, for the
+   `release` tier only, titles that carry a package tag (`…@5.2.4`) or a
+   pre-release marker (`alpha|beta|rc|nightly|canary|preconf|pre-release|
+   unstable|testing only`). A `-hotfix` release is kept: on a node client that
+   is news.
+
+Filtered at ingestion rather than in the API or the UI, so a dropped row costs
+no retention, no `news_analyze` pass and no card slot. The tier check is what
+keeps a *blog* post titled "Our beta is live" — an announcement — while
+dropping a *release* tagged `v2.10.2-beta5`.
+
+When adding a release feed, read the repo's last ten release titles first. A
+node, client or contracts repo is signal; an SDK, a front-end app or a
+monorepo that tags per package is not.
 
 ### Adding a new holding to news coverage
 
