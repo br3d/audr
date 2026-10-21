@@ -154,7 +154,7 @@ async def test_upgrade_seeds_one_aggregator_feed_per_held_symbol() -> None:
         (
             "aggregator:sushi",
             "aggregator",
-            f'https://news.google.com/rss/search?q=%22{quote("SushiSwap", safe="")}%22+crypto'
+            f"https://news.google.com/rss/search?q=%22{quote('SushiSwap', safe='')}%22+crypto"
             "&hl=en-US&gl=US&ceid=US:en",
             "SUSHI",
         )
@@ -287,7 +287,9 @@ async def test_downgrade_removes_aggregator_feeds_and_tier() -> None:
         scratch_engine = create_async_engine(scratch_url)
         async with scratch_engine.connect() as conn:
             remaining = (
-                await conn.execute(sa.text("SELECT count(*) FROM news_feed WHERE tier = 'aggregator'"))
+                await conn.execute(
+                    sa.text("SELECT count(*) FROM news_feed WHERE tier = 'aggregator'")
+                )
             ).scalar_one()
         await scratch_engine.dispose()
 

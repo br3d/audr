@@ -69,13 +69,52 @@ _ALL_TIERS = ("project", "release", "press", "aggregator")
 
 def _aggregator_url(name: str) -> str:
     encoded_name = quote(name, safe="")
-    return f'https://news.google.com/rss/search?q=%22{encoded_name}%22+crypto&hl=en-US&gl=US&ceid=US:en'
+    return f"https://news.google.com/rss/search?q=%22{encoded_name}%22+crypto&hl=en-US&gl=US&ceid=US:en"
+
+
+def _drop_tier_check() -> None:
+    """Drop the `news_feed` tier CHECK by its real name, whichever it is.
+
+    This constraint has two names in the wild and a literal is wrong on one of
+    them — the same trap 0034 documents (AUD-597):
+
+      created by 0024's `create_table`   ck_news_feed_ck_news_feed_tier
+      rewritten by `create_check_constraint("tier", ...)`  ck_news_feed_tier
+
+    0024 declared it as `sa.CheckConstraint(name="ck_news_feed_tier")` inside
+    `op.create_table`, where `ck_%(table_name)s_%(constraint_name)s` doubled
+    the spelling; that is the shape on the stand (verified at revision 0038).
+    But `upgrade()` below re-creates it from the bare name `tier`, so after
+    0039 the very same database carries the *undoubled* spelling. A
+    `downgrade()` that spelled either literal would therefore work on one side
+    of the migration and raise `UndefinedObject` on the other — and a
+    downgrade is wanted exactly when a deploy has migrated and then failed
+    (deploy-runbook.md, "A rollback must restore the schema").
+
+    So match on what both shapes have in common, the constraint definition.
+    """
+    bind = op.get_bind()
+    names = (
+        bind.execute(
+            sa.text(
+                "SELECT c.conname FROM pg_constraint c"
+                " JOIN pg_class t ON t.oid = c.conrelid"
+                " WHERE t.relname = 'news_feed' AND c.contype = 'c'"
+                "   AND pg_get_constraintdef(c.oid) LIKE '%tier%'"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for name in names:
+        # Identifier from pg_constraint, not from input; quoted all the same.
+        op.execute(f'ALTER TABLE news_feed DROP CONSTRAINT "{name}"')  # noqa: S608
 
 
 def upgrade() -> None:
     conn = op.get_bind()
 
-    op.drop_constraint("ck_news_feed_tier", "news_feed", type_="check")
+    _drop_tier_check()
     op.create_check_constraint(
         "tier",
         "news_feed",
@@ -116,10 +155,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     conn = op.get_bind()
-    conn.execute(sa.text("DELETE FROM asset_news WHERE source LIKE :prefix"), {"prefix": "aggregator:%"})
+    conn.execute(
+        sa.text("DELETE FROM asset_news WHERE source LIKE :prefix"), {"prefix": "aggregator:%"}
+    )
     conn.execute(sa.text("DELETE FROM news_feed WHERE tier = :tier"), {"tier": _TIER})
 
-    op.drop_constraint("ck_news_feed_tier", "news_feed", type_="check")
+    _drop_tier_check()
     op.create_check_constraint(
         "tier",
         "news_feed",
