@@ -336,6 +336,7 @@ deleted, not disabled.
 | 1 | AUD-512 | `news_feed` registry + conditional-GET RSS/Atom poller; GDELT breadth tier |
 | 2 | AUD-513 | Snapshot governance proposals for held protocols |
 | 3 | AUD-515 | Relevance allow-list, GDELT throttling, per-tier commits |
+| 4 | AUD-654 | `aggregator` tier — keyless Google News RSS, one feed per held symbol |
 
 Stage 3 was not in the original plan. It exists because the first staging run
 reproduced, in production data, exactly the keyword-ambiguity failure §3
@@ -363,7 +364,9 @@ typed against and silently misses a fresh database.
 
 - **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `url`,
   `enabled`). Carries `etag`/`last_modified` for conditional GETs and
-  `consecutive_failures`/`last_error` for health.
+  `consecutive_failures`/`last_error` for health. `tier` is one of
+  `project`, `release`, `press`, or `aggregator` (0039, AUD-654 — the
+  keyless Google News breadth tier, see below).
 - **`news_feed_symbol`** — many-to-many `(feed_id, asset_symbol)` mapping
   (AUD-571). A feed with one or more rows here is attributed exactly:
   every item is inserted once per held asset whose symbol is mapped to that
@@ -570,6 +573,56 @@ release tier. Membership is by feed key, not by tier: a general project blog
 posting "Our beta is live" is an announcement and must survive. If you seed
 another release-centric forum category, add its key to that set.
 
+##### Breadth tier: Google News RSS per symbol (0039, AUD-654)
+
+Coverage after stage 3 was still 9 of ~70 held symbols — everything not in
+`news_feed`'s project/release rows fell to GDELT, and GDELT 429s on its first
+anonymous request in practice (measured live 2026-10-21; Reddit follows after
+a couple of calls). `news.google.com/rss/search` is the one keyless lever
+that scales to the whole portfolio: HTTP 200 and up to 100 entries per
+symbol, no key, even for assets with no first-party feed at all (SUSHI's
+forum moved off Discourse and its Medium is empty; Pendle has none).
+
+The URL is templated, not researched per asset like `project`/`release`:
+
+    https://news.google.com/rss/search?q=%22<project name>%22+crypto&hl=en-US&gl=US&ceid=US:en
+
+`<project name>` is `asset.name` (URL-encoded), not the bare ticker — a
+three-letter symbol alone (`ENS`, `KNC`, `CRV`) is a common abbreviation and
+returns mostly noise. Migration 0039 seeds one `aggregator:<symbol>` feed per
+currently-held symbol (same "seed through a migration, not a hand-run INSERT"
+discipline as every other registry row) by reading `asset`/`balance_observation`
+directly — unlike `project`/`release`, nothing here needs per-asset research, so
+hand-curating 60-odd rows the way 0024/0031/0038 do would defeat the reason
+this tier exists. The same limitation as every other tier still applies: an
+asset acquired *after* 0039 ran gets no aggregator row until a later migration
+adds one.
+
+Ingestion is the existing feed path end to end — conditional GET, `parse_feed`
+(Google News RSS is plain RSS 2.0), dedup on `(asset_id, source, external_id)`,
+90-day retention. Two things are specific to this tier, both backstops in
+`jobs/news.py`:
+
+- **Relevance gate.** A quoted-phrase search is not attribution-exact the way
+  a project blog is. `_targets_for_feed` runs the press tier's `match_assets`
+  (symbol-or-name, word-boundary) against an aggregator feed's own item
+  titles instead of trusting `feed.symbols` alone — same mechanism, not a
+  second one, scoped to the one symbol the feed was built for.
+- **Evergreen/SEO noise.** The newest row Google News served for SUSHI on
+  2026-10-21 was "What Is SushiSwap and How Does It Work? — Binance" — a
+  perennial explainer, not news. `is_noisy_aggregator_title()` drops the
+  `What is / How does / How to / Price Prediction / (20xx)` family at
+  ingestion, the same backstop-constant shape as `is_noisy_release()`
+  (AUD-640). No data-driven noise registry exists yet — that is the next
+  step in the AUD-644 chain, not this one.
+
+`covered_asset_symbols()` now treats `aggregator` as coverage alongside
+`project`/`release`: a symbol with its own Google News feed does not also
+burn one of GDELT's `_GDELT_MAX_QUERIES_PER_RUN` slots. In practice this
+tier supersedes GDELT as the breadth-of-last-resort for almost every held
+symbol; GDELT still runs for whatever 0039 did not seed (an asset acquired
+after the migration, until its own aggregator row is added).
+
 ### Adding a new holding to news coverage
 
 In preference order, best signal first:
@@ -584,15 +637,23 @@ In preference order, best signal first:
    feed.
 2. Is it a governance token with a Snapshot space? Add the space to
    `snapshot_space`.
-3. Only if neither exists, and only if the ticker is distinctive enough to
-   survive a headline search, add it to `news_tracked_asset`. Check the ticker
-   against `asset.name` first — this is the step that produced the
-   `BITCOIN`/`HarryPotterObamaSonic10Inu` mess.
+3. Add an `aggregator:<symbol>` row to `news_feed` (tier `aggregator`, URL
+   templated from `asset.name` per the section above) and map the symbol in
+   `news_feed_symbol` — same manual step 0039 did in bulk for the held
+   portfolio at the time. No research needed, unlike step 1: the relevance
+   gate and the noise filter are generic, not per-feed.
+4. Only if none of the above is enough, and only if the ticker is
+   distinctive enough to survive a headline search, add it to
+   `news_tracked_asset`. Check the ticker against `asset.name` first — this
+   is the step that produced the `BITCOIN`/`HarryPotterObamaSonic10Inu`
+   mess.
 
 Short, generic or English-word tickers (`T`, `ETH`, `ASSET`, `COW`) belong in
-1 or 2, never in 3.
+1, 2 or 3, never in 4 — the GDELT/press allow-list has no relevance gate on
+the title, which is exactly what let `BITCOIN` absorb every Bitcoin
+headline.
 
-#### Why tier 3 stayed at four symbols (AUD-578)
+#### Why news_tracked_asset stayed at four symbols (AUD-578)
 
 After 0031/0032 the open question was whether to extend
 `news_tracked_asset` past its original WETH/UNI/AAVE/LINK to the rest of the
@@ -606,8 +667,9 @@ volume the extension was supposed to buy is not there:
   `_GDELT_MIN_SYMBOL_LEN`. The breadth tier of last resort is, in practice,
   empty.
 - **AAVE's lead is the forum feed, not the press.** Its 53 rows are 45 from
-  `project:aave-governance` plus 8 press. Attributing that gap to tier 3 was
-  the wrong read; the lesson generalises to `news_feed_symbol`, not here.
+  `project:aave-governance` plus 8 press. Attributing that gap to
+  `news_tracked_asset` was the wrong read; the lesson generalises to
+  `news_feed_symbol`, not here.
 - **Five of the seven candidates match nothing.** Across a 179-headline
   snapshot of the live press feeds (CoinDesk 308'd; Cointelegraph, Decrypt,
   Defiant, Bitcoin Magazine read), word-boundary matching on symbol-or-name
@@ -620,7 +682,7 @@ volume the extension was supposed to buy is not there:
   which the distinctive-name test does not catch. ETH would bury its own 16
   exactly-attributed rows in ecosystem noise within days.
 
-So the failure mode to screen for in step 3 is two-sided: a name that matches
+So the failure mode to screen for in step 4 is two-sided: a name that matches
 the wrong asset, *and* a name that correctly matches far more than the
 holding. Reopening this needs a measurement that beats the one above, not an
 argument that the names look distinctive.

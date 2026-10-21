@@ -1,14 +1,14 @@
-"""News-refresh job handler — keyless ingestion (AUD-512, AUD-513).
+"""News-refresh job handler — keyless ingestion (AUD-512, AUD-513, AUD-654).
 
 Polls the feed registry (`news_feed`: project blogs, GitHub release feeds,
-and portfolio-wide trade press — docs/news-sources.md §2) with conditional
-GET, normalises Atom/RSS into the existing `asset_news` shape, falls back to
-the keyless GDELT Doc API for held assets with no native feed, and polls
-Snapshot Hub governance proposals for assets explicitly mapped to a space in
-`snapshot_space` (docs/news-sources.md §3 — matched by mapping, not symbol
-keyword). No step here requires an API key — this retires the
-CoinGecko-only path that previously made `news_refresh` a no-op on a fresh
-install (AUD-503).
+portfolio-wide trade press, and a per-symbol Google News breadth tier —
+docs/news-sources.md §2/§9) with conditional GET, normalises Atom/RSS into
+the existing `asset_news` shape, falls back to the keyless GDELT Doc API for
+held assets with no native feed, and polls Snapshot Hub governance proposals
+for assets explicitly mapped to a space in `snapshot_space`
+(docs/news-sources.md §3 — matched by mapping, not symbol keyword). No step
+here requires an API key — this retires the CoinGecko-only path that
+previously made `news_refresh` a no-op on a fresh install (AUD-503).
 
 A broken feed (404, moved to an HTML error page, malformed XML), a GDELT
 outage, or a Snapshot request/GraphQL failure is recorded as a health
@@ -105,14 +105,36 @@ def is_noisy_release(title: str) -> bool:
     return bool(_PACKAGE_TAG_RE.search(title) or _PRERELEASE_RE.search(title))
 
 
+# Aggregator-tier noise (AUD-654). A quoted `"<project name>" crypto` Google
+# News search is not immune to evergreen explainers and SEO listicles — the
+# newest entry served for SUSHI on 2026-10-21 was "What Is SushiSwap and How
+# Does It Work? — Binance", not news. Backstop constant, same shape as
+# `is_noisy_release()`: no data-driven noise registry exists yet (tracked as
+# a follow-up in the AUD-644 chain).
+_EVERGREEN_EXPLAINER_RE = re.compile(
+    r"^(?:what\s+is|what'?s|how\s+(?:does|to)|beginner'?s\s+guide|complete\s+guide)\b"
+    r"|\bprice\s+predictions?\b"
+    r"|\(20\d{2}\)",
+    re.IGNORECASE,
+)
+
+
+def is_noisy_aggregator_title(title: str) -> bool:
+    """True when an aggregator-tier title is an evergreen explainer, not news."""
+    return bool(_EVERGREEN_EXPLAINER_RE.search(title))
+
+
 def should_drop_feed_item(*, tier: str, key: str, title: str) -> bool:
-    """True when a feed item is release noise rather than news.
+    """True when a feed item is noise rather than news.
 
     The `release` tier is checked in full; a project feed is checked only when
-    its subject matter is releases (`_RELEASE_SHAPED_PROJECT_FEEDS`).
+    its subject matter is releases (`_RELEASE_SHAPED_PROJECT_FEEDS`); the
+    `aggregator` tier is checked against the evergreen-explainer shape.
     """
     if tier == "release":
         return is_noisy_release(title)
+    if tier == "aggregator":
+        return is_noisy_aggregator_title(title)
     return key in _RELEASE_SHAPED_PROJECT_FEEDS and bool(_PRERELEASE_RE.search(title))
 
 
@@ -327,10 +349,17 @@ def _targets_for_feed(
     feed: NewsFeed, assets: list[HeldAsset], tracked_symbols: set[str]
 ) -> Callable[[FeedItem], list[uuid.UUID]]:
     if feed.symbols:
+        scoped_assets = [a for a in assets if a.symbol.upper() in feed.symbols]
+        if feed.tier == "aggregator":
+            # A quoted Google News search is not attribution-exact the way a
+            # project blog is (AUD-654) — gate on the same symbol-or-name
+            # match the press tier uses, reusing match_assets rather than a
+            # second mechanism, scoped to this feed's own asset(s) only.
+            return lambda item: match_assets(item.title, scoped_assets)
         # Dedup by asset id: each symbol in feed.symbols matches at most one
         # held asset, but guard against the item inserting twice on one
         # asset_id regardless (AUD-571).
-        asset_ids = list({a.id for a in assets if a.symbol.upper() in feed.symbols})
+        asset_ids = list({a.id for a in scoped_assets})
         return lambda _item: asset_ids
     # Portfolio-wide press feeds (AUD-515 P1) must resolve to the explicit
     # allow-list, not every held asset — held-ness alone let a meme token

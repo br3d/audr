@@ -54,6 +54,36 @@ def _atom(entry_id: str, title: str, url: str) -> bytes:
     return _ATOM.format(entry_id=entry_id, title=title, url=url, updated=updated).encode()
 
 
+# RSS 2.0 shape — what news.google.com/rss/search actually serves (AUD-654).
+_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Google News</title>
+    {items}
+  </channel>
+</rss>
+"""
+
+_RSS_ITEM = """
+    <item>
+      <title>{title}</title>
+      <link>{url}</link>
+      <guid>{guid}</guid>
+      <pubDate>{pub_date}</pubDate>
+    </item>
+"""
+
+
+def _rss(*entries: tuple[str, str, str]) -> bytes:
+    """Build an RSS 2.0 body from (guid, title, url) tuples, all dated recent."""
+    pub_date = _RECENT.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    items = "".join(
+        _RSS_ITEM.format(title=title, url=url, guid=guid, pub_date=pub_date)
+        for guid, title, url in entries
+    )
+    return _RSS.format(items=items).encode()
+
+
 # The allow-list seed from migration 0026 — held assets outside this set
 # must never get press/GDELT coverage regardless of symbol collisions.
 _SEED_TRACKED_SYMBOLS = ("WETH", "UNI", "AAVE", "LINK")
@@ -878,3 +908,188 @@ async def test_non_release_tier_keeps_announcement_about_a_beta(
 
     rows = await _news_rows(news_session, asset_id=asset_id)
     assert [r["external_id"] for r in rows] == ["blog-1"]
+
+
+# ---------------------------------------------------------------------------
+# Aggregator tier — keyless Google News breadth-tier (AUD-654)
+# ---------------------------------------------------------------------------
+
+
+async def test_aggregator_tier_inserts_matching_news(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://news.google.com/rss/search?q=%22SushiSwap%22+crypto",
+    )
+
+    body = _rss(("g1", "SushiSwap exploit drains $3M from liquidity pool", "https://example.com/1"))
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://news.google.com/rss/search?q=%22SushiSwap%22+crypto").mock(
+            return_value=Response(200, content=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["g1"]
+    assert rows[0]["source"] == "aggregator:sushi"
+
+
+async def test_aggregator_tier_drops_titles_that_do_not_mention_the_asset(
+    news_session: AsyncSession,
+) -> None:
+    """Relevance gate (AUD-654 req. 4): a quoted search is not attribution-exact
+    the way a project blog is, so a result that never says the symbol or the
+    project name must not land on the card.
+    """
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://example.com/aggregator-sushi.xml",
+    )
+
+    body = _rss(
+        ("on-topic", "SushiSwap ships v3 router upgrade", "https://example.com/1"),
+        ("off-topic", "Global markets rally on rate-cut hopes", "https://example.com/2"),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(
+            return_value=Response(200, content=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["on-topic"]
+
+
+async def test_aggregator_tier_filters_evergreen_explainer_noise(
+    news_session: AsyncSession,
+) -> None:
+    """The live SUSHI measurement from the issue: the newest Google News row
+    was an evergreen explainer, not news, and must never be ingested.
+    """
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://example.com/aggregator-sushi.xml",
+    )
+
+    body = _rss(
+        ("explainer", "What Is SushiSwap and How Does It Work? — Binance", "https://example.com/1"),
+        ("real", "SushiSwap exploit drains $3M from liquidity pool", "https://example.com/2"),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(
+            return_value=Response(200, content=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real"]
+
+
+async def test_aggregator_tier_dedupes_on_repoll(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    feed_id = await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://example.com/aggregator-sushi.xml",
+    )
+
+    body = _rss(("g1", "SushiSwap exploit drains $3M from liquidity pool", "https://example.com/1"))
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(
+            return_value=Response(200, content=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    await news_session.execute(
+        text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
+        {"id": str(feed_id)},
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(
+            return_value=Response(200, content=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert len(await _news_rows(news_session, asset_id=asset_id)) == 1
+
+
+async def test_aggregator_tier_failure_does_not_break_other_feeds(
+    news_session: AsyncSession,
+) -> None:
+    """A 429 or an HTML error page from Google News must degrade to skip-and-log,
+    same as any other feed (AUD-654 req. 7) — it must not break the run.
+    """
+    sushi_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    broken_id = await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://example.com/aggregator-sushi.xml",
+    )
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://example.com/weth.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(return_value=Response(429))
+        mock.get("https://example.com/weth.xml").mock(
+            return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert await _news_rows(news_session, asset_id=sushi_id) == []
+    assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
+    health = (
+        await news_session.execute(
+            text("SELECT consecutive_failures FROM news_feed WHERE id = :id"),
+            {"id": str(broken_id)},
+        )
+    ).one()
+    assert health[0] == 1
+
+
+async def test_gdelt_not_queried_for_asset_with_aggregator_feed(
+    news_session: AsyncSession,
+) -> None:
+    """AUD-654 req. 6: an aggregator feed is coverage too, so it must not also
+    burn one of GDELT's scarce per-run query slots for the same symbol.
+    """
+    await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _track_asset(news_session, symbol="SUSHI")
+    await _insert_feed(
+        news_session,
+        key="aggregator:sushi",
+        tier="aggregator",
+        symbols=["SUSHI"],
+        url="https://example.com/aggregator-sushi.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-sushi.xml").mock(
+            return_value=Response(200, content=_rss())
+        )
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert not gdelt_route.called

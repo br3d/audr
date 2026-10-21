@@ -1,5 +1,5 @@
-"""Unit tests for asset-news keyword matching (AUD-308) and release-tier
-noise filtering (AUD-640)."""
+"""Unit tests for asset-news keyword matching (AUD-308), release-tier
+noise filtering (AUD-640), and aggregator-tier noise filtering (AUD-654)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,13 @@ import uuid
 
 import pytest
 
-from audr.jobs.news import HeldAsset, is_noisy_release, match_assets, should_drop_feed_item
+from audr.jobs.news import (
+    HeldAsset,
+    is_noisy_aggregator_title,
+    is_noisy_release,
+    match_assets,
+    should_drop_feed_item,
+)
 
 _WETH = HeldAsset(id=uuid.uuid4(), symbol="WETH", name="Wrapped Ether")
 _UNI = HeldAsset(id=uuid.uuid4(), symbol="UNI", name="Uniswap")
@@ -136,3 +142,55 @@ class TestShouldDropFeedItem:
             )
             is False
         )
+
+    def test_aggregator_tier_drops_evergreen_explainers(self) -> None:
+        assert (
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="What Is SushiSwap and How Does It Work? — Binance",
+            )
+            is True
+        )
+
+    def test_aggregator_tier_keeps_real_news(self) -> None:
+        assert (
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="SushiSwap exploit drains $3M from liquidity pool",
+            )
+            is False
+        )
+
+
+@pytest.mark.unit
+class TestIsNoisyAggregatorTitle:
+    """Titles are the real one observed live for SUSHI on 2026-10-21, plus
+    the other shapes the issue calls out (AUD-654)."""
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "What Is SushiSwap and How Does It Work? — Binance",
+            "What is Ethereum? A Beginner's Guide",
+            "How Does Uniswap Work? A Complete Guide",
+            "How to Buy SushiSwap (SUSHI) in 2026",
+            "SushiSwap (SUSHI) Price Prediction 2026-2030",
+            "Top Altcoins to Watch (2026)",
+        ],
+    )
+    def test_noise_is_filtered(self, title: str) -> None:
+        assert is_noisy_aggregator_title(title) is True
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "SushiSwap exploit drains $3M from liquidity pool",
+            "SushiSwap ships v3 router upgrade",
+            "Binance lists new SushiSwap trading pair",
+            "Ethereum Name Service expands multi-chain resolution",
+        ],
+    )
+    def test_real_news_survives(self, title: str) -> None:
+        assert is_noisy_aggregator_title(title) is False
