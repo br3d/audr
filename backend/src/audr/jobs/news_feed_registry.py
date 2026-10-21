@@ -74,10 +74,12 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
 
 
 async def covered_asset_symbols(session: AsyncSession) -> set[str]:
-    """Return asset symbols with an enabled project/release feed.
+    """Return asset symbols with an enabled project/release/aggregator feed.
 
     Used to decide which held assets fall back to the GDELT breadth tier —
-    an asset with its own native feed does not need a general-news query.
+    an asset with its own native feed, or a per-symbol aggregator feed
+    (AUD-654), does not need a GDELT query too; GDELT's scarce query budget
+    (`_GDELT_MAX_QUERIES_PER_RUN`) stays for symbols neither tier reaches.
     """
     result = await session.execute(
         sa.text(
@@ -85,7 +87,7 @@ async def covered_asset_symbols(session: AsyncSession) -> set[str]:
             SELECT DISTINCT nfs.asset_symbol
             FROM news_feed_symbol nfs
             JOIN news_feed nf ON nf.id = nfs.feed_id
-            WHERE nf.enabled AND nf.tier IN ('project', 'release')
+            WHERE nf.enabled AND nf.tier IN ('project', 'release', 'aggregator')
             """
         )
     )

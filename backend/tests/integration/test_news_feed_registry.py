@@ -186,3 +186,11 @@ async def test_covered_asset_symbols_includes_project_and_release(
 async def test_covered_asset_symbols_excludes_disabled(db_session: AsyncSession) -> None:
     await _insert_feed(db_session, key="p", tier="project", symbols=["WETH"], enabled=False)
     assert await covered_asset_symbols(db_session) == set()
+
+
+async def test_covered_asset_symbols_includes_aggregator(db_session: AsyncSession) -> None:
+    """AUD-654: a per-symbol Google News feed is coverage too, so the GDELT
+    breadth tier skips a symbol the aggregator tier already reaches.
+    """
+    await _insert_feed(db_session, key="aggregator:sushi", tier="aggregator", symbols=["SUSHI"])
+    assert await covered_asset_symbols(db_session) == {"SUSHI"}
