@@ -75,3 +75,58 @@ for recovery. It is the one file still outside the mechanism above — it is wha
 *performs* the baking, so it cannot bootstrap itself out of the commit it is
 reading. `scripts/sync-ci-overlay.sh` does not manage it either: edit it here,
 then copy it to `~/bin/audr-github-mirror.sh` on the host by hand.
+
+## "Shipped" means deployed, not mirrored (AUD-706)
+
+The mirror keeps three state files under `~/.config/audr-mirror/`, and the point
+of having three is that the first one is not evidence of a deploy:
+
+| file | written by | means |
+|---|---|---|
+| `last-main-sha` | mirror, at push time | the GitHub `main` it last mirrored |
+| `mirrored-gitea-sha` | mirror, at push time | the Gitea `main` commit it pushed for that sha |
+| `mirrored-at` | mirror, at push time | when, so a pipeline still running is not read as failed |
+| `deployed-gitea-sha` | `deploy.yaml`, on success, `main` only | the Gitea `main` commit that actually deployed |
+
+`deployed == mirrored` is the only state that means main is live. Until AUD-706
+the mirror had `last-main-sha` alone and wrote it at push time, so a commit whose
+tests went red — `build-deploy` correctly `skipped` by the gate — was recorded as
+shipped and never retried. The stand kept serving its previous image: healthy,
+`/health/ready` green, and not `main`. AUD-701 is the worked example, and it
+needed a human to notice and clear the file by hand.
+
+When the two disagree the mirror re-mirrors the commit to re-run the pipeline,
+`AUDR_MIRROR_DEPLOY_RETRIES` times (default 1), and then raises one board alert
+under `--key main-undeployed` and goes quiet.
+
+They disagree for a perfectly healthy reason most of the time: the timer ticks
+every 15 minutes and the pipeline has measured 3 to 29 minutes on this runner,
+so a tick routinely lands while the deploy is still running. A commit is only
+treated as undeployed once `AUDR_MIRROR_DEPLOY_GRACE` (default 3600s) has
+elapsed since it was mirrored, and each retry restarts that clock. Without the
+grace period the mirror would re-mirror a commit that was busy succeeding —
+moving Gitea main, orphaning the in-flight run, and alerting on the next tick
+about a deploy that worked.
+
+The alert closes itself on the first tick that sees main live again. A retry
+mints a *new* Gitea commit — the attempt number is in the commit message
+precisely so the sha differs, because an identical commit pushes as a no-op and
+Gitea would fire no run at all.
+
+Two deliberate properties:
+
+* It compares **Gitea** shas, not GitHub ones. The deploy job already has that
+  value in `GITHUB_SHA`, so the handshake costs it one `printf` and no parsing.
+  It also means a `v*` tag or a dispatch build registers as what it is: a
+  dispatch deploy of a scratch branch writes a sha matching no mirrored main, so
+  it can never read as "main shipped" — which is exactly how AUD-701 ran
+  unnoticed, with the stand on a scratch-branch image from run #471.
+* A host upgraded from before AUD-706 has no `mirrored-gitea-sha`, so there is
+  nothing to compare. The mirror logs that the deploy state is unknown and does
+  nothing — no false alert, no pointless rebuild. The next real `main` change
+  records it and the mechanism engages from then on. A half-written pair (sha
+  but no `mirrored-at`, from a host upgraded between the two versions) reads the
+  same way, and sync mode stamps it so that self-heals on the first tick.
+
+`backend/tests/unit/test_mirror_deploy_state.py` drives the real script through
+all of this against scratch repositories standing in for GitHub and Gitea.
