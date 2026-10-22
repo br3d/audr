@@ -110,11 +110,27 @@ export default function AlertsBell() {
                     >
                       {a.category.replace('_', ' ')}
                     </span>
-                    <span className="alerts-bell-item-summary">{a.summary}</span>
+                    <span className="alerts-bell-item-summary">
+                      {a.asset_symbol && (
+                        <span className="alerts-bell-item-symbol">{a.asset_symbol}</span>
+                      )}
+                      {a.article_title ?? a.summary}
+                    </span>
                     <span className="alerts-bell-item-meta text-secondary">
                       {formatCreatedAt(a.created_at)}
+                      {a.article_title && ` · ${a.summary}`}
                     </span>
                   </button>
+                  {a.article_url && (
+                    <a
+                      className="alerts-bell-item-link"
+                      href={a.article_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Read article
+                    </a>
+                  )}
                 </li>
               ))}
             </ul>

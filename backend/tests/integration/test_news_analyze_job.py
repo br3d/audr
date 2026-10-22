@@ -192,6 +192,46 @@ async def test_different_assets_both_alert(analyze_session: AsyncSession) -> Non
     assert {row[0] for row in rows} == {asset_a, asset_b}
 
 
+async def test_one_story_matched_to_two_assets_alerts_once(
+    analyze_session: AsyncSession,
+) -> None:
+    """The headline the owner reads is the same — so it must alert once.
+
+    The `(asset_id, category)` cooldown cannot catch this: a story naming two
+    held tokens matches two assets, clears two separate cooldowns, and used to
+    land as two alerts the owner read as the same news repeated (AUD-683).
+    """
+    asset_a = await _insert_asset(analyze_session, symbol="WETH")
+    asset_b = await _insert_asset(analyze_session, symbol="UNI")
+    title = "Bridge exploited for $40M, WETH and UNI drained"
+    await _insert_article(analyze_session, asset_id=asset_a, title=title)
+    await _insert_article(analyze_session, asset_id=asset_b, title=title)
+    await analyze_session.commit()
+
+    await handle_news_analyze(analyze_session, uuid.uuid4())
+
+    assert len(await _alert_rows(analyze_session)) == 1
+
+
+async def test_the_same_story_under_two_publishers_alerts_once(
+    analyze_session: AsyncSession,
+) -> None:
+    """Feeds append " - Publisher", so one wire story arrives spelled N ways."""
+    asset_a = await _insert_asset(analyze_session, symbol="WETH")
+    asset_b = await _insert_asset(analyze_session, symbol="UNI")
+    await _insert_article(
+        analyze_session, asset_id=asset_a, title="Bridge exploited for $40M - CoinDesk"
+    )
+    await _insert_article(
+        analyze_session, asset_id=asset_b, title="Bridge exploited for $40M - Decrypt"
+    )
+    await analyze_session.commit()
+
+    await handle_news_analyze(analyze_session, uuid.uuid4())
+
+    assert len(await _alert_rows(analyze_session)) == 1
+
+
 async def test_already_analyzed_article_is_skipped(analyze_session: AsyncSession) -> None:
     asset_id = await _insert_asset(analyze_session)
     article_id = await _insert_article(

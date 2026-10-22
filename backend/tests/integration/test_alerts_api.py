@@ -121,6 +121,27 @@ async def test_lists_unread_before_read(
     assert body["alerts"][0]["read_at"] is None
 
 
+async def test_the_list_says_which_asset_and_headline_each_alert_is_about(
+    seeded_client, db_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Two alerts about different stories must not read as one repeated alert.
+
+    `summary` is the classifier's reason, so it repeats verbatim across
+    unrelated headlines — the symbol and the headline are the only fields
+    that tell two alerts apart in the bell (AUD-683).
+    """
+    client, _csrf = seeded_client
+    asset_id = await _seed_asset(db_session_factory, symbol="WETH")
+    await _seed_alert(db_session_factory, asset_id=asset_id)
+
+    r = await client.get("/api/v1/alerts")
+    assert r.status_code == 200
+    alert = r.json()["alerts"][0]
+    assert alert["asset_symbol"] == "WETH"
+    assert alert["article_title"] == "Protocol hacked"
+    assert alert["article_url"] == "https://example.com"
+
+
 async def test_the_delivery_road_is_visible_in_the_list(
     seeded_client, db_session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

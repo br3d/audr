@@ -769,6 +769,16 @@ export interface AlertItem {
    * the road was recorded — `dispatched_at` separates those two.
    */
   dispatched_via: 'board' | 'telegram' | 'board+telegram' | 'spool' | null
+  /** Ticker of the asset the alert fired for — null if the asset is gone. */
+  asset_symbol: string | null
+  /**
+   * Headline the alert was raised from, and its link — null only if the
+   * article row went missing. `summary` holds just the classifier's reason,
+   * which repeats verbatim across unrelated stories, so these two are what
+   * tell one alert apart from the next (AUD-683).
+   */
+  article_title: string | null
+  article_url: string | null
 }
 
 export interface AlertsResponse {

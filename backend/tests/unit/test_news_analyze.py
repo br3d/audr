@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from audr.jobs.news_analyze import classify_heuristic
+from audr.jobs.news_analyze import _story_key, classify_heuristic
 
 pytestmark = pytest.mark.unit
 
@@ -60,3 +60,30 @@ class TestClassifyHeuristic:
     def test_reason_names_the_matched_keyword(self) -> None:
         result = classify_heuristic("Bridge exploited for millions")
         assert "exploited" in result.reason
+
+
+class TestStoryKey:
+    """Story-level dedup (AUD-683): one wire story reaches us spelled several
+    ways — per-asset copies and per-publisher suffixes — and must collapse to
+    one key, without collapsing two genuinely different headlines."""
+
+    def test_publisher_suffix_is_stripped(self) -> None:
+        assert _story_key("Bridge exploited for $40M - CoinDesk") == _story_key(
+            "Bridge exploited for $40M - Decrypt"
+        )
+
+    def test_punctuation_and_case_do_not_split_a_story(self) -> None:
+        assert _story_key("Bridge Exploited, $40M Drained") == _story_key(
+            "bridge exploited $40m drained"
+        )
+
+    def test_different_headlines_keep_different_keys(self) -> None:
+        assert _story_key("Bridge exploited for $40M - CoinDesk") != _story_key(
+            "Exchange halts trading after outage - CoinDesk"
+        )
+
+    def test_a_long_tail_is_not_mistaken_for_a_publisher(self) -> None:
+        """The suffix rule only eats a short trailing segment — a dash inside a
+        headline must not swallow half of it."""
+        key = _story_key("Protocol hacked - and the team says the treasury is still fully solvent")
+        assert "treasury" in key
