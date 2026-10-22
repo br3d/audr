@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { login, ApiError } from '../api/client'
+import { useMutation } from '@tanstack/react-query'
+import { login } from '../api/client'
+import { errorMessage } from '../api/errorMessage'
 import { BrandLockup } from '../components/Logo'
 
 interface Props {
@@ -9,26 +11,21 @@ interface Props {
 
 export default function SignInPage({ onSignIn }: Props) {
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  const signInMutation = useMutation({
+    mutationFn: () => login(password),
+    onSuccess: onSignIn,
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setError(null)
-    setSubmitting(true)
-    try {
-      await login(password)
-      onSignIn()
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message)
-      } else {
-        setError('An unexpected error occurred. Please try again.')
-      }
-    } finally {
-      setSubmitting(false)
-    }
+    signInMutation.mutate()
   }
+
+  const submitting = signInMutation.isPending
+  const error = signInMutation.error
+    ? errorMessage(signInMutation.error, 'An unexpected error occurred. Please try again.')
+    : null
 
   return (
     <div className="auth-screen">

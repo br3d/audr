@@ -1,11 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import {
-  fetchEvents,
-  fetchAllowances,
-  fetchWallets,
-  ApiError,
-} from '../api/client'
+import { fetchEvents, fetchAllowances, fetchWallets } from '../api/client'
 import type { OnchainEventType, Allowance, WalletItem } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 import { boolField, enumField, intField, stringField, useHashQueryState } from '../routing'
 import EventRow from '../components/EventRow'
 import {
@@ -155,14 +152,14 @@ export default function EventsPage() {
   ] = useHashQueryState('events', EVENTS_SCHEMA)
 
   const walletsQuery = useQuery({
-    queryKey: ['wallets-for-events-filter'],
+    queryKey: queryKeys.walletsForEventsFilter(),
     queryFn: () => fetchWallets(),
   })
   const wallets = walletsQuery.data?.items ?? []
   const labelFor = walletLabelMap(wallets)
 
   const eventsQuery = useQuery({
-    queryKey: ['events', walletFilter, eventTypeFilter, eventsOffset],
+    queryKey: queryKeys.events({ walletId: walletFilter, eventType: eventTypeFilter, offset: eventsOffset }),
     queryFn: () =>
       fetchEvents({
         walletId: walletFilter || undefined,
@@ -173,7 +170,7 @@ export default function EventsPage() {
   })
 
   const allowancesQuery = useQuery({
-    queryKey: ['allowances', walletFilter, unlimitedOnly, allowancesOffset],
+    queryKey: queryKeys.allowances({ walletId: walletFilter, unlimitedOnly, offset: allowancesOffset }),
     queryFn: () =>
       fetchAllowances({
         walletId: walletFilter || undefined,
@@ -260,9 +257,7 @@ export default function EventsPage() {
         {eventsQuery.error && (
           <p role="alert" className="alert alert-danger">
             Failed to load events.{' '}
-            {eventsQuery.error instanceof ApiError
-              ? eventsQuery.error.message
-              : 'Please try again.'}
+            {errorMessage(eventsQuery.error, 'Please try again.')}
           </p>
         )}
 
@@ -326,9 +321,7 @@ export default function EventsPage() {
         {allowancesQuery.error && (
           <p role="alert" className="alert alert-danger">
             Failed to load allowances.{' '}
-            {allowancesQuery.error instanceof ApiError
-              ? allowancesQuery.error.message
-              : 'Please try again.'}
+            {errorMessage(allowancesQuery.error, 'Please try again.')}
           </p>
         )}
 
