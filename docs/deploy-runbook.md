@@ -70,11 +70,18 @@ So the mirror now compares what it mirrored against what actually deployed:
 | file under `~/.config/audr-mirror/` | written by |
 |---|---|
 | `mirrored-gitea-sha` | the mirror, when it pushes Gitea `main` |
+| `mirrored-at` | the mirror, same moment — the grace period runs from here |
 | `deployed-gitea-sha` | `deploy.yaml`'s success path, for `main` pushes only |
 
-If they disagree, the next tick re-mirrors the commit (a fresh Gitea commit, so
-the pipeline re-runs) up to `AUDR_MIRROR_DEPLOY_RETRIES` times — default 1 —
-and then raises **one** board alert under `--key main-undeployed` and stops. It
+If they disagree for longer than `AUDR_MIRROR_DEPLOY_GRACE` (default 3600s),
+the next tick re-mirrors the commit (a fresh Gitea commit, so the pipeline
+re-runs) up to `AUDR_MIRROR_DEPLOY_RETRIES` times — default 1 — and then raises
+**one** board alert under `--key main-undeployed` and stops.
+
+The grace period is not slack: ticks are every 15 minutes and this pipeline has
+measured 3 to 29 minutes, so a tick lands mid-deploy as a matter of course. The
+decision for that state is `in-flight` and it does nothing. Each retry restarts
+the clock, so an attempt always gets a full pipeline's worth of time. It
 does not keep rebuilding a genuinely red commit every 15 minutes, and it does
 not keep alerting. The alert closes itself on the first tick that sees main
 live again.
@@ -85,7 +92,7 @@ To check by hand which state the host is in:
     ssh "$AUDR_DEPLOY_HOST" '~/bin/audr-github-mirror.sh --decide'   # read-only; prints the decision
 
 `--decide` touches nothing: no fetch, no push, no state write. It prints one of
-`rebuild`, `deployed`, `retry`, `alert`, `waiting` or `bootstrap`.
+`rebuild`, `deployed`, `in-flight`, `retry`, `alert`, `waiting` or `bootstrap`.
 
 `bootstrap` means the host has no `mirrored-gitea-sha` yet — the state predates
 this mechanism, so the deploy state of the current commit is genuinely unknown

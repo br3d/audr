@@ -27,6 +27,8 @@
 #                        idempotency marker; written at push time, unchanged
 #                        semantics, so nothing downstream has to be re-taught)
 #   mirrored-gitea-sha   the Gitea main commit it pushed for that GitHub sha
+#   mirrored-at          when it pushed that commit, so a pipeline that is
+#                        merely still running is not mistaken for a failure
 #   deployed-gitea-sha   the Gitea main commit the deploy workflow last
 #                        *successfully* deployed — written by deploy.yaml on its
 #                        success path, on this host, as this user
@@ -57,9 +59,33 @@ GH_URL="${AUDR_MIRROR_GH_URL:-git@github.com:br3d/audr.git}"
 OVERLAY="$CFG/overlay"
 STATE="$CFG/last-main-sha"
 MIRRORED="$CFG/mirrored-gitea-sha"
+MIRRORED_AT="$CFG/mirrored-at"
 DEPLOYED="$CFG/deployed-gitea-sha"
 UNDEPLOYED="$CFG/undeployed-state"
 ALERT_KEY=main-undeployed
+
+# How long a freshly mirrored commit is allowed to be undeployed before that
+# counts as a failure rather than as a pipeline still running.
+#
+# This is load-bearing, not a safety margin. The timer ticks every 15 minutes
+# and the pipeline (three test jobs, then build + deploy, all serialized by one
+# `concurrency` group) has measured 3 to 29 minutes on this runner — so without
+# a grace period a tick lands mid-deploy, sees mirrored != deployed, and
+# "retries" a commit that was busy succeeding. Worse than wasteful: the retry
+# re-mirrors, Gitea main moves, and the in-flight run then records a sha that no
+# longer matches, so the next tick alerts about a deploy that worked.
+#
+# 60 minutes is comfortably past the worst observed run plus queueing. The cost
+# of erring high is that a genuinely failed deploy waits an hour for its retry,
+# which is cheap: nothing is broken, main is simply not live yet, and the
+# alternative — crying wolf on every slow deploy — is how an alert channel gets
+# muted. That is the failure mode AUD-444 exists to avoid.
+#
+# The obvious alternative, asking Gitea for the run's conclusion, is rejected
+# for the same reason deploy.yaml's header rejects it for the gate: it needs a
+# credential this script has no business using for reads, and it trades a clock
+# for an API dependency on the box the mirror exists to feed.
+GRACE="${AUDR_MIRROR_DEPLOY_GRACE:-3600}"
 
 # One retry by default. The first rebuild covers the large majority of the
 # cases this exists for — an infrastructure-flavoured failure (a killed test
@@ -100,13 +126,17 @@ notify() {
 #
 #   rebuild    GitHub main moved; mirror it (the ordinary path)
 #   deployed   mirrored commit is live; nothing to do
+#   in-flight  mirrored recently and not deployed yet; the pipeline is
+#              presumed still running (see $GRACE)
 #   retry      mirrored commit never deployed; rebuild to re-fire CI
 #   alert      retries exhausted; raise the board alert
 #   waiting    retries exhausted and already alerted; stay quiet
 #   bootstrap  no mirrored-gitea-sha on record (pre-AUD-706 state file)
 # ---------------------------------------------------------------------------
 decide() {
-  local gh_main="$1" last mirrored deployed key tries alerted
+  local gh_main="$1" last mirrored mirrored_at deployed key tries alerted now
+  # Overridable so the grace-period branches are testable without sleeping.
+  now="${AUDR_MIRROR_NOW:-$(date -u +%s)}"
 
   last="$(read_state "$STATE")"
   [ -n "$last" ] || last=none
@@ -130,6 +160,25 @@ decide() {
   deployed="$(read_state "$DEPLOYED")"
   if [ "$deployed" = "$mirrored" ]; then
     echo deployed
+    return 0
+  fi
+
+  # Undeployed, but possibly only because the pipeline is still running. See
+  # $GRACE above: ticks are more frequent than deploys are long, so this branch
+  # is the common case for a perfectly healthy deploy, not an edge case.
+  mirrored_at="$(read_state "$MIRRORED_AT")"
+  if [ -z "$mirrored_at" ]; then
+    # A sha with no timestamp beside it. The two are written together, so this
+    # is only a partially-upgraded host — and the safe reading is the same one
+    # as a missing sha: the deploy state is unknown. Guessing "long ago" would
+    # retry a commit that may be mid-deploy, which is the precise thing $GRACE
+    # exists to prevent. Sync mode stamps it (see below) so this self-heals on
+    # the first tick instead of waiting for the next merge.
+    echo bootstrap
+    return 0
+  fi
+  if [ "$((now - mirrored_at))" -lt "$GRACE" ]; then
+    echo in-flight
     return 0
   fi
 
@@ -227,6 +276,9 @@ re-run the pipeline against the identical tree. See AUD-706."
   # where main looks mirrored with no Gitea sha on record, which is the
   # bootstrap state and would silently skip a tick's worth of checking.
   echo "$new" > "$MIRRORED"
+  # The grace period is measured from here, and a retry restarts it — each
+  # attempt gets a full pipeline's worth of time to succeed.
+  date -u +%s > "$MIRRORED_AT"
   echo "$gh_main" > "$STATE"
   log "Gitea main -> $new"
 }
@@ -281,6 +333,18 @@ fi
 
 GH_MAIN="$(git rev-parse refs/heads/main)"
 LAST="$(read_state "$STATE")"; [ -n "$LAST" ] || LAST=none
+
+# Self-heal a half-written state pair before deciding on it. `mirrored-at` was
+# added after `mirrored-gitea-sha`, so a host upgraded between the two versions
+# has the sha and no stamp. Starting its grace period now is the conservative
+# choice — it grants a full pipeline's worth of time to a deploy that may well
+# be in flight right now — and it means the check engages on this tick rather
+# than sitting in `bootstrap` until the next merge.
+if [ -n "$(read_state "$MIRRORED")" ] && [ -z "$(read_state "$MIRRORED_AT")" ]; then
+  date -u +%s > "$MIRRORED_AT"
+  log "mirrored-gitea-sha had no mirrored-at beside it; starting the grace period from now"
+fi
+
 action="$(decide "$GH_MAIN")"
 
 case "$action" in
@@ -347,6 +411,10 @@ case "$action" in
       "The mirror will NOT rebuild this commit again — the retry budget is spent," \
       "so nothing is looping and no further alert will be raised for it.")"
     echo "$GH_MAIN $MAX_RETRIES 1" > "$UNDEPLOYED"
+    ;;
+
+  in-flight)
+    log "GitHub main $GH_MAIN mirrored as $(read_state "$MIRRORED") $(( ($(date -u +%s) - $(read_state "$MIRRORED_AT")) / 60 ))m ago and not deployed yet; inside the ${GRACE}s grace period — the pipeline is presumed still running"
     ;;
 
   waiting)
