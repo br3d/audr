@@ -2,10 +2,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import SetupPage from '../src/pages/SetupPage'
 
 // Suppress React act() warnings for intentionally sync renders
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
+
+function renderSetupPage(container: HTMLDivElement, onSetupComplete: () => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const root = createRoot(container)
+  flushSync(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: qc },
+        createElement(SetupPage, { onSetupComplete }),
+      ),
+    )
+  })
+  return root
+}
 
 describe('SetupPage', () => {
   let container: HTMLDivElement
@@ -20,27 +36,18 @@ describe('SetupPage', () => {
   })
 
   it('renders a form', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SetupPage, { onSetupComplete: () => {} }))
-    })
+    renderSetupPage(container, () => {})
     expect(container.querySelector('form')).not.toBeNull()
   })
 
   it('renders a password input and confirm input', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SetupPage, { onSetupComplete: () => {} }))
-    })
+    renderSetupPage(container, () => {})
     expect(container.querySelector('#password')).not.toBeNull()
     expect(container.querySelector('#confirm')).not.toBeNull()
   })
 
   it('renders a submit button labelled "Set up"', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SetupPage, { onSetupComplete: () => {} }))
-    })
+    renderSetupPage(container, () => {})
     const btn = container.querySelector('button[type="submit"]')
     expect(btn?.textContent).toBe('Set up')
   })
@@ -49,10 +56,7 @@ describe('SetupPage', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SetupPage, { onSetupComplete: () => {} }))
-    })
+    renderSetupPage(container, () => {})
 
     const passwordInput = container.querySelector(
       '#password',
@@ -77,10 +81,7 @@ describe('SetupPage', () => {
   })
 
   it('renders heading "Set up audr"', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SetupPage, { onSetupComplete: () => {} }))
-    })
+    renderSetupPage(container, () => {})
     const h1 = container.querySelector('h1')
     expect(h1?.textContent).toBe('Set up audr')
   })
