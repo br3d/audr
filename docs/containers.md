@@ -6,10 +6,14 @@ Written for AUD-386 — "мне не нравится, что у нас тако
 three running containers, and the one remaining consolidation candidate is
 argued against at the bottom.
 
-## The three compose files
+## The compose files
 
 Split in AUD-439, because one file was trying to be an install guide, a build
-recipe and our internal deploy config at once.
+recipe and our internal deploy config at once. `compose.yaml` plus any
+overlays is the running application; `compose.test.yaml` and
+`compose.mcp.yaml` stand apart from that split — the former is a wholly
+separate isolated stack, the latter an opt-in extra service — so neither is
+an "overlay" on the first four in the sense the AUD-439 split means.
 
 | File | Who runs it | What it does |
 |------|-------------|--------------|
@@ -17,6 +21,8 @@ recipe and our internal deploy config at once.
 | `compose.dev.yaml` | contributors | Overlay adding the `build:` stanzas, so the stack runs the working tree as `audr-backend:dev`. `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`. |
 | `compose.deploy.yaml` | our deploy host only | Overlay pointing the backend services at `${AUDR_REGISTRY}/audr-backend:${BACKEND_TAG}`. Both variables are required, so a misconfigured deploy fails loudly instead of pulling the public image. See [deploy-runbook.md](deploy-runbook.md). |
 | `compose.encrypted-volume.yaml` | installers who want the DB on an encrypted disk | Overlay binding the `db_data` volume to `${AUDR_DB_DATA_PATH}` on an unlocked LUKS/ZFS mount. Required variable, so a missing path fails the start rather than falling back to the unencrypted default. Only takes effect on a volume Docker is creating for the first time — see [operations.md](operations.md#encrypting-the-database-volume). |
+| `compose.test.yaml` | CI, and anyone running the suite locally | A separate, self-contained stack (own `name:`, own network, ephemeral volumes): `db-test`, a WireMock `provider-mock` standing in for Ethereum RPC and CoinGecko, `migrate-test`, `backend-tests`, `frontend-tests` and a `benchmark` profile. `scripts/test.sh` and [verification.md](verification.md) are the usual entry points — nothing here touches the real `db_data` volume. |
+| `compose.mcp.yaml` | an operator who wants the audr-mcp streamable-HTTP transport | Opt-in overlay (AUD-632) adding the `mcp` service, off by default on two independent axes: this file is never included by `compose.yaml`, and the process itself refuses to bind unless `MCP_ENABLED=true`. Bound to `127.0.0.1` only. See [mcp.md](mcp.md). |
 
 The release version lives in exactly one place in `compose.yaml` — the
 `x-backend-image` anchor the three backend services share. It names the last

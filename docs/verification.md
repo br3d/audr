@@ -1,6 +1,28 @@
-# Verification results
+# Verification: how to run the suites, and what to trust for "is it passing"
 
-Recorded: 2026-09-27 against branch `aud-244-worker-entrypoint` (commit `e3775f7`).
+This file is a living pointer, not a scoreboard — the backend/frontend pass
+counts below were accurate for one commit on 2026-09-27 and had drifted far
+enough from reality by 2026-10 (the suite roughly tripled) that a named test
+quoted here as a known failure was no longer informative about whether it
+still fails. Treat anything below with a date on it as a point-in-time
+record, not the current state.
+
+**For current pass/fail status**, use one of:
+
+- The `tests` badge on [the README](../README.md), or the
+  [`tests.yml` run history](https://github.com/br3d/audr/actions/workflows/tests.yml)
+  it links to — the public gate, with the two suite logs uploaded as a run
+  artifact. See [github-actions.md](github-actions.md).
+- The test jobs inside `ci/gitea-overlay/workflows/deploy.yaml` — the
+  authoritative pre-deploy gate on the self-hosted runner; a push to `main`
+  cannot reach the migration step with a red suite (AUD-687).
+- `./scripts/test.sh` locally, which runs the same `compose.test.yaml` stack
+  either of the above do.
+
+For dated, narrative records of specific verification drills (migrations,
+restore drills, spikes, E2E bug hunts) see
+[verification-history.md](verification-history.md), which is append-only and
+does not get rewritten the way this file's old pass-count section did.
 
 ## One-command test invocations
 
@@ -26,7 +48,12 @@ The infrastructure services (`db-test`, `provider-mock`) are started automatical
 
 ---
 
-## Actual results — 2026-09-27
+## Historical snapshot — 2026-09-27
+
+Recorded once, against branch `aud-244-worker-entrypoint` (commit `e3775f7`),
+and never re-run since — the counts below are **not** today's suite size. Do
+not read the table as "tests expected to fail"; check the current CI run
+instead (see above).
 
 ### Backend unit tests
 
@@ -66,7 +93,14 @@ $ docker compose -f compose.test.yaml run --rm backend-tests
 | `test_reactivate_wallet` | `assert 404 == 200` | Same |
 | `test_retry_budget_exhaustion_moves_to_failed` | `assert UUID(...) is None` | Claim returns stale record from previous failed test run; DB not clean between runs |
 
-These failures are pre-existing. The wallet isolation issues (tests 3–8) are caused by the test's transaction-rollback isolation strategy conflicting with the FastAPI `TestClient` using a separate session. The discovery checkpoint mismatches (tests 1–2) are test-to-code drift from the T038 refactor.
+These were the known failures **in this specific 2026-09-27 run**, not a
+standing baseline — the suite has grown substantially since and this table
+has not been re-verified against it. The wallet isolation issues (tests 3–8)
+were caused by the test's transaction-rollback isolation strategy conflicting
+with the FastAPI `TestClient` using a separate session. The discovery
+checkpoint mismatches (tests 1–2) were test-to-code drift from the T038
+refactor. Whether any of this still reproduces is a question for the current
+CI run, not this file.
 
 ---
 
