@@ -32,6 +32,8 @@ class NewsFeed:
     url: str
     etag: str | None
     last_modified: str | None
+    keep_pattern: str | None
+    block_pattern: str | None
 
 
 async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
@@ -45,6 +47,7 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
         sa.text(
             """
             SELECT nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified,
+                   nf.keep_pattern, nf.block_pattern,
                    COALESCE(
                        array_agg(nfs.asset_symbol) FILTER (WHERE nfs.asset_symbol IS NOT NULL),
                        ARRAY[]::text[]
@@ -53,7 +56,8 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
             LEFT JOIN news_feed_symbol nfs ON nfs.feed_id = nf.id
             WHERE nf.enabled
               AND (nf.last_polled_at IS NULL OR nf.last_polled_at < :cutoff)
-            GROUP BY nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified
+            GROUP BY nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified,
+                     nf.keep_pattern, nf.block_pattern
             ORDER BY nf.key
             """
         ),
@@ -64,10 +68,12 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
             id=row[0],
             key=row[1],
             tier=row[2],
-            symbols=frozenset(symbol.upper() for symbol in row[6]),
+            symbols=frozenset(symbol.upper() for symbol in row[8]),
             url=row[3],
             etag=row[4],
             last_modified=row[5],
+            keep_pattern=row[6],
+            block_pattern=row[7],
         )
         for row in result
     ]

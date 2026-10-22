@@ -76,11 +76,16 @@ NEWS_RETENTION = timedelta(days=90)
 # tag is unreadable on a portfolio card whether or not the release itself
 # matters. Coverage moved to project feeds (docs/news-sources.md §9).
 #
-# Kept in the ingestion path so that re-enabling a release feed, or seeding a
-# new one, cannot quietly reintroduce the two worst shapes: monorepo package
-# tags and pre-release/test builds (`v2.10.2-beta5`,
-# `v2.10.2-preconf (Testing Only)`). Filtered here rather than in the API or
-# the UI so a dropped row costs no retention, no alert pass and no card slot.
+# This is the one noise rule AUD-655 left in code rather than moving to
+# `news_feed.block_pattern`: every other rule (the project-feed-scoped half
+# of this same filter, the aggregator tier's evergreen-explainer filter) was
+# already opt-in by key or by tier membership, so turning it into a column
+# changes nothing about who has to remember to configure it. A release feed
+# is different — it needs no opt-in, so re-enabling one or seeding a new one
+# must not quietly reintroduce the two worst shapes (monorepo package tags,
+# pre-release/test builds) just because nobody remembered to set that feed's
+# `block_pattern`. Filtered here rather than in the API or the UI so a
+# dropped row costs no retention, no alert pass and no card slot.
 _PACKAGE_TAG_RE = re.compile(r"@v?\d+\.\d+")
 _PRERELEASE_RE = re.compile(
     r"(?<![a-z])(?:alpha|beta|rc|nightly|canary|preconf|pre-?release|unstable)(?![a-z])"
@@ -89,53 +94,54 @@ _PRERELEASE_RE = re.compile(
 )
 
 
-# Project feeds whose subject matter is releases, so the pre-release half of
-# the filter applies to them as well as to the release tier. Opt-in by key
-# rather than by tier: `project:polygon-forum-announcements` (0038) is a
-# validator-announcements category, and a testnet build post
-# ("Heimdall-v2 v0.12.2-beta-2 (Amoy)", 1 of its 25 current entries) is the
-# same non-news as the bor `-beta` tags it replaced. A general project blog
-# posting "Our beta is live" is an announcement and must still survive, which
-# is why this is a named set and not a tier rule.
-_RELEASE_SHAPED_PROJECT_FEEDS = frozenset({"project:polygon-forum-announcements"})
-
-
 def is_noisy_release(title: str) -> bool:
     """True when a release-feed entry is a package tag or a pre-release build."""
     return bool(_PACKAGE_TAG_RE.search(title) or _PRERELEASE_RE.search(title))
 
 
-# Aggregator-tier noise (AUD-654). A quoted `"<project name>" crypto` Google
-# News search is not immune to evergreen explainers and SEO listicles — the
-# newest entry served for SUSHI on 2026-10-21 was "What Is SushiSwap and How
-# Does It Work? — Binance", not news. Backstop constant, same shape as
-# `is_noisy_release()`: no data-driven noise registry exists yet (tracked as
-# a follow-up in the AUD-644 chain).
-_EVERGREEN_EXPLAINER_RE = re.compile(
-    r"^(?:what\s+is|what'?s|how\s+(?:does|to)|beginner'?s\s+guide|complete\s+guide)\b"
-    r"|\bprice\s+predictions?\b"
-    r"|\(20\d{2}\)",
-    re.IGNORECASE,
-)
+def _compile_feed_pattern(
+    feed_key: str, kind: str, pattern: str | None
+) -> tuple[re.Pattern[str] | None, bool]:
+    """Compile a feed's `keep_pattern`/`block_pattern` (AUD-655).
+
+    A pattern is operator-entered data, not application code: a broken one
+    must not fail `news_refresh` for every feed. Returns `(None, True)` and
+    logs a warning on `re.error` — the caller treats the feed as if the
+    pattern were unset for this poll.
+    """
+    if pattern is None:
+        return None, False
+    try:
+        return re.compile(pattern, re.IGNORECASE), False
+    except re.error as exc:
+        logger.warning(
+            "news_refresh feed=%s invalid %s_pattern %r: %s", feed_key, kind, pattern, exc
+        )
+        return None, True
 
 
-def is_noisy_aggregator_title(title: str) -> bool:
-    """True when an aggregator-tier title is an evergreen explainer, not news."""
-    return bool(_EVERGREEN_EXPLAINER_RE.search(title))
-
-
-def should_drop_feed_item(*, tier: str, key: str, title: str) -> bool:
+def should_drop_feed_item(
+    *,
+    tier: str,
+    key: str,
+    title: str,
+    keep_re: re.Pattern[str] | None = None,
+    block_re: re.Pattern[str] | None = None,
+) -> bool:
     """True when a feed item is noise rather than news.
 
-    The `release` tier is checked in full; a project feed is checked only when
-    its subject matter is releases (`_RELEASE_SHAPED_PROJECT_FEEDS`); the
-    `aggregator` tier is checked against the evergreen-explainer shape.
+    Order is keep, then block (AUD-655): a configured `keep_re` is an
+    allow-list, so a title that fails it is dropped before `block_re` is even
+    consulted. `is_noisy_release()` — see its docstring — is the one filter
+    that stays in code rather than in a feed's `block_pattern`, and it
+    applies to the `release` tier unconditionally, after the DB-sourced
+    patterns.
     """
-    if tier == "release":
-        return is_noisy_release(title)
-    if tier == "aggregator":
-        return is_noisy_aggregator_title(title)
-    return key in _RELEASE_SHAPED_PROJECT_FEEDS and bool(_PRERELEASE_RE.search(title))
+    if keep_re is not None and not keep_re.search(title):
+        return True
+    if block_re is not None and block_re.search(title):
+        return True
+    return tier == "release" and is_noisy_release(title)
 
 
 @dataclass(frozen=True)
@@ -163,6 +169,7 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
 
     inserted = 0
     polled = 0
+    pattern_errors = 0
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(_HTTP_TIMEOUT),
         follow_redirects=True,
@@ -176,9 +183,11 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
             if feed.symbols and not (feed.symbols & held_symbols):
                 continue
             polled += 1
-            inserted += await _poll_feed(
+            feed_inserted, feed_pattern_errors = await _poll_feed(
                 session, client=client, feed=feed, assets=assets, tracked_symbols=tracked_symbols
             )
+            inserted += feed_inserted
+            pattern_errors += feed_pattern_errors
             await session.commit()
 
         covered = await covered_asset_symbols(session)
@@ -245,11 +254,12 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     pruned = await _prune_old_news(session)
     await session.commit()
     logger.info(
-        "news_refresh run_id=%s feeds_polled=%d inserted=%d pruned=%d",
+        "news_refresh run_id=%s feeds_polled=%d inserted=%d pruned=%d pattern_errors=%d",
         run_id,
         polled,
         inserted,
         pruned,
+        pattern_errors,
     )
 
 
@@ -280,7 +290,8 @@ async def _poll_feed(
     feed: NewsFeed,
     assets: list[HeldAsset],
     tracked_symbols: set[str],
-) -> int:
+) -> tuple[int, int]:
+    """Poll one feed; returns (rows inserted, keep/block patterns that failed to compile)."""
     headers: dict[str, str] = {}
     if feed.etag:
         headers["If-None-Match"] = feed.etag
@@ -292,23 +303,23 @@ async def _poll_feed(
     except httpx.HTTPError as exc:
         logger.info("news_refresh feed=%s request failed: %s", feed.key, exc)
         await record_feed_failure(session, feed_id=feed.id, error=str(exc))
-        return 0
+        return 0, 0
 
     if response.status_code == 304:
         await record_feed_not_modified(session, feed_id=feed.id)
-        return 0
+        return 0, 0
 
     if not response.is_success:
         logger.info("news_refresh feed=%s HTTP %s", feed.key, response.status_code)
         await record_feed_failure(session, feed_id=feed.id, error=f"HTTP {response.status_code}")
-        return 0
+        return 0, 0
 
     try:
         items = parse_feed(response.content)
     except FeedParseError as exc:
         logger.info("news_refresh feed=%s parse error: %s", feed.key, exc)
         await record_feed_failure(session, feed_id=feed.id, error=str(exc))
-        return 0
+        return 0, 0
 
     await record_feed_success(
         session,
@@ -316,6 +327,10 @@ async def _poll_feed(
         etag=response.headers.get("etag"),
         last_modified=response.headers.get("last-modified"),
     )
+
+    keep_re, keep_error = _compile_feed_pattern(feed.key, "keep", feed.keep_pattern)
+    block_re, block_error = _compile_feed_pattern(feed.key, "block", feed.block_pattern)
+    pattern_errors = int(keep_error) + int(block_error)
 
     target_asset_ids = _targets_for_feed(feed, assets, tracked_symbols)
     retention_cutoff = datetime.now(UTC) - NEWS_RETENTION
@@ -327,9 +342,11 @@ async def _poll_feed(
             # gain (AUD-573 follow-up). _prune_old_news would delete every one
             # of these anyway; skip the round trip.
             continue
-        if should_drop_feed_item(tier=feed.tier, key=feed.key, title=item.title):
-            # Package tags and pre-release builds (AUD-640) — see
-            # should_drop_feed_item.
+        if should_drop_feed_item(
+            tier=feed.tier, key=feed.key, title=item.title, keep_re=keep_re, block_re=block_re
+        ):
+            # DB-sourced keep/block patterns plus the release-tier backstop
+            # (AUD-655) — see should_drop_feed_item.
             continue
         for asset_id in target_asset_ids(item):
             inserted += await _insert_news(
@@ -342,7 +359,7 @@ async def _poll_feed(
                 news_site=feed.key,
                 published_at=item.published_at,
             )
-    return inserted
+    return inserted, pattern_errors
 
 
 def _targets_for_feed(
