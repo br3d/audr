@@ -338,6 +338,7 @@ deleted, not disabled.
 | 3 | AUD-515 | Relevance allow-list, GDELT throttling, per-tier commits |
 | 4 | AUD-654 | `aggregator` tier — keyless Google News RSS, one feed per held symbol |
 | 5 | AUD-655 | `news_feed.keep_pattern`/`block_pattern` — feed-level noise rules move from code to data |
+| 6 | AUD-656 | `hackernews` tier — keyless Hacker News (Algolia) search, one feed per held symbol, engagement-gated |
 
 Stage 3 was not in the original plan. It exists because the first staging run
 reproduced, in production data, exactly the keyword-ambiguity failure §3
@@ -366,10 +367,14 @@ typed against and silently misses a fresh database.
 - **`news_feed`** — one row per RSS/Atom URL (`key`, `tier`, `url`,
   `enabled`). Carries `etag`/`last_modified` for conditional GETs and
   `consecutive_failures`/`last_error` for health. `tier` is one of
-  `project`, `release`, `press`, or `aggregator` (0039, AUD-654 — the
-  keyless Google News breadth tier, see below). `keep_pattern`/
-  `block_pattern` (0040, AUD-655) hold per-feed noise rules — see
-  "Feed-level keep/block rules" below.
+  `project`, `release`, `press`, `aggregator` (0039, AUD-654 — the keyless
+  Google News breadth tier, see below), or `hackernews` (0041, AUD-656 —
+  keyless Hacker News search, see below). `keep_pattern`/`block_pattern`
+  (0040, AUD-655) hold per-feed noise rules — see "Feed-level keep/block
+  rules" below. A `hackernews:*` row's `url` is informational only (what an
+  operator would curl to see what this feed queries) — the job recomputes
+  the same query from `asset.name` at poll time rather than parsing it back
+  out, see below.
 - **`news_feed_symbol`** — many-to-many `(feed_id, asset_symbol)` mapping
   (AUD-571). A feed with one or more rows here is attributed exactly:
   every item is inserted once per held asset whose symbol is mapped to that
@@ -693,6 +698,105 @@ than news on a portfolio card — a title-shape filter cannot tell market
 commentary from an actual development, and the trade favours quiet over a
 daily non-news line. Reopen it per feed with a narrower `block_pattern` if
 that trade is wrong for a given source.
+
+##### Breadth tier: Hacker News (0041, AUD-656)
+
+The founder's call on AUD-644/AUD-656: Hacker News only, not Reddit and not
+public Telegram channels. HN has moderation and a technical audience;
+neither holds for the other two, and `roadmap.md` already excludes
+Telegram ingestion for release 2 (§5).
+
+**Source: `hn.algolia.com/api/v1/search_by_date`, not `hnrss.org`.** Both
+are keyless. `hnrss.org` was considered and rejected: it is a third-party
+proxy sitting in front of the same Algolia API HN itself publishes — adding
+it as a dependency buys nothing (same data, same absence of an SLA) and
+adds a second thing that can go down or change shape without notice.
+Algolia's API is the one HN's own site uses, so it is the more durable of
+the two keyless options, not just the more direct one.
+
+**Query by project name, not ticker** (AUD-656 req. 2) — `asset.name`,
+templated the same way the `aggregator` tier (0039) templates
+`news.google.com`:
+
+    query = "<name>" (quoted), tags=story, restrictSearchableAttributes=title
+
+Measured live against the real API before writing this (AUD-656 wake
+comment), not guessed: a bare, unquoted query against Algolia's default
+(typo-tolerant, all-attributes) search returns mostly noise for a short
+project name — `Aave` unquoted returned zero titles that even contained the
+word "Aave". Quoting the query text *and* restricting the search to the
+`title` attribute both cut that down sharply — quoted, title-restricted
+`"Aave"` returned real Aave coverage (price moves, protocol news, a
+liquidation-bot Show HN) with no further filtering needed. The same
+combination cleanly covers `Ethereum`, `Curve Finance`, `Ethereum Name
+Service`, `SushiSwap`, `Uniswap` and `Chainlink`. It does **not** solve a
+project name that collides with an unrelated noun or brand in ordinary
+English — `Polygon` (the Polygon.com gaming site, and plain geometry
+articles, `~30%` of results) and `Lido` (`LiDO`, an unrelated astronomy
+acronym; "Scripting on the Lido Deck") both still carry real noise after
+quoting and title-restriction. That residual is exactly what
+`block_pattern` exists for (see "Feed-level keep/block rules" above) — it
+is seeded empty for every `hackernews:*` row (measuring a fix up front
+would be guessing, not measuring), and is the first thing to set on MATIC's
+or LDO's feed once live rows show the collision.
+
+**Engagement gate** (AUD-656 req. 3), also measured rather than guessed:
+an organic HN submission starts at 1 point, the submitter's own vote —
+`points = 0` exists but is rare (a live global sample put it at roughly
+0.08% of stories, almost all flagged or vote-manipulated). So "points == 1
+and num_comments == 0" is the measured shape of the issue's "story without
+a single upvote": nobody but the submitter ever looked at it. Sampled
+project-name queries put about 30% of relevance-gated hits exactly at that
+floor. `jobs/news.py`'s `_is_low_engagement_hn_story()` drops a story
+unless `points >= 2` or `num_comments >= 1` — a comment alone is enough to
+survive even at 1 point, since a reply is stronger engagement evidence than
+a second upvote. This threshold is a code constant (`_HN_MIN_POINTS`,
+`_HN_MIN_COMMENTS`), not a per-feed column: unlike a title-noise pattern,
+it is not feed-specific data, it is a structural fact about how HN's own
+voting works, the same reasoning that keeps `is_noisy_release()` in code
+for the `release` tier.
+
+**Query budget** (AUD-656 req. 5): the same discipline as GDELT
+(`_GDELT_MAX_QUERIES_PER_RUN`), not more and not less. Algolia tolerated a
+quick burst of quick sequential calls when measured live, but publishes no
+documented rate limit or SLA — the same posture GDELT's throttling already
+assumes, and the issue asked explicitly not to trust an anonymous shared
+API's good behaviour today to hold forever. `_HN_MAX_QUERIES_PER_RUN` (10)
+caps how many due `hackernews:*` feeds one `news_refresh` run drains;
+`_HN_QUERY_DELAY_S` spaces the calls out; `_HN_MAX_CONSECUTIVE_429` aborts
+the tier on a 429 streak. Unlike GDELT, a feed skipped by the cap is simply
+still due on the next run (`news_feed.last_polled_at` is untouched) — it
+does not need GDELT's `skipped_this_run` log line to explain where it went.
+
+**Ingestion is not the generic `_poll_feed`/`parse_feed` path.** Algolia
+returns JSON (an Atom/RSS parser cannot read it), so `jobs/news.py` carves
+`hackernews`-tier feeds out of `list_due_feeds()`'s result before the
+generic loop and polls them with a dedicated `_poll_hackernews_feed()`:
+fetch `feed.url` directly (so this tier's health counters reflect the real
+HTTP outcome, not `HackerNewsProvider.search_stories()`'s "every failure
+looks like empty results" contract, which is the right contract for GDELT's
+unpersisted queries but wrong for a persisted `news_feed` row), parse the
+body with `providers.hackernews.parse_search_response()`, then apply
+retention, the engagement gate, `keep_pattern`/`block_pattern`, and the
+same relevance gate (`match_assets`, symbol-or-name, word-boundary) the
+`aggregator` tier uses, scoped to the one asset the feed was built for —
+Algolia's search is no more attribution-exact than Google News's.
+
+`source` is the literal constant `'hackernews'` for every row this tier
+inserts — not `feed.key` the way `project`/`release`/`aggregator` rows do.
+Matches the existing convention for query-shaped tiers (`gdelt`,
+`snapshot`), which also use a constant rather than a per-feed key, since
+the external API itself (not which asset the query was for) is what
+`source` identifies here. Dedup key is Algolia's `objectID`, retention is
+the shared 90-day policy, same as every other tier.
+
+`covered_asset_symbols()` counts `hackernews` alongside
+`project`/`release`/`aggregator`: a symbol with its own HN feed does not
+also burn one of GDELT's scarce query slots.
+
+Only currently-held symbols are seeded (0041) — same limitation every other
+generated tier has; an asset acquired later needs a later migration or a
+manual `INSERT` to get a `hackernews:*` row.
 
 ### Adding a new holding to news coverage
 

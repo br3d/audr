@@ -47,6 +47,7 @@ from audr.jobs.snapshot_registry import (
 )
 from audr.providers.feed_parser import FeedItem, FeedParseError, parse_feed
 from audr.providers.gdelt import GdeltArticle, GdeltProvider, GdeltRateLimited
+from audr.providers.hackernews import parse_search_response
 from audr.providers.snapshot import SnapshotError, SnapshotProposal, SnapshotProvider
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ _HTTP_TIMEOUT = 15.0
 _USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
 _GDELT_SOURCE = "gdelt"
 _SNAPSHOT_SOURCE = "snapshot"
+_HACKERNEWS_SOURCE = "hackernews"
 
 # GDELT breadth-tier throttling (AUD-515) — staging ran ~66 sequential
 # queries per run against a keyless, unrated API and hit near-100% 429s,
@@ -65,6 +67,30 @@ _GDELT_MAX_QUERIES_PER_RUN = 10
 _GDELT_MAX_CONSECUTIVE_429 = 3
 _GDELT_MIN_SYMBOL_LEN = 3
 _GDELT_QUERY_DELAY_S = 1.0
+
+# Hacker News (Algolia) tier throttling (AUD-656) — same discipline as the
+# GDELT breadth tier above: Algolia's search API is keyless and publishes no
+# rate limit or SLA either, and `hackernews:*` feeds fan out one query per
+# held symbol just like GDELT did before AUD-515 capped it. Unlike GDELT,
+# each query here is a `news_feed` row with its own persisted health
+# counters (AUD-656 req. 4) — this cap only bounds how many of the *due*
+# rows one `news_refresh` run drains; a skipped row stays due and is picked
+# up on the next run.
+_HN_MAX_QUERIES_PER_RUN = 10
+_HN_MAX_CONSECUTIVE_429 = 3
+_HN_QUERY_DELAY_S = 1.0
+
+# Engagement gate (AUD-656 req. 3), measured live against hn.algolia.com
+# (AUD-656 wake comment) rather than guessed: an organic HN submission
+# starts at 1 point from the submitter's own vote (points=0 exists but is
+# rare — flagged/vote-manipulated stories, ~0.08% of a live sample), so
+# "points == 1 and num_comments == 0" is the measured shape of "nobody but
+# the submitter ever looked at this" — the issue's "story without a single
+# upvote" — not a typical low-traffic-but-real story. Sampled project-name
+# queries (Ethereum, Aave, Curve Finance, SushiSwap) had ~30% of relevance-
+# gated hits sitting exactly at that floor.
+_HN_MIN_POINTS = 2
+_HN_MIN_COMMENTS = 1
 
 # Retention (AUD-512 req. 6): one shared policy with ADR-007 alerting
 # (AUD-337) — do not invent a second number here.
@@ -164,6 +190,13 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         return
 
     due_feeds = await list_due_feeds(session)
+    # The hackernews tier is query-shaped, not RSS-shaped (AUD-656): its
+    # `news_feed.url` is informational, not something `_poll_feed`'s
+    # `parse_feed` (Atom/RSS only) can read, and it needs its own per-run
+    # query budget the same way GDELT does below — the generic loop has no
+    # such cap. Carved out here so it never reaches `_poll_feed`.
+    hn_due_feeds = [feed for feed in due_feeds if feed.tier == "hackernews"]
+    due_feeds = [feed for feed in due_feeds if feed.tier != "hackernews"]
     held_symbols = {asset.symbol.upper() for asset in assets}
     tracked_symbols = await list_tracked_asset_symbols(session)
 
@@ -188,6 +221,45 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
             )
             inserted += feed_inserted
             pattern_errors += feed_pattern_errors
+            await session.commit()
+
+        hn_due_now = [
+            feed for feed in hn_due_feeds if not feed.symbols or (feed.symbols & held_symbols)
+        ]
+        if len(hn_due_now) > _HN_MAX_QUERIES_PER_RUN:
+            logger.info(
+                "news_refresh run_id=%s hackernews capped — skipped %d feeds this run",
+                run_id,
+                len(hn_due_now) - _HN_MAX_QUERIES_PER_RUN,
+            )
+        hn_due_now = hn_due_now[:_HN_MAX_QUERIES_PER_RUN]
+        consecutive_429 = 0
+        for i, feed in enumerate(hn_due_now):
+            if i > 0:
+                await asyncio.sleep(_HN_QUERY_DELAY_S)
+            feed_inserted, rate_limited = await _poll_hackernews_feed(
+                session, client=client, feed=feed, assets=assets
+            )
+            inserted += feed_inserted
+            if rate_limited:
+                consecutive_429 += 1
+                logger.info(
+                    "news_refresh run_id=%s hackernews rate-limited feed=%s consecutive=%d",
+                    run_id,
+                    feed.key,
+                    consecutive_429,
+                )
+                if consecutive_429 >= _HN_MAX_CONSECUTIVE_429:
+                    logger.info(
+                        "news_refresh run_id=%s hackernews aborting tier after %d consecutive 429s",
+                        run_id,
+                        consecutive_429,
+                    )
+                    await session.commit()
+                    break
+            else:
+                consecutive_429 = 0
+                polled += 1
             await session.commit()
 
         covered = await covered_asset_symbols(session)
@@ -383,6 +455,97 @@ def _targets_for_feed(
     # ticked 'BITCOIN' and one named 'ASSET' absorb most trade-press rows.
     tracked_assets = [a for a in assets if a.symbol.upper() in tracked_symbols]
     return lambda item: match_assets(item.title, tracked_assets)
+
+
+# ---------------------------------------------------------------------------
+# Hacker News tier (AUD-656)
+# ---------------------------------------------------------------------------
+
+
+def _is_low_engagement_hn_story(*, points: int, num_comments: int) -> bool:
+    """True for a story nobody but its submitter ever reacted to.
+
+    See `_HN_MIN_POINTS`/`_HN_MIN_COMMENTS` for the measured basis.
+    """
+    return points < _HN_MIN_POINTS and num_comments < _HN_MIN_COMMENTS
+
+
+async def _poll_hackernews_feed(
+    session: AsyncSession,
+    *,
+    client: httpx.AsyncClient,
+    feed: NewsFeed,
+    assets: list[HeldAsset],
+) -> tuple[int, bool]:
+    """Poll one `hackernews:<symbol>` feed.
+
+    Returns `(rows inserted, was rate limited)`. Fetches `feed.url` directly
+    rather than going through `HackerNewsProvider.search_stories` (which
+    this module's contract tests exercise independently): that adapter
+    treats every HTTP failure as "no results", which is the right contract
+    for GDELT's unpersisted, best-effort queries but would make this tier's
+    `news_feed` health counters (AUD-656 req. 4) unable to tell a real
+    failure from a quiet poll.
+    """
+    scoped_assets = [a for a in assets if a.symbol.upper() in feed.symbols]
+    if not scoped_assets:
+        return 0, False
+
+    try:
+        response = await client.get(feed.url)
+    except httpx.HTTPError as exc:
+        logger.info("news_refresh hackernews feed=%s request failed: %s", feed.key, exc)
+        await record_feed_failure(session, feed_id=feed.id, error=str(exc))
+        return 0, False
+
+    if response.status_code == 429:
+        return 0, True
+
+    if not response.is_success:
+        logger.info("news_refresh hackernews feed=%s HTTP %s", feed.key, response.status_code)
+        await record_feed_failure(session, feed_id=feed.id, error=f"HTTP {response.status_code}")
+        return 0, False
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        logger.info("news_refresh hackernews feed=%s unparseable response: %s", feed.key, exc)
+        await record_feed_failure(session, feed_id=feed.id, error="unparseable response")
+        return 0, False
+
+    await record_feed_success(session, feed_id=feed.id, etag=None, last_modified=None)
+
+    # `_compile_feed_pattern` logs a warning on a bad pattern; this tier has
+    # no per-feed `pattern_errors` accumulator wired into the run summary
+    # the way `_poll_feed` does, since it never runs more than
+    # `_HN_MAX_QUERIES_PER_RUN` feeds in one call — a bad pattern here is
+    # visible in the per-feed logs without a counter.
+    keep_re, _ = _compile_feed_pattern(feed.key, "keep", feed.keep_pattern)
+    block_re, _ = _compile_feed_pattern(feed.key, "block", feed.block_pattern)
+
+    retention_cutoff = datetime.now(UTC) - NEWS_RETENTION
+    inserted = 0
+    for story in parse_search_response(data):
+        if story.published_at < retention_cutoff:
+            continue
+        if _is_low_engagement_hn_story(points=story.points, num_comments=story.num_comments):
+            continue
+        if should_drop_feed_item(
+            tier=feed.tier, key=feed.key, title=story.title, keep_re=keep_re, block_re=block_re
+        ):
+            continue
+        for asset_id in match_assets(story.title, scoped_assets):
+            inserted += await _insert_news(
+                session,
+                asset_id=asset_id,
+                source=_HACKERNEWS_SOURCE,
+                external_id=story.external_id,
+                title=story.title,
+                url=story.url,
+                news_site=_HACKERNEWS_SOURCE,
+                published_at=story.published_at,
+            )
+    return inserted, False
 
 
 # ---------------------------------------------------------------------------
