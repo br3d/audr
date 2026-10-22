@@ -1497,6 +1497,59 @@ body {
   list-style: none;
 }
 
+/* AUD-686: notices collapsed behind a warning triangle, revealed on hover,
+   keyboard focus or tap instead of occupying a permanent banner row. */
+.notice-badge {
+  position: relative;
+  display: inline-flex;
+}
+
+.notice-badge-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--warning);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.notice-badge-trigger:hover,
+.notice-badge-trigger:focus-visible {
+  background: var(--warning-bg);
+}
+
+.notice-badge-trigger svg {
+  width: 17px;
+  height: 17px;
+}
+
+.notice-badge-count {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.notice-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: min(420px, 70vw);
+  margin-bottom: 0;
+  padding: 4px;
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated, var(--bg-card, #1b2130));
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+
 /* ----------------------------------------------------------------
    News feed
    ---------------------------------------------------------------- */
@@ -2057,6 +2110,9 @@ body {
    Portfolio value history card
    ---------------------------------------------------------------- */
 .card-title-chart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: var(--text-lg);
   font-weight: 700;
   text-transform: none;
