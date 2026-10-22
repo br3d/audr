@@ -234,6 +234,17 @@ if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
     set -e
     echo "==> Frontend suite exit=${FRONTEND_EXIT}"
     if [[ "${FRONTEND_EXIT}" -ne 0 ]]; then EXIT="${FRONTEND_EXIT}"; fi
+
+    # Generated API types vs. backend/openapi.json (AUD-694). Runs on the host,
+    # not in the frontend-tests container: it only needs Node to diff against
+    # the already-checked-out schema file, and does not touch Docker.
+    echo "==> Checking generated API types against backend/openapi.json"
+    set +e
+    (cd "${ROOT}/frontend" && npm run check:api-types)
+    API_TYPES_EXIT="$?"
+    set -e
+    echo "==> API types check exit=${API_TYPES_EXIT}"
+    if [[ "${API_TYPES_EXIT}" -ne 0 ]]; then EXIT="${API_TYPES_EXIT}"; fi
   fi
 fi
 

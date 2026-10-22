@@ -227,6 +227,9 @@ jobs:
         run: |
           npm ci
           npm run test
+      - name: Generated API types match backend/openapi.json (AUD-694)
+        working-directory: frontend
+        run: npm run check:api-types
 
   build-deploy:
     runs-on: host
