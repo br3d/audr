@@ -1,52 +1,57 @@
 import { useState, useRef } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   changePassword,
   fetchPurgePreview,
   submitPurge,
   exportPortfolioUrl,
   exportHistoryUrl,
-  ApiError,
 } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 function PasswordSection() {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    setMsg(null)
-
-    if (next.length < 12) {
-      setError('New password must be at least 12 characters.')
-      return
-    }
-    if (next !== confirm) {
-      setError('New password and confirmation do not match.')
-      return
-    }
-
-    setSaving(true)
-    try {
-      await changePassword(current, next)
-      setMsg(
-        'Password changed. All other sessions have been signed out. Sign in again to continue.',
-      )
+  const changePasswordMutation = useMutation({
+    mutationFn: () => changePassword(current, next),
+    onSuccess: () => {
       setCurrent('')
       setNext('')
       setConfirm('')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to change password.')
-    } finally {
-      setSaving(false)
+    },
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    changePasswordMutation.reset()
+
+    if (next.length < 12) {
+      setValidationError('New password must be at least 12 characters.')
+      return
     }
+    if (next !== confirm) {
+      setValidationError('New password and confirmation do not match.')
+      return
+    }
+
+    changePasswordMutation.mutate()
   }
+
+  const saving = changePasswordMutation.isPending
+  const error =
+    validationError ??
+    (changePasswordMutation.error
+      ? errorMessage(changePasswordMutation.error, 'Failed to change password.')
+      : null)
+  const msg = changePasswordMutation.isSuccess
+    ? 'Password changed. All other sessions have been signed out. Sign in again to continue.'
+    : null
 
   return (
     <section aria-label="Change password" className="card">
@@ -307,35 +312,35 @@ function PurgeSection() {
   const [showPreview, setShowPreview] = useState(false)
   const [confirmPassword, setConfirmPassword] = useState('')
   const [confirmed, setConfirmed] = useState(false)
-  const [purging, setPurging] = useState(false)
-  const [purgeMsg, setPurgeMsg] = useState<string | null>(null)
-  const [purgeError, setPurgeError] = useState<string | null>(null)
 
   const previewQuery = useQuery({
-    queryKey: ['purge-preview', provider],
+    queryKey: queryKeys.purgePreview(provider),
     queryFn: () => fetchPurgePreview(provider),
     enabled: showPreview,
   })
 
-  async function handlePurge(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    if (!confirmed || !confirmPassword) return
-    setPurgeError(null)
-    setPurging(true)
-    try {
-      await submitPurge({ provider, confirm: true, current_password: confirmPassword })
+  const [purgeMsg, setPurgeMsg] = useState<string | null>(null)
+
+  const purgeMutation = useMutation({
+    mutationFn: () => submitPurge({ provider, confirm: true, current_password: confirmPassword }),
+    onSuccess: () => {
       setPurgeMsg(
         `Provider data purge submitted for "${provider}". The affected quote integration has been disabled.`,
       )
       setShowPreview(false)
       setConfirmed(false)
       setConfirmPassword('')
-    } catch (err) {
-      setPurgeError(err instanceof ApiError ? err.message : 'Purge failed.')
-    } finally {
-      setPurging(false)
-    }
+    },
+  })
+
+  function handlePurge(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!confirmed || !confirmPassword) return
+    purgeMutation.mutate()
   }
+
+  const purging = purgeMutation.isPending
+  const purgeError = purgeMutation.error ? errorMessage(purgeMutation.error, 'Purge failed.') : null
 
   return (
     <section aria-label="Provider data purge" className="card">
@@ -380,9 +385,7 @@ function PurgeSection() {
       {showPreview && previewQuery.error && (
         <p role="alert" className="alert alert-danger mb-12">
           Failed to load purge preview.{' '}
-          {previewQuery.error instanceof ApiError
-            ? previewQuery.error.message
-            : 'Please try again.'}
+          {errorMessage(previewQuery.error, 'Please try again.')}
         </p>
       )}
 
