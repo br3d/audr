@@ -1,13 +1,10 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  fetchApiTokens,
-  createApiToken,
-  revokeApiToken,
-  ApiError,
-} from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchApiTokens, createApiToken, revokeApiToken } from '../api/client'
 import type { ApiTokenItem } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
@@ -97,42 +94,47 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState('')
   const [expiresDays, setExpiresDays] = useState(90)
   const [redact, setRedact] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const [newToken, setNewToken] = useState<string | null>(null)
   const tokenRef = useRef<HTMLInputElement>(null)
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createApiToken({
+        name: name.trim(),
+        expires_days: expiresDays,
+        redact_addresses: redact,
+      }),
+    onSuccess: (result) => {
+      setNewToken(result.token)
+      onCreated()
+    },
+  })
 
   function reset() {
     setName('')
     setExpiresDays(90)
     setRedact(false)
-    setError(null)
+    setValidationError(null)
+    createMutation.reset()
     setNewToken(null)
     setOpen(false)
   }
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setError(null)
+    setValidationError(null)
     if (!name.trim()) {
-      setError('Token name is required.')
+      setValidationError('Token name is required.')
       return
     }
-    setSaving(true)
-    try {
-      const result = await createApiToken({
-        name: name.trim(),
-        expires_days: expiresDays,
-        redact_addresses: redact,
-      })
-      setNewToken(result.token)
-      onCreated()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create token.')
-    } finally {
-      setSaving(false)
-    }
+    createMutation.mutate()
   }
+
+  const saving = createMutation.isPending
+  const error =
+    validationError ??
+    (createMutation.error ? errorMessage(createMutation.error, 'Failed to create token.') : null)
 
   function copyToken() {
     if (tokenRef.current) {
@@ -256,17 +258,21 @@ export default function ApiTokensPage() {
   const queryClient = useQueryClient()
 
   const tokensQuery = useQuery({
-    queryKey: ['api-tokens'],
+    queryKey: queryKeys.apiTokens(),
     queryFn: fetchApiTokens,
   })
 
-  async function handleRevoke(id: string) {
-    await revokeApiToken(id)
-    queryClient.invalidateQueries({ queryKey: ['api-tokens'] })
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => revokeApiToken(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiTokens() }),
+  })
+
+  function handleRevoke(id: string): Promise<void> {
+    return revokeMutation.mutateAsync(id).then(() => undefined)
   }
 
   function handleCreated() {
-    queryClient.invalidateQueries({ queryKey: ['api-tokens'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.apiTokens() })
   }
 
   const tokens = tokensQuery.data?.items ?? []

@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchStatus, fetchJobs, cancelJob, triggerJob, ApiError } from '../api/client'
+import { useMutation, useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchStatus, fetchJobs, cancelJob, triggerJob } from '../api/client'
 import type { StatusResponse, JobRun, ScheduleConfig } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
@@ -71,21 +73,15 @@ function workerStatusDot(status: string) {
 }
 
 function JobRow({ job, onCancelled }: { job: JobRun; onCancelled: () => void }) {
-  const [cancelling, setCancelling] = useState(false)
-  const [cancelError, setCancelError] = useState<string | null>(null)
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelJob(job.id),
+    onSuccess: onCancelled,
+  })
 
-  async function handleCancel() {
-    setCancelError(null)
-    setCancelling(true)
-    try {
-      await cancelJob(job.id)
-      onCancelled()
-    } catch (err) {
-      setCancelError(err instanceof ApiError ? err.message : 'Failed to cancel job.')
-    } finally {
-      setCancelling(false)
-    }
-  }
+  const cancelling = cancelMutation.isPending
+  const cancelError = cancelMutation.error
+    ? errorMessage(cancelMutation.error, 'Failed to cancel job.')
+    : null
 
   const isActive = job.status === 'pending' || job.status === 'running'
 
@@ -114,7 +110,7 @@ function JobRow({ job, onCancelled }: { job: JobRun; onCancelled: () => void }) 
             <button
               type="button"
               className="btn btn-sm btn-danger"
-              onClick={handleCancel}
+              onClick={() => cancelMutation.mutate()}
               disabled={cancelling}
               aria-label={`Cancel ${job.kind} job`}
             >
@@ -209,16 +205,15 @@ function SystemStatus({ status }: { status: StatusResponse }) {
 export default function StatusPage() {
   const queryClient = useQueryClient()
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null)
-  const [triggerError, setTriggerError] = useState<string | null>(null)
 
   const statusQuery = useQuery({
-    queryKey: ['system-status'],
+    queryKey: queryKeys.systemStatus(),
     queryFn: fetchStatus,
     refetchInterval: 15000,
   })
 
   const jobsQuery = useInfiniteQuery({
-    queryKey: ['jobs'],
+    queryKey: queryKeys.jobs(),
     queryFn: ({ pageParam }) => fetchJobs(undefined, pageParam as string | undefined),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
@@ -226,21 +221,26 @@ export default function StatusPage() {
   })
 
   function invalidateAll() {
-    void queryClient.invalidateQueries({ queryKey: ['jobs'] })
-    void queryClient.invalidateQueries({ queryKey: ['system-status'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.jobs() })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.systemStatus() })
   }
 
-  async function handleTrigger(kind: 'balances' | 'discovery' | 'quotes') {
-    setTriggerMsg(null)
-    setTriggerError(null)
-    try {
-      await triggerJob(kind)
+  const triggerMutation = useMutation({
+    mutationFn: (kind: 'balances' | 'discovery' | 'quotes') => triggerJob(kind),
+    onSuccess: (_ref, kind) => {
       setTriggerMsg(`${kind} job queued.`)
       invalidateAll()
-    } catch (err) {
-      setTriggerError(err instanceof ApiError ? err.message : 'Failed to queue job.')
-    }
+    },
+  })
+
+  function handleTrigger(kind: 'balances' | 'discovery' | 'quotes') {
+    setTriggerMsg(null)
+    triggerMutation.mutate(kind)
   }
+
+  const triggerError = triggerMutation.error
+    ? errorMessage(triggerMutation.error, 'Failed to queue job.')
+    : null
 
   return (
     <div>
@@ -248,9 +248,7 @@ export default function StatusPage() {
       {statusQuery.error && (
         <p role="alert" className="alert alert-danger mb-16">
           Failed to load system status.{' '}
-          {statusQuery.error instanceof ApiError
-            ? statusQuery.error.message
-            : 'Please try again.'}
+          {errorMessage(statusQuery.error, 'Please try again.')}
         </p>
       )}
       {statusQuery.data && <SystemStatus status={statusQuery.data} />}
@@ -302,9 +300,7 @@ export default function StatusPage() {
         {jobsQuery.error && (
           <p role="alert" className="alert alert-danger">
             Failed to load jobs.{' '}
-            {jobsQuery.error instanceof ApiError
-              ? jobsQuery.error.message
-              : 'Please try again.'}
+            {errorMessage(jobsQuery.error, 'Please try again.')}
           </p>
         )}
         {(() => {
