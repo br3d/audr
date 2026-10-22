@@ -62,7 +62,7 @@ markers = [
     "integration: tests that require a live PostgreSQL database",
     "contract: tests that verify provider-interface contracts against fixtures",
 ]
-addopts = "-ra -q"
+addopts = "-ra -q --strict-markers"
 
 [tool.mypy]
 python_version = "3.14"

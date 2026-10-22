@@ -7,7 +7,11 @@ a column the dispatcher never writes. The value is now derived the same way
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from audr.api.settings import _next_due_at
+
+pytestmark = pytest.mark.unit
 
 
 def _call(**overrides: object) -> str | None:

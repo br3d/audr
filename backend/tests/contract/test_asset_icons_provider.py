@@ -39,11 +39,13 @@ def _fast_rate_limiter() -> RateLimiter:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.contract
 def test_trust_wallet_logo_url_checksums_contract_address() -> None:
     url = trust_wallet_logo_url(_USDC_LOWER)
     assert url == f"{_TRUST_WALLET_BASE}/assets/{_USDC_CHECKSUM}/logo.png"
 
 
+@pytest.mark.contract
 def test_trust_wallet_logo_url_native_eth_uses_info_path() -> None:
     url = trust_wallet_logo_url(_NATIVE_ETH)
     assert url == f"{_TRUST_WALLET_BASE}/info/logo.png"
