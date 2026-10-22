@@ -51,6 +51,52 @@ play, but no longer a step in shipping a workflow change. Before AUD-443 the hos
 copy won, and a forgotten sync silently ran a stale `deploy.yaml` that took the
 stand down for two hours.
 
+## A commit the gate refuses is retried, not forgotten (AUD-706)
+
+**A green `/health/ready` does not prove the stand is running `main`.** The old
+image answers it perfectly well.
+
+The mirror used to record the GitHub sha it had pushed the instant it pushed it,
+before any CI result existed, and then skip every later tick that saw the same
+sha. The deploy is a consequence of that push, not a precondition of the
+bookkeeping — so a commit whose suite went red, with `build-deploy` correctly
+`skipped` by the gate below, was bookmarked as shipped and never retried. It
+stayed undeployed until somebody merged something else. In AUD-701 the stand ran
+for hours on an image a *dispatch* run had built from a scratch branch, and the
+recovery was a human clearing `last-main-sha` by hand.
+
+So the mirror now compares what it mirrored against what actually deployed:
+
+| file under `~/.config/audr-mirror/` | written by |
+|---|---|
+| `mirrored-gitea-sha` | the mirror, when it pushes Gitea `main` |
+| `deployed-gitea-sha` | `deploy.yaml`'s success path, for `main` pushes only |
+
+If they disagree, the next tick re-mirrors the commit (a fresh Gitea commit, so
+the pipeline re-runs) up to `AUDR_MIRROR_DEPLOY_RETRIES` times — default 1 —
+and then raises **one** board alert under `--key main-undeployed` and stops. It
+does not keep rebuilding a genuinely red commit every 15 minutes, and it does
+not keep alerting. The alert closes itself on the first tick that sees main
+live again.
+
+To check by hand which state the host is in:
+
+    ssh "$AUDR_DEPLOY_HOST" 'cd .config/audr-mirror && tail -n1 last-main-sha mirrored-gitea-sha deployed-gitea-sha undeployed-state'
+    ssh "$AUDR_DEPLOY_HOST" '~/bin/audr-github-mirror.sh --decide'   # read-only; prints the decision
+
+`--decide` touches nothing: no fetch, no push, no state write. It prints one of
+`rebuild`, `deployed`, `retry`, `alert`, `waiting` or `bootstrap`.
+
+`bootstrap` means the host has no `mirrored-gitea-sha` yet — the state predates
+this mechanism, so the deploy state of the current commit is genuinely unknown
+and the mirror deliberately does nothing about it. The next `main` change records
+it and the check engages from then on. **Do not** clear `last-main-sha` to force
+it; that works, but it rebuilds a commit that is probably already live.
+
+If you want main redeployed for some other reason, that remains the lever:
+
+    ssh "$AUDR_DEPLOY_HOST" 'rm ~/.config/audr-mirror/last-main-sha && ~/bin/audr-github-mirror.sh'
+
 ## The test gate (AUD-687)
 
 `build-deploy` declares `needs: [lint, backend-tests, frontend-tests]`. Actions
