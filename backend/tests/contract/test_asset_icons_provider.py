@@ -21,7 +21,11 @@ from audr.providers.asset_icons import (
 
 _NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 _USDC_LOWER = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-_USDC_CHECKSUM = "0xA0b86991c6218b36c1d19D4A2e9Eb0cE3606eB48"
+# EIP-55 checksum of _USDC_LOWER, as produced by eth_utils and as actually
+# served by the Trust Wallet asset repo (the `D4A2` spelling this constant
+# carried until AUD-688 404s there). The test asserting it had never run: the
+# file lacked a suite marker, so the CI selector silently deselected it.
+_USDC_CHECKSUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 _TRUST_WALLET_BASE = (
     "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum"
 )
