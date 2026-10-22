@@ -1,15 +1,12 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import {
-  fetchAssets,
-  addManualAsset,
-  patchAsset,
-  ApiError,
-} from '../api/client'
+import { fetchAssets, addManualAsset, patchAsset } from '../api/client'
 import type { AssetItem } from '../api/client'
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconSearch, IconPlus, IconX } from '../components/Icons'
 import { boolField, stringField, useHashQueryState } from '../routing'
+import { queryKeys, invalidatePortfolioGroup } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 const ASSETS_SCHEMA = {
   q: stringField(''),
@@ -27,35 +24,38 @@ function AddManualAssetForm({
   const [contractAddress, setContractAddress] = useState('')
   const [decimalsOverride, setDecimalsOverride] = useState('')
   const [symbolOverride, setSymbolOverride] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    const address = contractAddress.trim()
-    if (!address) {
-      setError('Contract address is required.')
-      return
-    }
-    setSubmitting(true)
-    try {
-      await addManualAsset({
-        contract_address: address,
+  const addMutation = useMutation({
+    mutationFn: () =>
+      addManualAsset({
+        contract_address: contractAddress.trim(),
         decimals_override: decimalsOverride ? Number(decimalsOverride) : undefined,
         symbol_override: symbolOverride.trim() || undefined,
-      })
+      }),
+    onSuccess: () => {
       setContractAddress('')
       setDecimalsOverride('')
       setSymbolOverride('')
       onAdded()
       onClose()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
-    } finally {
-      setSubmitting(false)
+    },
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    if (!contractAddress.trim()) {
+      setValidationError('Contract address is required.')
+      return
     }
+    addMutation.mutate()
   }
+
+  const submitting = addMutation.isPending
+  const error =
+    validationError ??
+    (addMutation.error ? errorMessage(addMutation.error, 'An unexpected error occurred.') : null)
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Add manual contract">
@@ -137,41 +137,45 @@ function AssetRow({
   asset: AssetItem
   onChanged: () => void
 }) {
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
   const [decimalsInput, setDecimalsInput] = useState('')
   const [editingDecimals, setEditingDecimals] = useState(false)
 
-  async function handleToggleExclude() {
-    setError(null)
-    setSaving(true)
-    try {
-      await patchAsset(asset.id, { excluded: !asset.excluded })
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to update exclusion.')
-    } finally {
-      setSaving(false)
-    }
-  }
+  const toggleExcludeMutation = useMutation({
+    mutationFn: () => patchAsset(asset.id, { excluded: !asset.excluded }),
+    onSuccess: onChanged,
+  })
 
-  async function handleSaveDecimals(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    setSaving(true)
-    try {
-      await patchAsset(asset.id, {
+  const saveDecimalsMutation = useMutation({
+    mutationFn: () =>
+      patchAsset(asset.id, {
         decimals_override: Number(decimalsInput),
         confirm_metadata_override: true,
-      })
+      }),
+    onSuccess: () => {
       setEditingDecimals(false)
       onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to save decimals.')
-    } finally {
-      setSaving(false)
-    }
+    },
+  })
+
+  function handleToggleExclude() {
+    saveDecimalsMutation.reset()
+    toggleExcludeMutation.mutate()
   }
+
+  function handleSaveDecimals(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    toggleExcludeMutation.reset()
+    saveDecimalsMutation.mutate()
+  }
+
+  const saving = toggleExcludeMutation.isPending || saveDecimalsMutation.isPending
+  const failed = toggleExcludeMutation.error ? toggleExcludeMutation : saveDecimalsMutation.error ? saveDecimalsMutation : null
+  const error = failed
+    ? errorMessage(
+        failed.error,
+        failed === toggleExcludeMutation ? 'Failed to update exclusion.' : 'Failed to save decimals.',
+      )
+    : null
 
   return (
     <tr>
@@ -291,7 +295,7 @@ export default function AssetsPage() {
     fetchNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['assets', showExcluded, showAllCatalog],
+    queryKey: queryKeys.assets({ excluded: showExcluded, showAllCatalog }),
     queryFn: ({ pageParam }) =>
       fetchAssets({
         // Excluding an asset removes it from this list (AUD-447): the default
@@ -307,12 +311,10 @@ export default function AssetsPage() {
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
 
+  // Excluding here changes the portfolio total and the dashboard chart
+  // (AUD-447) — drop their caches so the dashboard is not stale on return.
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ['assets'] })
-    // Excluding here changes the portfolio total and the dashboard chart
-    // (AUD-447) — drop their caches so the dashboard is not stale on return.
-    void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-    void queryClient.invalidateQueries({ queryKey: ['history'] })
+    invalidatePortfolioGroup(queryClient)
   }
 
   // A just-added manual contract has no balance observation yet, so it is not
@@ -332,7 +334,7 @@ export default function AssetsPage() {
     return (
       <p role="alert" className="alert alert-danger">
         Failed to load assets.{' '}
-        {error instanceof ApiError ? error.message : 'Please try again.'}
+        {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
