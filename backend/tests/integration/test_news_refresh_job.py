@@ -142,13 +142,15 @@ async def _insert_feed(
     url: str,
     tier: str = "press",
     symbols: list[str] | None = None,
+    keep_pattern: str | None = None,
+    block_pattern: str | None = None,
 ) -> uuid.UUID:
     feed_id = uuid.uuid4()
     await session.execute(
         text(
             """
-            INSERT INTO news_feed (id, key, tier, url)
-            VALUES (:id, :key, :tier, :url)
+            INSERT INTO news_feed (id, key, tier, url, keep_pattern, block_pattern)
+            VALUES (:id, :key, :tier, :url, :keep_pattern, :block_pattern)
             """
         ),
         {
@@ -156,6 +158,8 @@ async def _insert_feed(
             "key": key,
             "tier": tier,
             "url": url,
+            "keep_pattern": keep_pattern,
+            "block_pattern": block_pattern,
         },
     )
     for symbol in symbols or []:
@@ -911,6 +915,142 @@ async def test_non_release_tier_keeps_announcement_about_a_beta(
 
 
 # ---------------------------------------------------------------------------
+# Feed-level keep/block patterns (AUD-655) — DB-sourced, any tier
+# ---------------------------------------------------------------------------
+
+
+async def test_feed_block_pattern_drops_matching_titles(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    await _insert_feed(
+        news_session,
+        key="project:ens-blog",
+        tier="project",
+        symbols=["ENS"],
+        url="https://example.com/ens-blog.xml",
+        block_pattern=r"sponsored",
+    )
+
+    body = _atom_many(
+        ("real", "ENS Name Wrapper v1.0", "https://example.com/real"),
+        ("ad", "Sponsored: win a free domain", "https://example.com/ad"),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens-blog.xml").mock(return_value=Response(200, content=body))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real"]
+
+
+async def test_feed_keep_pattern_drops_titles_that_fail_it(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    await _insert_feed(
+        news_session,
+        key="project:ens-blog",
+        tier="project",
+        symbols=["ENS"],
+        url="https://example.com/ens-blog.xml",
+        keep_pattern=r"release|upgrade",
+    )
+
+    body = _atom_many(
+        ("real", "ENS releases Name Wrapper v1.0", "https://example.com/real"),
+        ("offtopic", "Join our community call", "https://example.com/offtopic"),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens-blog.xml").mock(return_value=Response(200, content=body))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real"]
+
+
+async def test_feed_keep_and_block_patterns_combine(news_session: AsyncSession) -> None:
+    """A title must pass keep_pattern, and then survive block_pattern —
+    either one can drop it (AUD-655 req. 2)."""
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    await _insert_feed(
+        news_session,
+        key="project:ens-blog",
+        tier="project",
+        symbols=["ENS"],
+        url="https://example.com/ens-blog.xml",
+        keep_pattern=r"release|upgrade",
+        block_pattern=r"beta|rc",
+    )
+
+    body = _atom_many(
+        ("real", "ENS releases Name Wrapper v1.0", "https://example.com/real"),
+        ("offtopic", "Join our community call", "https://example.com/offtopic"),
+        ("prerelease", "ENS releases v1.1-beta upgrade", "https://example.com/prerelease"),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens-blog.xml").mock(return_value=Response(200, content=body))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real"]
+
+
+async def test_feed_with_broken_block_pattern_does_not_break_the_run(
+    news_session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A broken regex stored on a feed (AUD-655 req. 4) must not crash
+    `news_refresh` — the feed polls as if the rule were unset, logged so the
+    bad pattern is visible, and does not stop the next feed from polling."""
+    caplog.set_level("WARNING")
+    asset_id = await _hold_asset(news_session, symbol="ENS", name="Ethereum Name Service")
+    other_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ens-blog",
+        tier="project",
+        symbols=["ENS"],
+        url="https://example.com/ens-blog.xml",
+        block_pattern=r"(unclosed",
+    )
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://example.com/eth.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/ens-blog.xml").mock(
+            return_value=Response(
+                200,
+                content=_atom("real", "ENS Name Wrapper v1.0", "https://example.com/real"),
+            )
+        )
+        mock.get("https://example.com/eth.xml").mock(
+            return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    # The broken pattern is treated as unset, not as "drop everything".
+    assert [r["external_id"] for r in await _news_rows(news_session, asset_id=asset_id)] == ["real"]
+    # The next feed in the same run is unaffected.
+    assert [r["external_id"] for r in await _news_rows(news_session, asset_id=other_id)] == ["e1"]
+    assert "project:ens-blog" in caplog.text
+    assert "block" in caplog.text
+
+
+def _atom_many(*entries: tuple[str, str, str]) -> bytes:
+    updated = _RECENT.strftime("%Y-%m-%dT%H:%M:%SZ")
+    entries_xml = "".join(
+        f"<entry><id>{entry_id}</id><title>{title}</title>"
+        f'<link href="{url}" rel="alternate"/><updated>{updated}</updated></entry>'
+        for entry_id, title, url in entries
+    )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom">' + entries_xml + "</feed>"
+    ).encode()
+
+
+# ---------------------------------------------------------------------------
 # Aggregator tier — keyless Google News breadth-tier (AUD-654)
 # ---------------------------------------------------------------------------
 
@@ -972,6 +1112,9 @@ async def test_aggregator_tier_filters_evergreen_explainer_noise(
 ) -> None:
     """The live SUSHI measurement from the issue: the newest Google News row
     was an evergreen explainer, not news, and must never be ingested.
+
+    The rule itself is data now (AUD-655) — this feed's `block_pattern` is
+    the mechanism under test, not a code constant.
     """
     asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
     await _insert_feed(
@@ -980,6 +1123,7 @@ async def test_aggregator_tier_filters_evergreen_explainer_noise(
         tier="aggregator",
         symbols=["SUSHI"],
         url="https://example.com/aggregator-sushi.xml",
+        block_pattern=r"^(?:what\s+is|how\s+does)\b",
     )
 
     body = _rss(

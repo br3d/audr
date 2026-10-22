@@ -337,6 +337,7 @@ deleted, not disabled.
 | 2 | AUD-513 | Snapshot governance proposals for held protocols |
 | 3 | AUD-515 | Relevance allow-list, GDELT throttling, per-tier commits |
 | 4 | AUD-654 | `aggregator` tier — keyless Google News RSS, one feed per held symbol |
+| 5 | AUD-655 | `news_feed.keep_pattern`/`block_pattern` — feed-level noise rules move from code to data |
 
 Stage 3 was not in the original plan. It exists because the first staging run
 reproduced, in production data, exactly the keyword-ambiguity failure §3
@@ -366,7 +367,9 @@ typed against and silently misses a fresh database.
   `enabled`). Carries `etag`/`last_modified` for conditional GETs and
   `consecutive_failures`/`last_error` for health. `tier` is one of
   `project`, `release`, `press`, or `aggregator` (0039, AUD-654 — the
-  keyless Google News breadth tier, see below).
+  keyless Google News breadth tier, see below). `keep_pattern`/
+  `block_pattern` (0040, AUD-655) hold per-feed noise rules — see
+  "Feed-level keep/block rules" below.
 - **`news_feed_symbol`** — many-to-many `(feed_id, asset_symbol)` mapping
   (AUD-571). A feed with one or more rows here is attributed exactly:
   every item is inserted once per held asset whose symbol is mapped to that
@@ -610,11 +613,14 @@ Ingestion is the existing feed path end to end — conditional GET, `parse_feed`
   second one, scoped to the one symbol the feed was built for.
 - **Evergreen/SEO noise.** The newest row Google News served for SUSHI on
   2026-10-21 was "What Is SushiSwap and How Does It Work? — Binance" — a
-  perennial explainer, not news. `is_noisy_aggregator_title()` drops the
+  perennial explainer, not news. At the time this shipped, a backstop
+  constant (`is_noisy_aggregator_title()`) dropped the
   `What is / How does / How to / Price Prediction / (20xx)` family at
-  ingestion, the same backstop-constant shape as `is_noisy_release()`
-  (AUD-640). No data-driven noise registry exists yet — that is the next
-  step in the AUD-644 chain, not this one.
+  ingestion, the same shape as `is_noisy_release()` (AUD-640). AUD-655 moved
+  this rule to every `aggregator:*` feed's `block_pattern` — see
+  "Feed-level keep/block rules" below — and expanded it: the old pattern let
+  26% of a live 1836-row sample on this tier through as quote/converter spam
+  and a `Price Forecast` gap.
 
 `covered_asset_symbols()` now treats `aggregator` as coverage alongside
 `project`/`release`: a symbol with its own Google News feed does not also
@@ -622,6 +628,71 @@ burn one of GDELT's `_GDELT_MAX_QUERIES_PER_RUN` slots. In practice this
 tier supersedes GDELT as the breadth-of-last-resort for almost every held
 symbol; GDELT still runs for whatever 0039 did not seed (an asset acquired
 after the migration, until its own aggregator row is added).
+
+##### Feed-level keep/block rules (0040, AUD-655)
+
+Every noise rule before this one was a code change + a migration + a
+deploy: `is_noisy_release()` (AUD-640), the opt-in
+`project:polygon-forum-announcements` filter (AUD-640 reopened), and
+`is_noisy_aggregator_title()` (AUD-654). Each fixed one incident but left
+the next shape of noise waiting on another deploy — the wrong layer, since
+the noise is about one feed's data, not the application's logic. This is
+the mechanism Miniflux calls `keep`/`block` — ported as a mechanism, not
+Miniflux itself (the founder's call on AUD-644: the in-house collector
+stays).
+
+`news_feed.keep_pattern` and `news_feed.block_pattern` are nullable
+Python-regex text, checked in `jobs/news.py` at ingestion, in that order:
+
+1. If `keep_pattern` is set and the title does **not** match it, the item is
+   dropped. An allow-list — use it when a feed's signal shape is narrow and
+   easier to name than its noise.
+2. If `block_pattern` is set and the title matches it, the item is dropped.
+   A denylist — use it for a known noise shape on an otherwise-good feed.
+3. Passing both (or having neither configured) means the item survives this
+   check, except on the `release` tier: `is_noisy_release()` — package tags
+   and pre-release/test builds — still runs unconditionally after the
+   DB-sourced patterns and stays in code. Every other noise rule here was
+   already opt-in by key or by tier, so a column changes nothing about who
+   configures it; the release tier is not opt-in, and re-enabling a feed or
+   seeding a new one must not silently reintroduce its two worst shapes just
+   because nobody set `block_pattern` on it.
+
+Both patterns are compiled with `re.IGNORECASE` — do not hand-write `(?i)`
+into a pattern. A pattern that fails to compile (`re.error`) does not fail
+the poll: the feed runs as if that pattern were unset, a warning is logged
+(`news_refresh feed=<key> invalid keep_pattern|block_pattern ...`), and the
+run summary's `pattern_errors` counter goes up by one per bad pattern — read
+both before assuming a feed's rule is active.
+
+**Silencing noise on a feed without touching code:**
+
+```sql
+UPDATE news_feed SET block_pattern = 'sponsored|giveaway' WHERE key = 'press:example';
+```
+
+No redeploy, no migration — migrations are only for the *initial* value
+of a rule (so a fresh install starts with the same coverage this one has),
+not for every later tweak. Check the pattern against a few real titles from
+that feed's `asset_news` rows before writing it; `block_pattern` is a title
+regex, not a phrase match, so an unescaped `.` or `(` behaves like regex
+syntax, not a literal character.
+
+0040 moved the two pre-existing hardcodes into data this way: the
+prerelease half of the `project:polygon-forum-announcements` filter (the
+package-tag half never applied to a forum post, so it stayed out), and
+`is_noisy_aggregator_title()`'s pattern onto every `aggregator:*` feed,
+expanded with the `forecast` gap and the quote/converter-spam shapes
+(`Convert 0.1 PENDLE ... - Bybit`, `Price of Decentraland (MANA) today in
+EUR ... - Bit2Me`) measured live against the tier's 1836-row corpus. One
+of the added shapes is a judgement call, not a mechanical port: "ETH Price
+Forecast: Ethereum reclaims $2,500 as stocks rally - FXStreet" is dropped
+by the new pattern even though the headline names a real event, because an
+FXStreet-style daily forecast stream reads as recurring analysis rather
+than news on a portfolio card — a title-shape filter cannot tell market
+commentary from an actual development, and the trade favours quiet over a
+daily non-news line. Reopen it per feed with a narrower `block_pattern` if
+that trade is wrong for a given source.
 
 ### Adding a new holding to news coverage
 

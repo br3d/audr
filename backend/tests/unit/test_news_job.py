@@ -1,15 +1,17 @@
 """Unit tests for asset-news keyword matching (AUD-308), release-tier
-noise filtering (AUD-640), and aggregator-tier noise filtering (AUD-654)."""
+noise filtering (AUD-640), and the feed-level keep/block pattern mechanism
+(AUD-655)."""
 
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
 
 from audr.jobs.news import (
     HeldAsset,
-    is_noisy_aggregator_title,
+    _compile_feed_pattern,
     is_noisy_release,
     match_assets,
     should_drop_feed_item,
@@ -92,50 +94,106 @@ class TestIsNoisyRelease:
 
 @pytest.mark.unit
 class TestShouldDropFeedItem:
-    """Which feeds the filter applies to (AUD-640 reopened).
+    """The release-tier backstop, plus the DB-sourced keep/block patterns
+    (AUD-655) that replaced the per-key and per-tier hardcodes.
 
     Titles are the real ones on `forum.polygon.technology/c/announcements`,
     MATIC's source since 0038 retired `release:polygon-bor`.
     """
 
-    def test_release_tier_drops_package_tags_and_prereleases(self) -> None:
+    def test_release_tier_backstop_drops_package_tags_and_prereleases(self) -> None:
+        """Unconditional, even with no block_pattern configured on the feed —
+        this is the one filter AUD-655 kept in code (see should_drop_feed_item)."""
         for title in ("@ensdomains/ensjs@5.2.4", "v2.10.2-beta5"):
             assert should_drop_feed_item(tier="release", key="release:ensjs", title=title) is True
 
-    def test_release_shaped_project_feed_drops_testnet_builds(self) -> None:
+    def test_other_tiers_have_no_backstop(self) -> None:
+        """Only `release` gets the unconditional backstop; a project/press/
+        aggregator feed with no block_pattern drops nothing."""
+        for tier in ("project", "press", "aggregator"):
+            assert should_drop_feed_item(tier=tier, key="x", title="v2.10.2-beta5") is False
+
+    def test_block_pattern_drops_matching_titles(self) -> None:
+        block_re = re.compile(r"beta|rc", re.IGNORECASE)
         assert (
             should_drop_feed_item(
                 tier="project",
                 key="project:polygon-forum-announcements",
                 title="Heimdall-v2 v0.12.2-beta-2 (Amoy)",
+                block_re=block_re,
             )
             is True
         )
 
-    @pytest.mark.parametrize(
-        "title",
-        [
-            "Bor v2.10.3 Release Mainnet and Testnet POS",
-            "Security release review – Heimdall v0.12.1 (Lugano HF)",
-            "Polygon PoS RPC Incident — Post-Incident Summary",
-        ],
-    )
-    def test_real_announcements_survive_on_that_feed(self, title: str) -> None:
+    def test_block_pattern_keeps_non_matching_titles(self) -> None:
+        block_re = re.compile(r"beta|rc", re.IGNORECASE)
         assert (
             should_drop_feed_item(
-                tier="project", key="project:polygon-forum-announcements", title=title
+                tier="project",
+                key="project:polygon-forum-announcements",
+                title="Bor v2.10.3 Release Mainnet and Testnet POS",
+                block_re=block_re,
             )
             is False
         )
 
-    def test_other_project_feeds_keep_beta_announcements(self) -> None:
-        """A blog post about a beta is news; only release-shaped feeds are filtered."""
+    def test_keep_pattern_drops_non_matching_titles(self) -> None:
+        keep_re = re.compile(r"exploit|hack", re.IGNORECASE)
         assert (
-            should_drop_feed_item(tier="project", key="project:ens-blog", title="Our beta is live")
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="What Is SushiSwap and How Does It Work? — Binance",
+                keep_re=keep_re,
+            )
+            is True
+        )
+
+    def test_keep_pattern_keeps_matching_titles(self) -> None:
+        keep_re = re.compile(r"exploit|hack", re.IGNORECASE)
+        assert (
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="SushiSwap exploit drains $3M from liquidity pool",
+                keep_re=keep_re,
+            )
             is False
         )
 
-    def test_press_tier_is_never_filtered(self) -> None:
+    def test_keep_then_block_a_title_matching_keep_can_still_be_blocked(self) -> None:
+        """Order is keep, then block (AUD-655) — passing the allow-list does
+        not exempt a title from the block list."""
+        keep_re = re.compile(r"sushiswap", re.IGNORECASE)
+        block_re = re.compile(r"price prediction", re.IGNORECASE)
+        assert (
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="SushiSwap (SUSHI) Price Prediction 2026-2030",
+                keep_re=keep_re,
+                block_re=block_re,
+            )
+            is True
+        )
+
+    def test_keep_then_block_a_title_failing_keep_is_dropped_before_block_is_checked(
+        self,
+    ) -> None:
+        keep_re = re.compile(r"exploit", re.IGNORECASE)
+        block_re = re.compile(r"unmatchable-pattern")
+        assert (
+            should_drop_feed_item(
+                tier="aggregator",
+                key="aggregator:sushi",
+                title="Binance lists new SushiSwap trading pair",
+                keep_re=keep_re,
+                block_re=block_re,
+            )
+            is True
+        )
+
+    def test_press_tier_with_no_patterns_is_never_filtered(self) -> None:
         assert (
             should_drop_feed_item(
                 tier="press", key="press:coindesk", title="Alpha leak hits markets"
@@ -143,54 +201,35 @@ class TestShouldDropFeedItem:
             is False
         )
 
-    def test_aggregator_tier_drops_evergreen_explainers(self) -> None:
-        assert (
-            should_drop_feed_item(
-                tier="aggregator",
-                key="aggregator:sushi",
-                title="What Is SushiSwap and How Does It Work? — Binance",
-            )
-            is True
-        )
-
-    def test_aggregator_tier_keeps_real_news(self) -> None:
-        assert (
-            should_drop_feed_item(
-                tier="aggregator",
-                key="aggregator:sushi",
-                title="SushiSwap exploit drains $3M from liquidity pool",
-            )
-            is False
-        )
-
 
 @pytest.mark.unit
-class TestIsNoisyAggregatorTitle:
-    """Titles are the real one observed live for SUSHI on 2026-10-21, plus
-    the other shapes the issue calls out (AUD-654)."""
+class TestCompileFeedPattern:
+    """Compiling a feed's keep/block pattern must tolerate a broken regex
+    stored in the DB (AUD-655 req. 4) — a feed must keep polling without the
+    rule rather than fail the whole run."""
 
-    @pytest.mark.parametrize(
-        "title",
-        [
-            "What Is SushiSwap and How Does It Work? — Binance",
-            "What is Ethereum? A Beginner's Guide",
-            "How Does Uniswap Work? A Complete Guide",
-            "How to Buy SushiSwap (SUSHI) in 2026",
-            "SushiSwap (SUSHI) Price Prediction 2026-2030",
-            "Top Altcoins to Watch (2026)",
-        ],
-    )
-    def test_noise_is_filtered(self, title: str) -> None:
-        assert is_noisy_aggregator_title(title) is True
+    def test_none_pattern_compiles_to_none_with_no_error(self) -> None:
+        compiled, had_error = _compile_feed_pattern("aggregator:sushi", "block", None)
+        assert compiled is None
+        assert had_error is False
 
-    @pytest.mark.parametrize(
-        "title",
-        [
-            "SushiSwap exploit drains $3M from liquidity pool",
-            "SushiSwap ships v3 router upgrade",
-            "Binance lists new SushiSwap trading pair",
-            "Ethereum Name Service expands multi-chain resolution",
-        ],
-    )
-    def test_real_news_survives(self, title: str) -> None:
-        assert is_noisy_aggregator_title(title) is False
+    def test_valid_pattern_compiles(self) -> None:
+        compiled, had_error = _compile_feed_pattern("aggregator:sushi", "block", r"beta|rc")
+        assert had_error is False
+        assert compiled is not None
+        assert compiled.search("v2.10.2-beta5")
+
+    def test_valid_pattern_is_case_insensitive(self) -> None:
+        compiled, _had_error = _compile_feed_pattern("aggregator:sushi", "block", r"beta")
+        assert compiled is not None
+        assert compiled.search("BETA RELEASE")
+
+    def test_broken_pattern_does_not_raise_and_reports_the_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING")
+        compiled, had_error = _compile_feed_pattern("aggregator:sushi", "block", r"(unclosed")
+        assert compiled is None
+        assert had_error is True
+        assert "aggregator:sushi" in caplog.text
+        assert "block" in caplog.text
