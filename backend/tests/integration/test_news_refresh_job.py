@@ -31,6 +31,12 @@ def _no_gdelt_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(news_module, "_GDELT_QUERY_DELAY_S", 0)
 
 
+@pytest.fixture(autouse=True)
+def _no_hackernews_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the real inter-query delay (AUD-656) — same reason as GDELT's."""
+    monkeypatch.setattr(news_module, "_HN_QUERY_DELAY_S", 0)
+
+
 # A fixed recent-past date would silently fall outside the 90-day retention
 # window as the test suite ages, and handle_news_refresh prunes on every
 # call — a fixture dated "a day ago" would otherwise get inserted and
@@ -82,6 +88,27 @@ def _rss(*entries: tuple[str, str, str]) -> bytes:
         for guid, title, url in entries
     )
     return _RSS.format(items=items).encode()
+
+
+def _hn_hits(*entries: tuple[str, str, int, int]) -> dict:
+    """Build an Algolia `search_by_date` body from (objectID, title, points,
+    num_comments) tuples, all dated recent — what hn.algolia.com actually
+    serves (AUD-656).
+    """
+    created_at_i = int(_RECENT.timestamp())
+    return {
+        "hits": [
+            {
+                "objectID": object_id,
+                "title": title,
+                "url": f"https://example.com/hn/{object_id}",
+                "points": points,
+                "num_comments": num_comments,
+                "created_at_i": created_at_i,
+            }
+            for object_id, title, points, num_comments in entries
+        ]
+    }
 
 
 # The allow-list seed from migration 0026 — held assets outside this set
@@ -1230,6 +1257,296 @@ async def test_gdelt_not_queried_for_asset_with_aggregator_feed(
     with respx.mock(assert_all_called=False) as mock:
         mock.get("https://example.com/aggregator-sushi.xml").mock(
             return_value=Response(200, content=_rss())
+        )
+        gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
+            return_value=Response(200, json={"articles": []})
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert not gdelt_route.called
+
+
+async def test_hackernews_tier_inserts_matching_engaged_story(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    body = _hn_hits(("1", "SushiSwap exploit drains $3M from liquidity pool", 10, 4))
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["1"]
+    assert rows[0]["source"] == "hackernews"
+    assert rows[0]["news_site"] == "hackernews"
+
+
+async def test_hackernews_tier_drops_story_with_no_engagement(news_session: AsyncSession) -> None:
+    """The engagement gate (AUD-656 req. 3): a story sitting at its
+    submitter's own vote with zero comments is noise, not news.
+    """
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    body = _hn_hits(
+        ("flat", "SushiSwap integration announced", 1, 0),
+        ("engaged", "SushiSwap exploit drains $3M from liquidity pool", 1, 1),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["engaged"]
+
+
+async def test_hackernews_tier_drops_titles_that_do_not_mention_the_asset(
+    news_session: AsyncSession,
+) -> None:
+    """Relevance gate: Algolia's search is typo-tolerant, not attribution-exact
+    — a result that never says the symbol or the project name must not land
+    on the card.
+    """
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    body = _hn_hits(
+        ("on-topic", "SushiSwap ships v3 router upgrade", 20, 5),
+        ("off-topic", "Global markets rally on rate-cut hopes", 50, 10),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["on-topic"]
+
+
+async def test_hackernews_tier_block_pattern_drops_matching_titles(
+    news_session: AsyncSession,
+) -> None:
+    """Noise is data here, not code (AUD-656 req. — same mechanism as
+    AUD-655): a project-name collision an operator finds live is silenced
+    with `block_pattern`, no deploy required.
+    """
+    asset_id = await _hold_asset(news_session, symbol="MATIC", name="Polygon")
+    await _insert_feed(
+        news_session,
+        key="hackernews:matic",
+        tier="hackernews",
+        symbols=["MATIC"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22Polygon%22",
+        block_pattern=r"polygon\.com|polygon\s+(?:clipping|region|intersection)",
+    )
+
+    body = _hn_hits(
+        ("gaming-site", "Polygon.com launches new review format", 50, 20),
+        ("real", "Polygon network outage traced to validator bug", 15, 8),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in rows] == ["real"]
+
+
+async def test_hackernews_tier_dedupes_on_repoll(news_session: AsyncSession) -> None:
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    feed_id = await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    body = _hn_hits(("1", "SushiSwap exploit drains $3M from liquidity pool", 10, 4))
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    await news_session.execute(
+        text("UPDATE news_feed SET last_polled_at = now() - interval '1 day' WHERE id = :id"),
+        {"id": str(feed_id)},
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert len(await _news_rows(news_session, asset_id=asset_id)) == 1
+
+
+async def test_hackernews_tier_failure_does_not_break_other_feeds(
+    news_session: AsyncSession,
+) -> None:
+    sushi_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    weth_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    broken_id = await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://example.com/weth.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(return_value=Response(503))
+        mock.get("https://example.com/weth.xml").mock(
+            return_value=Response(200, content=_atom("e1", "Works", "https://example.com/1"))
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert await _news_rows(news_session, asset_id=sushi_id) == []
+    assert len(await _news_rows(news_session, asset_id=weth_id)) == 1
+    health = (
+        await news_session.execute(
+            text("SELECT consecutive_failures, last_error FROM news_feed WHERE id = :id"),
+            {"id": str(broken_id)},
+        )
+    ).one()
+    assert health[0] == 1
+    assert health[1] is not None
+
+
+async def test_hackernews_tier_capped_at_max_queries_per_run(news_session: AsyncSession) -> None:
+    """A fresh install (or a migration run) must not translate N held assets
+    into N sequential HN queries in one `news_refresh` call — same reasoning
+    as GDELT's cap (AUD-515 P1), applied to this tier's own budget constant.
+    """
+    symbols = [f"ZZ{i}" for i in range(news_module._HN_MAX_QUERIES_PER_RUN + 5)]
+    called_urls = []
+    with respx.mock(assert_all_called=False) as mock:
+        for i, symbol in enumerate(symbols):
+            await _hold_asset(news_session, symbol=symbol, name=f"Zorbcoin{i}")
+            url = f"https://hn.algolia.com/api/v1/search_by_date?query={symbol}"
+            await _insert_feed(
+                news_session,
+                key=f"hackernews:{symbol.lower()}",
+                tier="hackernews",
+                symbols=[symbol],
+                url=url,
+            )
+            route = mock.get(url).mock(return_value=Response(200, json=_hn_hits()))
+            called_urls.append((url, route))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    call_count = sum(1 for _url, route in called_urls if route.called)
+    assert call_count == news_module._HN_MAX_QUERIES_PER_RUN
+
+
+async def test_hackernews_tier_aborts_after_consecutive_429s(news_session: AsyncSession) -> None:
+    symbols = [f"ZZ{i}" for i in range(news_module._HN_MAX_CONSECUTIVE_429 + 3)]
+    routes = []
+    with respx.mock(assert_all_called=False) as mock:
+        for i, symbol in enumerate(symbols):
+            await _hold_asset(news_session, symbol=symbol, name=f"Zorbcoin{i}")
+            url = f"https://hn.algolia.com/api/v1/search_by_date?query={symbol}"
+            await _insert_feed(
+                news_session,
+                key=f"hackernews:{symbol.lower()}",
+                tier="hackernews",
+                symbols=[symbol],
+                url=url,
+            )
+            routes.append(mock.get(url).mock(return_value=Response(429)))
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    call_count = sum(1 for route in routes if route.called)
+    assert call_count == news_module._HN_MAX_CONSECUTIVE_429
+
+
+async def test_hackernews_items_older_than_retention_are_not_inserted(
+    news_session: AsyncSession,
+) -> None:
+    asset_id = await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    too_old = int((_RECENT - timedelta(days=200)).timestamp())
+    body = {
+        "hits": [
+            {
+                "objectID": "old",
+                "title": "SushiSwap launch announcement",
+                "url": "https://example.com/old",
+                "points": 50,
+                "num_comments": 20,
+                "created_at_i": too_old,
+            }
+        ]
+    }
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert await _news_rows(news_session, asset_id=asset_id) == []
+
+
+async def test_gdelt_not_queried_for_asset_with_hackernews_feed(
+    news_session: AsyncSession,
+) -> None:
+    """A hackernews feed is coverage too (same as the aggregator tier,
+    AUD-654 req. 6) — it must not also burn one of GDELT's scarce per-run
+    query slots for the same symbol.
+    """
+    await _hold_asset(news_session, symbol="SUSHI", name="SushiSwap")
+    await _track_asset(news_session, symbol="SUSHI")
+    await _insert_feed(
+        news_session,
+        key="hackernews:sushi",
+        tier="hackernews",
+        symbols=["SUSHI"],
+        url="https://hn.algolia.com/api/v1/search_by_date?query=%22SushiSwap%22",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://hn.algolia.com/api/v1/search_by_date").mock(
+            return_value=Response(200, json=_hn_hits())
         )
         gdelt_route = mock.get("https://api.gdeltproject.org/api/v2/doc/doc").mock(
             return_value=Response(200, json={"articles": []})
