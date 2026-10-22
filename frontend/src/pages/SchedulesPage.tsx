@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchSettings, patchSettings, ApiError } from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchSettings, patchSettings } from '../api/client'
 import type { SettingsResponse } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 function costWarning(
   intervalSeconds: number,
@@ -141,16 +143,37 @@ export default function SchedulesPage() {
   const queryClient = useQueryClient()
 
   const { data, error, isLoading } = useQuery({
-    queryKey: ['settings'],
+    queryKey: queryKeys.settings(),
     queryFn: fetchSettings,
   })
 
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [draft, setDraft] = useState<SettingsResponse | null>(null)
 
   const current = draft ?? data ?? null
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      // Send only the two fields this page owns. Echoing the whole GET payload
+      // back also sent next_due_at and a possibly stale freshness_seconds, and
+      // the server used to let the latter override interval_seconds (AUD-397).
+      // A row with no interval set comes back as interval_seconds: 0, which the
+      // server rejects with 422 — and the PATCH is all-or-nothing, so echoing it
+      // back would fail the whole save over a schedule this page doesn't manage.
+      const schedules = Object.fromEntries(
+        Object.entries(current!.schedules ?? {})
+          .filter(([, config]) => (config?.interval_seconds ?? 0) > 0)
+          .map(([kind, config]) => [
+            kind,
+            { enabled: config!.enabled, interval_seconds: config!.interval_seconds },
+          ]),
+      )
+      return patchSettings({ revision: data!.revision, schedules })
+    },
+    onSuccess: () => {
+      setDraft(null)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings() })
+    },
+  })
 
   function updateSchedule(
     kind: 'balances' | 'discovery' | 'quotes',
@@ -173,41 +196,20 @@ export default function SchedulesPage() {
         },
       },
     })
-    setSaveMsg(null)
-    setSaveError(null)
+    saveMutation.reset()
   }
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!current || !data) return
-    setSaveError(null)
-    setSaveMsg(null)
-    setSaving(true)
-    try {
-      // Send only the two fields this page owns. Echoing the whole GET payload
-      // back also sent next_due_at and a possibly stale freshness_seconds, and
-      // the server used to let the latter override interval_seconds (AUD-397).
-      // A row with no interval set comes back as interval_seconds: 0, which the
-      // server rejects with 422 — and the PATCH is all-or-nothing, so echoing it
-      // back would fail the whole save over a schedule this page doesn't manage.
-      const schedules = Object.fromEntries(
-        Object.entries(current.schedules ?? {})
-          .filter(([, config]) => (config?.interval_seconds ?? 0) > 0)
-          .map(([kind, config]) => [
-            kind,
-            { enabled: config!.enabled, interval_seconds: config!.interval_seconds },
-          ]),
-      )
-      await patchSettings({ revision: data.revision, schedules })
-      setSaveMsg('Schedule settings saved.')
-      setDraft(null)
-      void queryClient.invalidateQueries({ queryKey: ['settings'] })
-    } catch (err) {
-      setSaveError(err instanceof ApiError ? err.message : 'Failed to save settings.')
-    } finally {
-      setSaving(false)
-    }
+    saveMutation.mutate()
   }
+
+  const saving = saveMutation.isPending
+  const saveError = saveMutation.error
+    ? errorMessage(saveMutation.error, 'Failed to save settings.')
+    : null
+  const saveMsg = saveMutation.isSuccess ? 'Schedule settings saved.' : null
 
   if (isLoading) return <p aria-busy="true">Loading schedule settings…</p>
 
@@ -215,7 +217,7 @@ export default function SchedulesPage() {
     return (
       <p role="alert" className="alert alert-danger">
         Failed to load settings.{' '}
-        {error instanceof ApiError ? error.message : 'Please try again.'}
+        {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -303,8 +305,7 @@ export default function SchedulesPage() {
               className="btn btn-ghost"
               onClick={() => {
                 setDraft(null)
-                setSaveError(null)
-                setSaveMsg(null)
+                saveMutation.reset()
               }}
               disabled={saving}
             >

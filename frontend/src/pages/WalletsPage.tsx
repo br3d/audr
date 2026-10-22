@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fetchWallets, triggerJob, ApiError } from '../api/client'
+import { fetchWallets, triggerJob } from '../api/client'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import { errorMessage } from '../api/errorMessage'
@@ -69,7 +69,7 @@ export default function WalletsPage() {
     return (
       <p role="alert" className="alert alert-danger">
         Failed to load wallets.{' '}
-        {error instanceof ApiError ? error.message : 'Please try again.'}
+        {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
