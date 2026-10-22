@@ -916,9 +916,12 @@ describe('DashboardPage', () => {
       })
       await waitForRangeButtons(container)
       expect(container.querySelectorAll('.notice-item')).toHaveLength(0)
+      expect(container.querySelector('.notice-badge')).toBeNull()
       await unmount(container, root)
     })
 
+    // AUD-686: the explanations are collapsed behind a warning triangle, so
+    // nothing is in the DOM until the badge is opened.
     it('explains gap, stale, incomplete and invalidated points', async () => {
       mockFetchHistory.mockResolvedValue({
         ...HISTORY_WITH_ENTRIES,
@@ -935,6 +938,19 @@ describe('DashboardPage', () => {
         priced_subtotal_usd: '4000.00',
       })
       await waitForRangeButtons(container)
+
+      // Collapsed by default — no banner text eating chart space.
+      expect(container.querySelectorAll('.notice-item')).toHaveLength(0)
+      const trigger = container.querySelector<HTMLButtonElement>('.notice-badge-trigger')
+      expect(trigger).toBeTruthy()
+      expect(trigger?.getAttribute('aria-expanded')).toBe('false')
+      expect(trigger?.getAttribute('aria-label')).toContain('4 notices')
+
+      await act(async () => {
+        trigger?.click()
+      })
+      expect(trigger?.getAttribute('aria-expanded')).toBe('true')
+
       const notices = Array.from(container.querySelectorAll('.notice-item')).map(
         (n) => n.textContent ?? '',
       )

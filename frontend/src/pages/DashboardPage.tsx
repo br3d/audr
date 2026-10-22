@@ -12,6 +12,7 @@ import AllocationBar from '../components/AllocationBar'
 import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
 import ScanStatus from '../components/ScanStatus'
+import NoticeBadge from '../components/NoticeBadge'
 import EventRow from '../components/EventRow'
 import { shortenAddress } from '../portfolio/events'
 
@@ -31,43 +32,42 @@ const RANGE_OPTIONS: { value: HistoryPeriod; label: string }[] = [
 // AUD-455: moved over from the removed History page — the chart draws gap
 // markers and quality shading, but what those mean only reads as an
 // explanation in words next to it.
+// AUD-686: the explanations now live behind a warning triangle in the card
+// header instead of permanent banners above the chart.
 function HistoryQualityNotices({ points }: { points: HistoryPoint[] }) {
-  const hasGaps = points.some((p) => p.is_gap_marker)
-  const hasStale = points.some((p) => p.quality === 'stale')
-  const hasIncomplete = points.some((p) => p.quality === 'partial' || p.quality === 'gaps')
-  const hasInvalidated = points.some((p) => !p.is_canonical)
+  const notices: React.ReactNode[] = []
 
-  if (!hasGaps && !hasStale && !hasIncomplete && !hasInvalidated) return null
+  if (points.some((p) => p.is_gap_marker))
+    notices.push(
+      <>
+        This range contains gaps — periods where balance or price data was not
+        recorded. The chart shows gap markers.
+      </>,
+    )
+  if (points.some((p) => p.quality === 'stale'))
+    notices.push(
+      <>
+        Some points are marked <strong>stale</strong> — the underlying data had not been
+        refreshed within the normal interval.
+      </>,
+    )
+  if (points.some((p) => p.quality === 'partial' || p.quality === 'gaps'))
+    notices.push(
+      <>
+        Some points are marked <strong>incomplete</strong> — not all holdings had usable
+        balances and prices at that snapshot.
+      </>,
+    )
+  if (points.some((p) => !p.is_canonical))
+    notices.push(
+      <>
+        Some points are marked <strong>invalidated</strong> — they were recalculated
+        after a blockchain reorganization or a block that failed verification, and their
+        value is no longer considered current.
+      </>,
+    )
 
-  return (
-    <div className="notice-list mb-16">
-      {hasGaps && (
-        <p role="note" className="notice-item">
-          This range contains gaps — periods where balance or price data was not
-          recorded. The chart shows gap markers.
-        </p>
-      )}
-      {hasStale && (
-        <p role="note" className="notice-item">
-          Some points are marked <strong>stale</strong> — the underlying data had not
-          been refreshed within the normal interval.
-        </p>
-      )}
-      {hasIncomplete && (
-        <p role="note" className="notice-item">
-          Some points are marked <strong>incomplete</strong> — not all holdings had
-          usable balances and prices at that snapshot.
-        </p>
-      )}
-      {hasInvalidated && (
-        <p role="note" className="notice-item">
-          Some points are marked <strong>invalidated</strong> — they were recalculated
-          after a blockchain reorganization or a block that failed verification, and
-          their value is no longer considered current.
-        </p>
-      )}
-    </div>
-  )
+  return <NoticeBadge label="Chart data quality" notices={notices} />
 }
 
 function formatHuman(iso: string): string {
@@ -369,7 +369,10 @@ export default function DashboardPage({ setPage }: Props) {
             historyQuery.data.items.length > 0 && (
               <section aria-label="Portfolio value history" className="card mb-20">
                 <div className="card-header">
-                  <div className="card-title card-title-chart">Portfolio value</div>
+                  <div className="card-title card-title-chart">
+                    Portfolio value
+                    <HistoryQualityNotices points={historyQuery.data.items} />
+                  </div>
                   <div className="range-switcher" role="group" aria-label="History range">
                     {RANGE_OPTIONS.map((opt) => (
                       <button
@@ -384,7 +387,6 @@ export default function DashboardPage({ setPage }: Props) {
                     ))}
                   </div>
                 </div>
-                <HistoryQualityNotices points={historyQuery.data.items} />
                 <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
               </section>
             )}
