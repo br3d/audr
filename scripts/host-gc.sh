@@ -70,7 +70,8 @@ ESCALATE_CACHE_MAX_AGE="${ESCALATE_CACHE_MAX_AGE:-6h}"
 ESCALATE_IMAGE_KEEP_COUNT="${ESCALATE_IMAGE_KEEP_COUNT:-2}"
 # ci.yaml names its compose project `audr-test-ci-<run>-<attempt>`, so the test
 # images it builds are unique per run and can never be a cache hit for a later
-# one. ci.yaml deletes its own at teardown; this window only has to cover the
+# one. deploy.yaml's backend-tests job deletes its own at teardown; this window
+# only has to cover the
 # case where the runner was killed before that step ran, so it is short.
 TEST_IMAGE_MAX_AGE_HOURS="${TEST_IMAGE_MAX_AGE_HOURS:-6}"
 

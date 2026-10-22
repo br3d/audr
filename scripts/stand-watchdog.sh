@@ -83,7 +83,7 @@ BACKUP_KEY="${AUDR_BACKUP_ALERT_KEY:-backup-stale}"
 # scripts/host-gc.sh already measures this and already has two escalating WARN
 # paths for it — "root filesystem still at N% after GC" and the much worse
 # "Docker is no longer the thing filling this disk". Both only `echo`. host-gc
-# runs as an `if: always()` step inside build.yaml/ci.yaml, so that output lands
+# runs as an `if: always()` step inside build.yaml/deploy.yaml, so that output lands
 # in a Gitea job log, and Act Runner's journal carries only its own meta lines:
 # `journalctl -u act_runner | grep host-gc` returns nothing even for runs that
 # did prune. Nobody reads a job log on a green deploy, so the most serious

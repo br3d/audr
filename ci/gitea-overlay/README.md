@@ -2,9 +2,25 @@
 
 The audr build/test/deploy pipeline runs on **Gitea Actions**, not GitHub Actions.
 GitHub `br3d/audr` is the canonical repo; a one-way mirror on the deploy host
-replays it into Gitea `dfbot/audr` and, for `main` only, bakes the three workflow
+replays it into Gitea `dfbot/audr` and, for `main` only, bakes the workflow
 files in this directory into the mirrored commit as `.gitea/workflows/`, reading
 them straight out of that commit. See `docs/deploy-runbook.md`.
+
+There are two of them, and the split is by trigger, not by phase:
+
+| File | Trigger | What it does |
+|---|---|---|
+| `deploy.yaml` | push to `main`, `v*` tags, `workflow_dispatch` | `lint` + `backend-tests` + `frontend-tests`, then a `build-deploy` job that `needs:` all three. The whole delivery pipeline, test gate included (AUD-687). |
+| `build.yaml` | `workflow_dispatch` only | Builds and pushes an image without deploying it. |
+
+`ci.yaml` is gone. It held those three test jobs and fired on the same
+`push: main` as `deploy.yaml` with no ordering relation to it, which made the
+test suite advisory: the deploy migrated the live database beside it. The jobs
+moved verbatim into `deploy.yaml`, where `needs:` is what the suite's verdict
+actually means. **A deleted workflow must also be deleted from the host
+fallback** (`~/.config/audr-mirror/overlay/.gitea/workflows/`) or the mirror goes
+on baking it in — `scripts/sync-ci-overlay.sh` now reports and removes host-only
+files for exactly this reason.
 
 The public GitHub-side workflows are a separate, non-deploying thing — the test
 gate behind the README badges and a manual container release. They are described
@@ -15,8 +31,8 @@ the mirror from replaying them on this runner.
 
 The mirror pushes every branch **except** `main` verbatim. If `.gitea/workflows/`
 were tracked upstream, Gitea would find workflows on every long-stale branch the
-mirror syncs and start replaying the full suite for each of them. `ci.yaml`
-documents this hazard inline. Keeping the files under
+mirror syncs and start replaying the full suite for each of them. `deploy.yaml`
+documents this hazard inline, as do the GitHub-side workflows. Keeping the files under
 `ci/gitea-overlay/workflows/` gets them versioned, reviewable and diffable
 without ever becoming a live trigger path.
 

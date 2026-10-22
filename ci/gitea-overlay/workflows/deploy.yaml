@@ -1,9 +1,39 @@
-name: Build & Deploy (guarded)
+name: Test, Build & Deploy (guarded)
 
-# Guarded build + auto-deploy pipeline for the audr stack.
+# Guarded test + build + auto-deploy pipeline for the audr stack.
 #
-# One serialized job on the self-hosted `host` runner, which is also the deploy
-# host. Build and deploy live in ONE job so ordering and image
+# The test suite is IN THIS FILE, as three jobs the deploy `needs:`. That is the
+# whole point of AUD-687: until then the suite lived in a separate `ci.yaml`
+# triggered by the same `push: main`, with no ordering relation to this
+# workflow, so a merge to main ran `alembic upgrade head` against the live
+# database concurrently with — or before — the tests that were supposed to
+# authorize it. The only real gate was human discipline at merge time, while
+# docs/engineering-workflow.md described an approval the trigger contradicted.
+#
+# Why `needs:` in one workflow rather than a cross-workflow dependency:
+#
+#   * `workflow_run` would run the deploy against the *default branch's* copy of
+#     the workflow and gives no supported way to gate the `v*` tag and
+#     `workflow_dispatch` paths, which carry no ci.yaml run to depend on at all.
+#   * A gate step that polls Gitea's API for ci.yaml's conclusion on the same sha
+#     needs a token in a public workflow file, and — worse — would deadlock on
+#     this very runner: the `host` runner has capacity 2, so two queued deploys
+#     polling for test jobs that need the same two slots would wait for each
+#     other until the timeout.
+#   * `needs:` is plain, act_runner-native job ordering with no token, no polling
+#     and no second run to correlate. It is also already the argument this file
+#     makes for keeping build and deploy in ONE job (below).
+#
+# Consequences, deliberately accepted:
+#
+#   * The `concurrency` group now covers the test jobs too, so the suite runs
+#     under the deploy lock and a second push queues behind the whole pipeline.
+#     That is the conservative direction: queued, never interleaved.
+#   * There is no test-bypass input. A dispatch deploy runs the suite like any
+#     other. The emergency path that skips it is the host-side manual deploy in
+#     docs/deploy-runbook.md, which is a deliberate human act and logged as one.
+#
+# Build and deploy live in ONE job so ordering and image
 # freshness are guaranteed — no cross-workflow race.
 #
 # The runner has capacity 2, so serialization does not come for free: two pushes
@@ -55,7 +85,8 @@ name: Build & Deploy (guarded)
 #      a failed deploy never leaves a poisoned :latest behind.
 #
 # Triggers: push to main (guarded auto-deploy), release tags v*, and manual
-# workflow_dispatch.
+# workflow_dispatch. All three run the test jobs first; none of them can reach
+# the migration step with a red suite.
 #
 # The registry endpoint is NOT in this file: the GitHub repository is public, so
 # it lives in the Gitea repository variable `AUDR_REGISTRY` (Settings → Actions →
@@ -84,8 +115,132 @@ env:
   DEPLOY_DIR: /home/codex/audr
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # The test gate. These three jobs were `ci.yaml` until AUD-687; they are
+  # unchanged apart from living here, where `build-deploy` can depend on them.
+  #
+  # Pre-merge coverage for branches and pull requests is NOT this file's job and
+  # never was: the mirror pushes every branch except main verbatim, without any
+  # `.gitea/workflows`, and opens no pull requests — so a `pull_request` trigger
+  # on the Gitea side is inert by construction (see .github/workflows/tests.yml,
+  # which is the gate a contributor actually gets, on GitHub's runners).
+  # ---------------------------------------------------------------------------
+  lint:
+    # Python lint gate: the full rule set from backend/pyproject.toml and
+    # ruff.toml, plus format --check, both in backend/ and at the repo root
+    # (scripts/). Every noqa in the tree carries a reason.
+    #
+    # The ruff version is pinned here and in `backend/pyproject.toml` dev
+    # extras, and the two must stay in sync — an unpinned ruff makes the gate's
+    # verdict depend on the day it ran.
+    runs-on: host
+    steps:
+      - uses: actions/checkout@v4
+      - name: ruff check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 check --no-cache .
+      - name: ruff format --check — backend
+        run: docker run --rm -v "$PWD:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache .
+      - name: ruff check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 check --no-cache scripts/
+      - name: ruff format --check — scripts
+        run: docker run --rm -v "$PWD:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache scripts/
+      - name: scripts/ must parse on the oldest python3 we run them under
+        # `scripts/*.py` are invoked as `python3 scripts/foo.py` from a host
+        # shell, not inside the 3.14 image, so they must not use 3.14-only
+        # syntax — PEP 758 `except A, B:`, for instance, compiles on 3.14 and
+        # fails here, which is exactly what this gate is for.
+        #
+        # compile() in memory rather than `compileall`: this runner is
+        # self-hosted and its checkout persists between runs, so a step that
+        # writes `__pycache__/` as the container's root user leaves root-owned
+        # untracked files behind — `__pycache__` is not in `.gitignore`, and the
+        # next `actions/checkout` cleanup cannot remove them.
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w python:3.13-slim python -c '
+          import pathlib, sys
+          paths = sorted(pathlib.Path("scripts").rglob("*.py"))
+          bad = 0
+          for p in paths:
+              try:
+                  compile(p.read_text(), str(p), "exec")
+              except SyntaxError as exc:
+                  print(f"{p}:{exc.lineno}: {exc.msg}", file=sys.stderr)
+                  bad += 1
+          print(f"checked {len(paths)} files under python {sys.version.split()[0]}")
+          sys.exit(1 if bad else 0)
+          '
+
+  backend-tests:
+    runs-on: host
+    env:
+      # compose.test.yaml declares the fixed project name `audr-test`, so every
+      # `docker compose -f compose.test.yaml` invocation on this host shares the
+      # same containers, volumes and `audr-test_test-net` network. A concurrent
+      # local run — or a second CI job, since the runner has capacity 2 —
+      # therefore collides, and either side's `down -v --remove-orphans`
+      # destroys the other's database mid-run, which shows up as a red suite on
+      # a sha that is green on the next run with no code change. Namespace the
+      # stack per run so runs cannot see each other.
+      COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backend unit + integration tests (compose)
+        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build backend-tests
+      - name: Teardown
+        if: always()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml down -v --remove-orphans
+          # Per-run project names mean a killed runner leaks a network, and the
+          # default Docker address pool only holds a few dozen bridges. Reap
+          # leftovers from earlier runs: `docker network rm` refuses a network
+          # that still has a container attached, so a live concurrent run is
+          # never disturbed.
+          for net in $(docker network ls --filter 'name=^audr-test-' --format '{{.Name}}'); do
+            docker network rm "$net" >/dev/null 2>&1 || true
+          done
+          # `down` removes containers, volumes and networks but NOT the images
+          # compose just built. Because the project name is unique per run, those
+          # images (`$COMPOSE_PROJECT-backend-tests`, `-migrate-test`, ~1GB a run)
+          # can never be a cache hit for any later run — they are garbage the
+          # moment this job ends. Left to scripts/host-gc.sh they would survive
+          # its 48h retention window, and at ~1GB per CI run that is the
+          # dominant source of disk growth on the runner. Delete them here, at
+          # the source. Scoped to this run's own project name, so a
+          # concurrent CI job on the other runner slot is untouched.
+          imgs="$(docker images --filter "reference=${COMPOSE_PROJECT}-*" -q | sort -u)"
+          if [ -n "$imgs" ]; then
+            # shellcheck disable=SC2086
+            docker image rm -f $imgs >/dev/null 2>&1 || true
+          fi
+
+  frontend-tests:
+    # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match
+    # the project's build toolchain (native rolldown/vite bindings need Node 22).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Frontend tests (vitest)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run test
+
   build-deploy:
     runs-on: host
+    # THE GATE. Nothing below this line runs — no image build, no
+    # `alembic upgrade head`, no container recreate — unless all three test jobs
+    # above concluded successfully for this exact commit. A failed or cancelled
+    # dependency leaves this job `skipped`, which is the evidence AUD-687 asked
+    # for: the live database is never touched by a red commit.
+    #
+    # Do NOT add `if: always()` or `|| success()` style escapes here, and do not
+    # relax this to a subset of the three. A flaky job is a job to fix, not a
+    # dependency to drop; the bypass for a genuine emergency is the manual
+    # host-side deploy in docs/deploy-runbook.md.
+    needs: [lint, backend-tests, frontend-tests]
     steps:
       - uses: actions/checkout@v4
 

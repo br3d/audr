@@ -326,7 +326,7 @@ in the CI `lint` job in sync.
 
 ### What CI actually gates
 
-The `lint` job in `ci/gitea-overlay/workflows/ci.yaml` runs the full rule set
+The `lint` job in `ci/gitea-overlay/workflows/deploy.yaml` runs the full rule set
 (`ruff check`) and `ruff format --check`, both in `backend/` and at the repo
 root (`scripts/`), plus the `scripts/` 3.13 compile check. Every `noqa` in the
 tree carries a reason — see AUD-393.
@@ -417,9 +417,10 @@ The authoritative pipeline is **Gitea Actions**, and the files that run are
 `ci/gitea-overlay/workflows/` in this repo — the mirror reads them out of the
 `main` commit and bakes them in as `.gitea/workflows/` (they are deliberately not
 tracked there, so the mirror does not replay the suite for every stale branch).
-Editing one and pushing to `main` is all that is needed. `ci.yaml` runs the
-backend and frontend suites on push to `main`; `deploy.yaml` is a single
-serialized, guarded build-and-deploy job. Read
+Editing one and pushing to `main` is all that is needed. `deploy.yaml` runs the
+lint, backend and frontend jobs on push to `main` and then a single serialized,
+guarded `build-deploy` job that `needs:` all three — a red suite means no
+deploy, not a race with one (AUD-687). Read
 [deploy-runbook.md](deploy-runbook.md) before touching either.
 
 The shell scripts are the manual fallback:

@@ -55,6 +55,24 @@ for path in "$SRC"/*.yaml; do
   fi
 done
 
+# The other direction, and the dangerous one. A workflow the repo has DELETED is
+# still live if the host copy survives: the mirror only skips host files the
+# commit also carries, so a leftover is baked into `.gitea/workflows/` and keeps
+# firing — a workflow nobody can find by reading the repository. AUD-687 removed
+# ci.yaml (its jobs moved into deploy.yaml as the deploy's `needs:` gate), and a
+# surviving host ci.yaml would have gone on running the suite as a second,
+# ungated workflow: exactly the state the issue existed to end.
+stale=""
+for path in "$fetched"/*.yaml; do
+  [ -e "$path" ] || continue
+  f="$(basename "$path")"
+  if [ ! -f "$SRC/$f" ]; then
+    echo "== $f: on host but DELETED from the repo — the mirror still bakes it in"
+    stale="$stale $f"
+    drift=1
+  fi
+done
+
 if [ "$drift" -eq 0 ]; then
   echo "==> overlay in sync"
   exit 0
@@ -77,6 +95,13 @@ echo "==> host copies backed up to ~/.config/audr-mirror/archive/overlay-$stamp"
 
 scp -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
   "$SRC"/*.yaml "$HOST:$REMOTE_DIR/"
+
+# Deletions too — see the stale-file note above. The timestamped backup taken a
+# moment ago holds a copy, so this is recoverable.
+for f in $stale; do
+  "${SSH[@]}" "rm -f -- '$REMOTE_DIR/$f'"
+  echo "==> removed stale host-only workflow $f (archived in overlay-$stamp)"
+done
 echo "==> pushed. The next audr-mirror.timer tick (every 15m) rebuilds Gitea main"
 echo "    only if GitHub main also moved — force a rebuild with:"
 echo "    ssh $HOST 'rm ~/.config/audr-mirror/last-main-sha && ~/bin/audr-github-mirror.sh'"

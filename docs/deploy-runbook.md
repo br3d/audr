@@ -7,7 +7,15 @@ untracked `deploy.env` at the repo root (copy `deploy.env.example`) or from the
 environment, and the CI workflows read the registry from the Gitea repository
 variable `AUDR_REGISTRY`.
 
-The deploy pipeline is a single guarded Gitea Actions job, `.gitea/workflows/deploy.yaml`.
+The deploy pipeline is one guarded Gitea Actions workflow, `.gitea/workflows/deploy.yaml`:
+three test jobs (`lint`, `backend-tests`, `frontend-tests`) and a single
+serialized `build-deploy` job that `needs:` all three. A red suite leaves
+`build-deploy` *skipped*, so no commit that fails its tests ever reaches
+`alembic upgrade head` on the live database. Those test jobs were a separate
+`ci.yaml` until AUD-687, where the two workflows shared a `push: main` trigger
+and nothing ordered them, so the migration could run beside or ahead of the
+suite that was meant to authorize it. See "The test gate" below.
+
 The file you edit is `ci/gitea-overlay/workflows/deploy.yaml` in this repository,
 and it is the copy that **runs**: `~/bin/audr-github-mirror.sh` reads it out of
 the GitHub `main` commit it is mirroring and bakes it into the Gitea `main` commit
@@ -42,6 +50,43 @@ exits 1 on a difference — worth running if you suspect a host-only file is in
 play, but no longer a step in shipping a workflow change. Before AUD-443 the host
 copy won, and a forgotten sync silently ran a stale `deploy.yaml` that took the
 stand down for two hours.
+
+## The test gate (AUD-687)
+
+`build-deploy` declares `needs: [lint, backend-tests, frontend-tests]`. Actions
+does not start a job whose dependency failed or was cancelled, so the three
+outcomes are:
+
+| Suite on this commit | `build-deploy` | Live database |
+|---|---|---|
+| all three green | runs | migrated, deployed, health-gated |
+| any job red | **skipped** | untouched — `alembic upgrade head` is never reached |
+| any job cancelled | skipped | untouched |
+
+It is a single workflow rather than a dependency between two, and the reasons
+are in the file's header: `workflow_run` resolves the workflow from the default
+branch and leaves the `v*` tag and `workflow_dispatch` paths with no run to
+depend on, while a gate step polling Gitea's API for another run's conclusion
+would need a token in a public file and can *deadlock* on this host — the `host`
+runner has capacity 2, so two queued deploys polling for test jobs that need
+those same two slots wait for each other until the timeout.
+
+Two consequences worth knowing before you wait on a deploy:
+
+- The `audr-deploy` concurrency group now covers the test jobs too, so a second
+  push to `main` queues behind the whole pipeline (tests included) rather than
+  interleaving with it. Deploys were already serialized; the suite now is too.
+- **There is no bypass input.** `workflow_dispatch` runs the suite like every
+  other trigger. If you need to ship with a red or unrunnable suite — an
+  incident, not a release — use the manual path in
+  [Deploying by hand](#deploying-by-hand-with-scriptsdeploysh) below, which is a
+  deliberate human act with your name on it.
+
+Reading a gated run: the run's conclusion is `failure`, and `build-deploy`
+reports `skipped` with no steps. Nothing was built, nothing was pushed to the
+registry, `~/audr/.env` still pins the previous `BACKEND_TAG`, and
+`select version_num from alembic_version` is unchanged. There is no rollback to
+perform, because there was no deploy.
 
 ## Invariants the pipeline depends on
 
@@ -849,7 +894,8 @@ considers an image a running container references.
 
 ### CI test images are the other accumulator
 
-Release images are not the only thing that grows. `ci.yaml` namespaces its
+Release images are not the only thing that grows. The `backend-tests` job in
+`deploy.yaml` namespaces its
 compose project per run (`audr-test-ci-<run>-<attempt>`, from AUD-310, so
 concurrent runs cannot destroy each other's database), which means the images
 compose builds are named per run too — about 1GB of `-backend-tests` plus
@@ -860,7 +906,7 @@ down -v` removes containers, volumes and networks but *not* images. Under the
 measurement after the GC step shipped found 27 such images from 16 past runs
 still resident, and CI pushed the host from 44% to 60% in a couple of hours.
 
-So they are deleted at the source: `ci.yaml`'s teardown step removes the images
+So they are deleted at the source: the `backend-tests` teardown step removes the images
 matching its own `$COMPOSE_PROJECT-*` — scoped to that run, so a concurrent CI
 job on the other runner slot is untouched. `host-gc.sh` then reaps any
 `audr-test-ci-*` image older than `TEST_IMAGE_MAX_AGE_HOURS` (default 6) as a

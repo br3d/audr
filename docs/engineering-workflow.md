@@ -131,8 +131,31 @@ push to `main`.
 
 ## Production deploys
 
-Merging to `main` needs no founder approval. Deploying to production still does, per the
-guarded deploy pipeline.
+Merging to `main` needs no founder approval, and **a merge to `main` deploys to the
+staging stand automatically** — `ci/gitea-overlay/workflows/deploy.yaml` triggers on
+`push: main`. Nobody presses a button, and no approval step stands between a merge and
+`alembic upgrade head`. Treat the merge itself as the deploy decision.
+
+What *does* gate it is the test suite, mechanically. That workflow runs `lint`,
+`backend-tests` and `frontend-tests` first, and its `build-deploy` job declares
+`needs:` on all three, so a commit whose suite is red leaves `build-deploy` **skipped**:
+no image, no migration, no container recreate, previous release still serving. Until
+AUD-687 the suite lived in a separate workflow on the same trigger with nothing ordering
+the two, and this section claimed an approval that `on: push` contradicted.
+
+So, before merging:
+
+- run `./scripts/test.sh` locally — the gate will run it anyway, and finding out from the
+  pipeline costs the whole queue a cycle;
+- expect the stand to be on your commit within ~20 minutes (mirror tick up to 15 min,
+  then tests + deploy);
+- a second merge during that window queues behind the whole pipeline — the `audr-deploy`
+  concurrency group covers the test jobs too.
+
+Releases (`vX.Y.Z` tags) and manual `workflow_dispatch` runs pass through the same gate;
+there is no bypass input. The only path that skips the suite is a hand-run
+`scripts/deploy.sh` on the host, which is an incident response and documented as one in
+[deploy-runbook.md](deploy-runbook.md#the-test-gate-aud-687).
 
 ## Versioning
 

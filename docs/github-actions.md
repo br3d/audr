@@ -14,7 +14,8 @@ The Gitea pipeline stays the authority over what is deployed. Nothing in
 
 Runs on **pushes to `main`**, on **pull requests**, and on demand from
 `release.yml` via `workflow_call`. Three jobs, each mirroring its counterpart in
-`ci/gitea-overlay/workflows/ci.yaml`:
+the Gitea pipeline's test gate — the `lint`/`backend-tests`/`frontend-tests` jobs
+that `ci/gitea-overlay/workflows/deploy.yaml` makes its deploy depend on:
 
 - `lint` — the full ruff rule set plus `format --check`, over `backend/` and
   `scripts/`. Pinned to `ghcr.io/astral-sh/ruff:0.16.10`; that pin must move
@@ -224,7 +225,8 @@ Two pins are held back on purpose, and the config says why in place:
 
 - **`ruff`** is ignored outright. The pin is what makes "formatted" mean one
   thing (AUD-392), and moving it is a three-file edit — `backend/pyproject.toml`
-  plus the image pin in both `tests.yml` and `ci/gitea-overlay/workflows/ci.yaml`.
+  plus the image pin in both `tests.yml` and
+  `ci/gitea-overlay/workflows/deploy.yaml`.
   A bump touching only the first turns lint red for a reason no changelog
   explains.
 - **`sqlalchemy`** takes patches only. The 2.0.x series is a decision in
