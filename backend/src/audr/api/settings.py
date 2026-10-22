@@ -29,7 +29,9 @@ from audr.operations.exports import (
 from audr.operations.purge import execute_purge, preview_purge
 from audr.settings.schedules import (
     RevisionConflictError,
+    get_max_revision,
     get_schedule,
+    list_schedules,
     pause_schedule,
     resume_schedule,
     update_schedule,
@@ -198,26 +200,6 @@ class TriggerJobInput(BaseModel):
 # Internal helpers — kept for per-kind schedule CRUD routes
 # ---------------------------------------------------------------------------
 
-_SELECT_SCHEDULE_COLS = """
-    id, kind, enabled, revision, paused_at,
-    freshness_s, budget_calls_per_day, last_run_at, next_run_at, updated_at
-"""
-
-
-# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
-# there is no narrower static type for an ad-hoc `sa.text()` result.
-def _row_to_schedule_read(row: Any) -> ScheduleRead:  # noqa: ANN401 — row is a positional SQLAlchemy Row, indexed by column position; no narrower static type for an ad-hoc sa.text() result
-    return ScheduleRead(
-        kind=row[1],
-        enabled=row[2],
-        paused=row[4] is not None,
-        revision=row[3],
-        freshness_s=row[5],
-        budget_calls_per_day=row[6],
-        last_run_at=row[7],
-        next_run_at=row[8],
-    )
-
 
 def _dict_to_schedule_read(d: dict) -> ScheduleRead:  # type: ignore[type-arg]
     return ScheduleRead(
@@ -260,16 +242,14 @@ def _next_due_at(
     return (last_run_at + timedelta(seconds=freshness_s)).isoformat()
 
 
-# ANN401: row is a positional SQLAlchemy Row, indexed by column position below;
-# there is no narrower static type for an ad-hoc `sa.text()` result.
-def _row_to_schedule_config(row: Any) -> tuple[str, ScheduleConfig]:  # noqa: ANN401 — row is a positional SQLAlchemy Row, indexed by column position; no narrower static type for an ad-hoc sa.text() result
-    """Return (frontend_kind, ScheduleConfig) from a schedule table row."""
-    kind_db: str = row[1]
-    enabled: bool = row[2]
-    paused_at: datetime | None = row[4]
-    freshness_s: int | None = row[5]
-    last_run_at: datetime | None = row[7]
-    next_run_at: datetime | None = row[8]
+def _dict_to_schedule_config(d: dict) -> tuple[str, ScheduleConfig]:  # type: ignore[type-arg]
+    """Return (frontend_kind, ScheduleConfig) from a schedule row dict."""
+    kind_db: str = d["kind"]
+    enabled: bool = d["enabled"]
+    paused_at: datetime | None = d["paused_at"]
+    freshness_s: int | None = d["freshness_s"]
+    last_run_at: datetime | None = d["last_run_at"]
+    next_run_at: datetime | None = d["next_run_at"]
 
     kind_fe = _DB_TO_FE.get(kind_db, kind_db)
     next_due = _next_due_at(
@@ -316,19 +296,14 @@ def _map_job_row(row: Any) -> JobRunResponse:  # noqa: ANN401 — row is a posit
 
 async def _query_settings_response(db: AsyncSession) -> SettingsResponse:
     """Build the SettingsResponse from the current schedule table state."""
-    result = await db.execute(
-        # _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated.
-        sa.text(f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule ORDER BY kind")  # noqa: S608 — _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated
-    )
-    rows = result.fetchall()
+    rows = await list_schedules(db)
 
     schedules: dict[str, ScheduleConfig] = {}
     max_revision = 0
     for row in rows:
-        revision: int = row[3]
-        kind_fe, config = _row_to_schedule_config(row)
+        kind_fe, config = _dict_to_schedule_config(row)
         schedules[kind_fe] = config
-        max_revision = max(max_revision, revision)
+        max_revision = max(max_revision, row["revision"])
 
     return SettingsResponse(revision=str(max_revision), schedules=schedules)
 
@@ -354,9 +329,7 @@ async def patch_settings(
     db: AsyncSession = Depends(get_db),
 ) -> SettingsResponse:
     """Update schedule settings (optimistic-lock on revision)."""
-    # Check global revision
-    rev_result = await db.execute(sa.text("SELECT MAX(revision) FROM schedule"))
-    current_revision: int = rev_result.scalar() or 0
+    current_revision = await get_max_revision(db)
     if str(current_revision) != body.revision:
         raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail="revision conflict")
 
@@ -377,26 +350,18 @@ async def patch_settings(
                 else patch.freshness_seconds
             )
 
-            sets: list[str] = ["revision = revision + 1"]
-            params: dict[str, Any] = {"kind": kind_db}
+            if patch.enabled is None and freshness_s is None:
+                continue  # nothing to change — don't bump revision for a no-op patch
 
-            if patch.enabled is not None:
-                sets.append("enabled = :enabled")
-                params["enabled"] = patch.enabled
-            if freshness_s is not None:
-                sets.append("freshness_s = :freshness_s")
-                params["freshness_s"] = freshness_s
-
-            if len(sets) > 1:  # more than just the revision bump
-                await db.execute(
-                    sa.text(
-                        # sets is a fixed ":param" vocabulary; values are bound, never interpolated.
-                        "UPDATE schedule SET "  # noqa: S608 — sets is a fixed ":param" vocabulary; values are bound, never interpolated
-                        + ", ".join(sets)
-                        + " WHERE kind = :kind"
-                    ),
-                    params,
+            try:
+                await update_schedule(
+                    db,
+                    kind=kind_db,
+                    enabled=patch.enabled,
+                    freshness_s=freshness_s,
                 )
+            except LookupError:
+                continue  # unknown kind — same no-op as the old WHERE kind=:kind miss
 
     await db.commit()
     return await _query_settings_response(db)
