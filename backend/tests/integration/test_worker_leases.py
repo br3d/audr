@@ -313,7 +313,7 @@ async def test_on_demand_exhausted_retries_stay_failed_no_further_requeue(
     from audr.jobs.store import claim_pending_job, enqueue_job, fail_job
 
     max_retries = 2
-    run_id = await enqueue_job(db_session, kind=JobKind.VALIDATE_RPC, max_retries=max_retries)
+    await enqueue_job(db_session, kind=JobKind.VALIDATE_RPC, max_retries=max_retries)
     for _ in range(max_retries + 1):
         claimed = await claim_pending_job(db_session, kind=JobKind.VALIDATE_RPC)
         if claimed is None:

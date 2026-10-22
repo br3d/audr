@@ -42,9 +42,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE job_run ADD COLUMN origin text NOT NULL DEFAULT 'scheduled'"
-    )
+    op.execute("ALTER TABLE job_run ADD COLUMN origin text NOT NULL DEFAULT 'scheduled'")
     op.execute(
         "ALTER TABLE job_run ADD CONSTRAINT ck_job_run_origin"
         " CHECK (origin = ANY (ARRAY['scheduled'::text, 'on_demand'::text]))"
