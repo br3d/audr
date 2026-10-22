@@ -1,8 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchJob, triggerJob, ApiError } from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchJob, triggerJob } from '../api/client'
 import type { JobRun, JobKind } from '../api/client'
 import { useEffect, useRef, useState } from 'react'
 import { IconRefresh, IconSearch } from './Icons'
+import { queryKeys, invalidatePortfolioGroup } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 // Terminal job states — once a run reaches one of these, polling stops and
 // whatever the run produced is ready to be read back.
@@ -16,13 +18,11 @@ interface Props {
 
 export default function ScanStatus({ runId, kind, label }: Props) {
   const [triggeredId, setTriggeredId] = useState<string | null>(null)
-  const [triggerError, setTriggerError] = useState<string | null>(null)
-  const [triggering, setTriggering] = useState(false)
 
   const activeRunId = triggeredId ?? runId
 
   const { data: job } = useQuery({
-    queryKey: ['job', activeRunId],
+    queryKey: queryKeys.job(activeRunId),
     queryFn: () => fetchJob(activeRunId!),
     enabled: activeRunId !== null,
     refetchInterval: (query) => {
@@ -45,25 +45,18 @@ export default function ScanStatus({ runId, kind, label }: Props) {
     // Invalidate once per run, not on every poll tick after it settles.
     if (lastSettledRunId.current === activeRunId) return
     lastSettledRunId.current = activeRunId
-    void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-    void queryClient.invalidateQueries({ queryKey: ['assets'] })
-    void queryClient.invalidateQueries({ queryKey: ['history'] })
+    invalidatePortfolioGroup(queryClient)
   }, [activeRunId, job, queryClient])
 
-  async function handleTrigger() {
-    setTriggerError(null)
-    setTriggering(true)
-    try {
-      const ref = await triggerJob(kind)
-      setTriggeredId(ref.run_id)
-    } catch (err) {
-      setTriggerError(
-        err instanceof ApiError ? err.message : `Failed to start ${label}.`,
-      )
-    } finally {
-      setTriggering(false)
-    }
-  }
+  const triggerMutation = useMutation({
+    mutationFn: () => triggerJob(kind),
+    onSuccess: (ref) => setTriggeredId(ref.run_id),
+  })
+
+  const triggering = triggerMutation.isPending
+  const triggerError = triggerMutation.error
+    ? errorMessage(triggerMutation.error, `Failed to start ${label}.`)
+    : null
 
   function statusLabel(j: JobRun): string {
     switch (j.status) {
@@ -112,7 +105,7 @@ export default function ScanStatus({ runId, kind, label }: Props) {
       <button
         type="button"
         className="btn btn-sm btn-secondary"
-        onClick={() => void handleTrigger()}
+        onClick={() => triggerMutation.mutate()}
         disabled={busy}
         aria-label={`Start ${label}`}
         title={`${label} for every tracked address — spends an RPC call per address.`}
