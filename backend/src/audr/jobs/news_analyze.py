@@ -11,7 +11,10 @@ Cooldown dedup is load-bearing, not an optimisation: a single incident (a
 protocol hack, say) shows up as a wave of near-identical headlines across
 feeds within hours. Without collapsing that wave to one alert per
 `(asset_id, category)` per day, the owner would get alert-fatigued into
-muting the feature outright — see AUD-583.
+muting the feature outright — see AUD-583. The same wave also arrives
+sideways: one story naming five held tokens matches five assets and so
+clears five separate `(asset_id, category)` cooldowns, which is why there
+is a second, story-level dedup on the normalised headline (AUD-683).
 """
 
 from __future__ import annotations
@@ -41,6 +44,23 @@ _BATCH_LIMIT = 200
 _COOLDOWN = timedelta(hours=24)
 
 _OTHER_CATEGORY = "other"
+
+# Feed titles carry a publisher suffix (" - CoinDesk", " - Yahoo Finance"), so
+# the same wire story reaches us under several spellings. Stripped before the
+# story-level dedup below compares two headlines.
+_PUBLISHER_SUFFIX = re.compile(r"\s+[-|–—]\s+[^-|–—]{1,40}$")
+_NON_WORD = re.compile(r"[^a-z0-9]+")
+
+
+def _story_key(title: str) -> str:
+    """Normalise a headline to a comparison key for story-level dedup.
+
+    Drops the publisher suffix, lowercases, and collapses punctuation —
+    enough to collapse the same story syndicated across feeds without
+    collapsing two genuinely different headlines about one asset.
+    """
+    return _NON_WORD.sub(" ", _PUBLISHER_SUFFIX.sub("", title).lower()).strip()
+
 
 # Checked in order, most severe first, so a headline matching more than one
 # class (a hack article that also mentions a price crash) lands under its
@@ -223,6 +243,28 @@ async def _in_cooldown(session: AsyncSession, *, asset_id: uuid.UUID, category: 
     return row.first() is not None
 
 
+async def _recent_story_keys(session: AsyncSession) -> set[str]:
+    """Normalised headlines already alerted on inside the cooldown window.
+
+    The `(asset_id, category)` cooldown cannot see the other half of the
+    duplicate problem (AUD-683): one story that mentions five held tokens
+    matches five different assets, clears five separate cooldowns, and lands
+    as five alerts the owner reads as the same news repeated.
+    """
+    rows = await session.execute(
+        sa.text(
+            """
+            SELECT an.title
+            FROM news_alert na
+            JOIN asset_news an ON an.id = na.asset_news_id
+            WHERE na.created_at > :cutoff
+            """
+        ),
+        {"cutoff": datetime.now(tz=UTC) - _COOLDOWN},
+    )
+    return {_story_key(row[0]) for row in rows.fetchall() if row[0]}
+
+
 async def _mark_analyzed(session: AsyncSession, article_id: uuid.UUID) -> None:
     await session.execute(
         sa.text("UPDATE asset_news SET analyzed_at = now() WHERE id = :id"),
@@ -281,13 +323,18 @@ async def handle_news_analyze(session: AsyncSession, run_id: uuid.UUID) -> None:
     articles = await _fetch_unanalyzed(session)
     created = 0
     suppressed = 0
+    story_keys = await _recent_story_keys(session)
 
     for article in articles:
         result = classify_heuristic(article.title)
         if result.severity is not None:
-            if await _in_cooldown(session, asset_id=article.asset_id, category=result.category):
+            story_key = _story_key(article.title)
+            if story_key in story_keys or await _in_cooldown(
+                session, asset_id=article.asset_id, category=result.category
+            ):
                 suppressed += 1
             else:
+                story_keys.add(story_key)
                 await _insert_alert(
                     session,
                     article=article,

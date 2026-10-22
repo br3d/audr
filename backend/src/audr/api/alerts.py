@@ -51,6 +51,18 @@ class AlertItem(BaseModel):
     # "dispatched before the road was recorded"; `dispatched_at` separates them.
     dispatched_at: str | None = None
     dispatched_via: str | None = None
+    # What the alert is actually about. `summary` only ever holds the
+    # classifier's reason ("heuristic match: 'exploit'"), which repeats across
+    # unrelated stories and made distinct alerts read as duplicates in the bell
+    # (AUD-683). The symbol and headline are what tell two alerts apart, so the
+    # list endpoint joins them in rather than making the client fetch per row.
+    # Typed optional and joined with LEFT JOIN so a row whose article or asset
+    # went missing still lists (today both FKs are NOT NULL, and the article
+    # FK cascades, so in practice these are always populated) — a dropped
+    # alert is a worse failure here than an alert missing its headline.
+    asset_symbol: str | None = None
+    article_title: str | None = None
+    article_url: str | None = None
 
 
 class AlertsResponse(BaseModel):
@@ -86,10 +98,12 @@ async def list_alerts(
             detail="offset must be >= 0",
         )
 
-    where_clause = "WHERE read_at IS NULL" if unread else ""
+    # Qualified with the `na` alias so the same literal can be reused by the
+    # list query, which joins `asset` and `asset_news` alongside it.
+    where_clause = "WHERE na.read_at IS NULL" if unread else ""
 
     total = (
-        await db.execute(sa.text(f"SELECT COUNT(*) FROM news_alert {where_clause}"))  # noqa: S608 -- where_clause is one of two hardcoded literals, not user input
+        await db.execute(sa.text(f"SELECT COUNT(*) FROM news_alert na {where_clause}"))  # noqa: S608 -- where_clause is one of two hardcoded literals, not user input
     ).scalar_one()
     unread_count = (
         await db.execute(sa.text("SELECT COUNT(*) FROM news_alert WHERE read_at IS NULL"))
@@ -98,12 +112,15 @@ async def list_alerts(
     rows = await db.execute(
         sa.text(
             f"""
-            SELECT id, asset_news_id, asset_id, category, severity, summary,
-                   classifier, model, created_at, read_at,
-                   dispatched_at, dispatched_via
-            FROM news_alert
+            SELECT na.id, na.asset_news_id, na.asset_id, na.category, na.severity,
+                   na.summary, na.classifier, na.model, na.created_at, na.read_at,
+                   na.dispatched_at, na.dispatched_via,
+                   a.symbol, an.title, an.url
+            FROM news_alert na
+            LEFT JOIN asset a ON a.id = na.asset_id
+            LEFT JOIN asset_news an ON an.id = na.asset_news_id
             {where_clause}
-            ORDER BY (read_at IS NULL) DESC, created_at DESC
+            ORDER BY (na.read_at IS NULL) DESC, na.created_at DESC
             LIMIT :limit OFFSET :offset
             """  # noqa: S608 -- where_clause is one of two hardcoded literals, not user input
         ),
@@ -124,6 +141,9 @@ async def list_alerts(
             read_at=row[9].isoformat() if row[9] is not None else None,
             dispatched_at=row[10].isoformat() if row[10] is not None else None,
             dispatched_via=row[11],
+            asset_symbol=row[12],
+            article_title=row[13],
+            article_url=row[14],
         )
         for row in rows.fetchall()
     ]

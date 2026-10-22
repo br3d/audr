@@ -504,8 +504,20 @@ body {
   line-height: 1.4;
 }
 
+.alerts-bell-item-symbol {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
 .alerts-bell-item-meta {
   font-size: var(--text-xs);
+}
+
+.alerts-bell-item-link {
+  display: block;
+  padding: 0 14px 10px;
+  font-size: var(--text-xs);
+  color: var(--accent);
 }
 
 /* ---- Page content ---- */

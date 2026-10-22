@@ -45,6 +45,9 @@ function makeAlert(overrides: Partial<AlertItem> = {}): AlertItem {
     // is the right default for this fixture (AUD-595).
     dispatched_at: null,
     dispatched_via: null,
+    asset_symbol: 'ETH',
+    article_title: 'Bridge exploited for $40M',
+    article_url: 'https://example.com/a',
     ...overrides,
   }
 }
@@ -115,6 +118,58 @@ describe('AlertsBell', () => {
         ;(container.querySelector('.alerts-bell-button') as HTMLButtonElement).click()
       })
       expect(container.querySelector('.alerts-bell-empty')?.textContent).toBe('No alerts yet.')
+      await unmount(container, root)
+    })
+
+    it('tells two alerts apart by symbol and headline, not by summary', async () => {
+      // Both carry the identical classifier reason — which is exactly why the
+      // bell used to read as a list of duplicates (AUD-683).
+      mockFetchAlerts.mockResolvedValue(
+        makeResponse([
+          makeAlert({ asset_symbol: 'ETH', article_title: 'Drift exploit drains $61M' }),
+          makeAlert({ id: 'a2', asset_symbol: 'UNI', article_title: 'Uniswap hook drains LPs' }),
+        ]),
+      )
+      const { container, root } = render(<AlertsBell />)
+      await flush()
+      await act(async () => {
+        ;(container.querySelector('.alerts-bell-button') as HTMLButtonElement).click()
+      })
+      const summaries = Array.from(
+        container.querySelectorAll('.alerts-bell-item-summary'),
+      ).map((el) => el.textContent)
+      expect(summaries).toEqual(['ETHDrift exploit drains $61M', 'UNIUniswap hook drains LPs'])
+      await unmount(container, root)
+    })
+
+    it('links out to the article behind the alert', async () => {
+      mockFetchAlerts.mockResolvedValue(
+        makeResponse([makeAlert({ article_url: 'https://example.com/story' })]),
+      )
+      const { container, root } = render(<AlertsBell />)
+      await flush()
+      await act(async () => {
+        ;(container.querySelector('.alerts-bell-button') as HTMLButtonElement).click()
+      })
+      const link = container.querySelector('.alerts-bell-item-link') as HTMLAnchorElement
+      expect(link.href).toBe('https://example.com/story')
+      expect(link.rel).toBe('noopener noreferrer')
+      await unmount(container, root)
+    })
+
+    it('falls back to the summary when the headline is missing', async () => {
+      mockFetchAlerts.mockResolvedValue(
+        makeResponse([makeAlert({ article_title: null, article_url: null, asset_symbol: null })]),
+      )
+      const { container, root } = render(<AlertsBell />)
+      await flush()
+      await act(async () => {
+        ;(container.querySelector('.alerts-bell-button') as HTMLButtonElement).click()
+      })
+      expect(container.querySelector('.alerts-bell-item-summary')?.textContent).toBe(
+        'ETH dropped 12% in an hour.',
+      )
+      expect(container.querySelector('.alerts-bell-item-link')).toBeNull()
       await unmount(container, root)
     })
 
