@@ -3,6 +3,7 @@ name: audr-test
 # Isolated test environment with ephemeral volumes and controlled providers.
 # Usage:
 #   docker compose -f compose.test.yaml run --rm backend-tests
+#   docker compose -f compose.test.yaml run --rm backend-mypy
 #   docker compose -f compose.test.yaml run --rm frontend-tests
 
 services:
@@ -66,6 +67,8 @@ services:
       --tb=short
       -q
       -m "unit or integration or contract"
+      --cov=audr
+      --cov-report=term-missing
     environment:
       DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
       RPC_MOCK_URL: http://provider-mock:8080/rpc
@@ -140,6 +143,24 @@ services:
     profiles:
       - backend
 
+  # mypy --strict on backend/src (AUD-690). Gated against a frozen baseline of
+  # pre-existing errors (backend/mypy-baseline.txt, see
+  # backend/check_mypy_baseline.py) rather than the full 88-error, 33-file
+  # backlog the first real run turned up — that cleanup is tracked separately.
+  # No database or provider dependency: mypy is static analysis only.
+  backend-mypy:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    command: >
+      sh -c "mypy --cache-dir=/tmp/mypy_cache src > /tmp/mypy.out 2>&1;
+      cat /tmp/mypy.out;
+      python check_mypy_baseline.py mypy-baseline.txt < /tmp/mypy.out"
+    volumes:
+      - ./backend:/workspace/backend:ro
+    profiles:
+      - backend
+
   # Warm dashboard/history p50/p95 benchmark + catalog logical-call report
   # (AUD-108). Re-added after AUD-329 removed the earlier placeholder, which
   # invoked pytest --benchmark-only against a suite that had neither
@@ -179,7 +200,10 @@ services:
     # frontend_node_modules starts empty, so dependencies must be installed in
     # the container before vitest exists on PATH. Without this the stage exits
     # 127 ("vitest: not found") on every fresh volume — i.e. always in CI.
-    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run test"]
+    # typecheck (tsc --noEmit) runs before the suite (AUD-690): a type error
+    # that compiles-and-crashes under Vitest's transform would otherwise only
+    # surface at the Docker image build, deploy-time.
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run typecheck && npm run test:coverage"]
     volumes:
       # Not :ro — Docker must be able to create the /workspace/node_modules
       # mountpoint, which does not exist in a fresh checkout.

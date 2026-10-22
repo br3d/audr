@@ -213,6 +213,23 @@ jobs:
             docker image rm -f $imgs >/dev/null 2>&1 || true
           fi
 
+  backend-mypy:
+    # mypy --strict on backend/src (AUD-690), gated against a frozen baseline
+    # of pre-existing errors rather than the 88-error, 33-file backlog the
+    # first real run turned up — see backend/mypy-baseline.txt and
+    # backend/check_mypy_baseline.py. No database dependency, so no teardown
+    # beyond the image compose already built.
+    runs-on: host
+    env:
+      COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: mypy (strict) — backend/src, gated against the baseline
+        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build backend-mypy
+      - name: Teardown
+        if: always()
+        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml down -v --remove-orphans
+
   frontend-tests:
     # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match
     # the project's build toolchain (native rolldown/vite bindings need Node 22).
@@ -222,25 +239,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Frontend tests (vitest)
+      - name: Frontend typecheck (AUD-690)
+        # tsc --noEmit on the same sources Vitest transforms but does not
+        # type-check. Without this gate a frontend type error is first caught
+        # by the Docker image build, at deploy time.
         working-directory: frontend
         run: |
           npm ci
-          npm run test
+          npm run typecheck
+      - name: Frontend tests (vitest)
+        working-directory: frontend
+        run: npm run test:coverage
 
   build-deploy:
     runs-on: host
     # THE GATE. Nothing below this line runs — no image build, no
-    # `alembic upgrade head`, no container recreate — unless all three test jobs
+    # `alembic upgrade head`, no container recreate — unless all four test jobs
     # above concluded successfully for this exact commit. A failed or cancelled
     # dependency leaves this job `skipped`, which is the evidence AUD-687 asked
     # for: the live database is never touched by a red commit.
     #
     # Do NOT add `if: always()` or `|| success()` style escapes here, and do not
-    # relax this to a subset of the three. A flaky job is a job to fix, not a
+    # relax this to a subset of the four. A flaky job is a job to fix, not a
     # dependency to drop; the bypass for a genuine emergency is the manual
     # host-side deploy in docs/deploy-runbook.md.
-    needs: [lint, backend-tests, frontend-tests]
+    needs: [lint, backend-tests, backend-mypy, frontend-tests]
     steps:
       - uses: actions/checkout@v4
 
