@@ -2,7 +2,10 @@
 
 Claim semantics:
   - Only one in_progress run per job kind (enforced by a partial unique index).
-  - Stale leases (heartbeat_at older than LEASE_TIMEOUT) are eligible for re-claim.
+  - A stale lease (heartbeat_at older than LEASE_TIMEOUT) is terminated as
+    `failed` (or `dead_letter` once a kind's consecutive lease-timeout count
+    exceeds its max_retries) — never recycled back to `pending`, which would
+    let it bypass the schedule gate and backoff streak below (AUD-689).
   - claim_job returns the new run ID or None if the kind is already active.
 """
 
@@ -32,6 +35,15 @@ _RETRY_BACKOFF_MAX_S = 900  # 15 minutes
 # just keeps the COUNT query cheap and lets a streak from a day-old incident
 # stop influencing today's backoff.
 _RETRY_STREAK_LOOKBACK_INTERVAL = "24 hours"
+
+# Marks a `failed` row as caused by a lease timeout rather than a caught
+# exception, so _expire_stale_leases can count *consecutive lease-timeout*
+# deaths for a kind separately from ordinary (caught, reported) failures.
+# Ordinary failures keep AUD-356's "always eventually retries" guarantee —
+# only a run of lease-timeout deaths (the OOM/SIGKILL poison-pill signature,
+# since the process never got a chance to call fail_job itself) is bounded
+# toward the dead_letter terminal state (AUD-689).
+_LEASE_EXPIRED_ERROR_PREFIX = "lease expired:"
 
 # Fallback cadence (AUD-356) for a kind with no `schedule` row. The old
 # behaviour ("no row = always due") is what hot-looped the worker into ~2
@@ -72,6 +84,20 @@ class JobRunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # Terminal: a lease kept expiring (no heartbeat) until the row's own
+    # max_retries budget was exhausted — a poison-pill job (e.g. one that
+    # OOM/SIGKILLs the worker before it can report a failure) stops being
+    # re-leased forever instead of hot-looping the worker (AUD-689).
+    DEAD_LETTER = "dead_letter"
+
+
+# A claim_job-started run (schedule-driven); retried by claim_job's own
+# consecutive-failure backoff streak across fresh rows, never requeued here.
+_ORIGIN_SCHEDULED = "scheduled"
+# An enqueue_job-started run (an interactive "Run now" / per-wallet request);
+# a transient failure auto-requeues a fresh pending row (bounded by
+# max_retries) instead of silently dropping the user's click (AUD-689).
+_ORIGIN_ON_DEMAND = "on_demand"
 
 
 @dataclass
@@ -88,6 +114,7 @@ class JobRun:
     completed_at: datetime | None
     created_at: datetime
     params: dict[str, Any] | None
+    origin: str
 
 
 async def claim_job(
@@ -193,9 +220,9 @@ async def claim_job(
         sa.text(
             """
             INSERT INTO job_run
-              (id, kind, status, worker_id, max_retries, claimed_at, heartbeat_at)
+              (id, kind, status, worker_id, max_retries, claimed_at, heartbeat_at, origin)
             VALUES
-              (:id, :kind, 'in_progress', :worker_id, :max_retries, :now, :now)
+              (:id, :kind, 'in_progress', :worker_id, :max_retries, :now, :now, :origin)
             """
         ),
         {
@@ -204,6 +231,7 @@ async def claim_job(
             "worker_id": worker_id,
             "max_retries": max_retries,
             "now": now,
+            "origin": _ORIGIN_SCHEDULED,
         },
     )
     await session.flush()
@@ -216,6 +244,7 @@ async def enqueue_job(
     kind: JobKind,
     max_retries: int = 3,
     params: dict[str, Any] | None = None,
+    _retry_count: int = 0,
 ) -> uuid.UUID:
     """Insert a ``pending`` job run as an on-demand queue entry.
 
@@ -225,18 +254,26 @@ async def enqueue_job(
     triggered jobs such as integration validation (AUD-313), and for
     per-wallet-scoped balance_scan/discovery requests (AUD-399/AUD-400) via
     ``params={"wallet_id": ...}``.
+
+    ``_retry_count`` is an internal knob for :func:`fail_job` /
+    :func:`_expire_stale_leases` to carry an on-demand request's attempt
+    count forward onto its replacement row when auto-requeuing (AUD-689) —
+    external callers should never pass it.
     """
     run_id = uuid.uuid4()
     await session.execute(
         sa.text(
-            "INSERT INTO job_run (id, kind, status, max_retries, params)"
-            " VALUES (:id, :kind, 'pending', :max_retries, CAST(:params AS jsonb))"
+            "INSERT INTO job_run (id, kind, status, max_retries, params, retry_count, origin)"
+            " VALUES (:id, :kind, 'pending', :max_retries, CAST(:params AS jsonb),"
+            " :retry_count, :origin)"
         ),
         {
             "id": run_id,
             "kind": kind.value,
             "max_retries": max_retries,
             "params": json.dumps(params) if params is not None else None,
+            "retry_count": _retry_count,
+            "origin": _ORIGIN_ON_DEMAND,
         },
     )
     await session.flush()
@@ -395,26 +432,50 @@ async def fail_job(
     error: str,
     checkpoint: dict[str, Any] | None = None,
 ) -> None:
-    """Mark *run_id* as failed and increment retry_count."""
-    await session.execute(
-        sa.text(
-            """
-            UPDATE job_run
-            SET status = 'failed',
-                error = :error,
-                checkpoint = CAST(:checkpoint AS jsonb),
-                retry_count = retry_count + 1,
-                completed_at = now()
-            WHERE id = :id AND status = 'in_progress'
-            """
-        ),
-        {
-            "id": run_id,
-            "error": error,
-            "checkpoint": json.dumps(checkpoint) if checkpoint is not None else None,
-        },
-    )
+    """Mark *run_id* as failed, increment retry_count, and retry it if on-demand.
+
+    A ``scheduled``-origin failure (a ``claim_job`` run) relies on the
+    existing AUD-356 backoff streak across fresh rows to self-heal — nothing
+    more to do here.  An ``on_demand``-origin failure (an interactively
+    triggered "Run now" / per-wallet request) has no such mechanism: without
+    a retry, a transient failure drops the user's click silently (AUD-689).
+    If the row's own retry budget isn't exhausted, requeue a fresh pending
+    row carrying the attempt count and params forward so the next worker
+    poll picks it back up.
+    """
+    row = (
+        await session.execute(
+            sa.text(
+                """
+                UPDATE job_run
+                SET status = 'failed',
+                    error = :error,
+                    checkpoint = CAST(:checkpoint AS jsonb),
+                    retry_count = retry_count + 1,
+                    completed_at = now()
+                WHERE id = :id AND status = 'in_progress'
+                RETURNING kind, origin, max_retries, retry_count, params
+                """
+            ),
+            {
+                "id": run_id,
+                "error": error,
+                "checkpoint": json.dumps(checkpoint) if checkpoint is not None else None,
+            },
+        )
+    ).first()
     await session.flush()
+    if row is None:
+        return
+    kind, origin, max_retries, retry_count, params = row
+    if origin == _ORIGIN_ON_DEMAND and retry_count < max_retries:
+        await enqueue_job(
+            session,
+            kind=JobKind(kind),
+            max_retries=max_retries,
+            params=dict(params) if params is not None else None,
+            _retry_count=retry_count,
+        )
 
 
 async def set_checkpoint(
@@ -455,7 +516,7 @@ async def get_job_run(session: AsyncSession, *, run_id: uuid.UUID) -> JobRun | N
             """
             SELECT id, kind, status, retry_count, max_retries, error,
                    checkpoint, claimed_at, heartbeat_at, completed_at, created_at,
-                   params
+                   params, origin
             FROM job_run WHERE id = :id
             """
         ),
@@ -477,6 +538,7 @@ async def get_job_run(session: AsyncSession, *, run_id: uuid.UUID) -> JobRun | N
         completed_at=row[9],
         created_at=row[10],
         params=row[11],
+        origin=row[12],
     )
 
 
@@ -493,14 +555,97 @@ async def get_job_params(session: AsyncSession, *, run_id: uuid.UUID) -> dict[st
 
 
 async def _expire_stale_leases(session: AsyncSession, *, kind: JobKind) -> None:
-    """Move in_progress runs whose heartbeat has expired back to pending."""
+    """Terminate (not recycle) an in_progress run whose heartbeat has expired.
+
+    See the module docstring and AUD-689 for why this no longer sets
+    ``status = 'pending'``: that let an expired run bypass both the
+    schedule gate and the backoff streak by sitting in the queue
+    :func:`claim_pending_job` serves unconditionally on every poll.
+
+    The partial unique index (``uq_job_run_kind_active``) guarantees at
+    most one ``in_progress`` row per kind, so at most one row is affected.
+    """
     # _LEASE_TIMEOUT_INTERVAL is a module constant, not user input — safe to embed.
-    _sql = (
-        f"UPDATE job_run SET status = 'pending', worker_id = NULL"  # noqa: S608 — _LEASE_TIMEOUT_INTERVAL is a module constant, not user input
-        f" WHERE kind = :kind AND status = 'in_progress'"
-        f" AND heartbeat_at < now() - interval '{_LEASE_TIMEOUT_INTERVAL}'"
+    stale = (
+        await session.execute(
+            sa.text(
+                f"""
+                SELECT id, max_retries FROM job_run
+                WHERE kind = :kind AND status = 'in_progress'
+                  AND heartbeat_at < now() - interval '{_LEASE_TIMEOUT_INTERVAL}'
+                LIMIT 1
+                """  # noqa: S608 — _LEASE_TIMEOUT_INTERVAL is a module constant, not user input
+            ),
+            {"kind": kind.value},
+        )
+    ).first()
+    if stale is None:
+        return
+    run_id, max_retries = stale
+
+    # Consecutive lease-timeout deaths for this kind since its last success —
+    # deliberately narrower than claim_job's own backoff streak (which counts
+    # *every* failed row, lease timeouts included, and keeps pacing retries
+    # forever per AUD-356). This one exists only to recognise a poison pill
+    # that never gets the chance to call fail_job itself.
+    streak = (
+        await session.execute(
+            sa.text(
+                """
+                SELECT COUNT(*) FROM job_run
+                WHERE kind = :kind AND status = 'failed' AND error LIKE :marker
+                  AND created_at > COALESCE(
+                    (SELECT MAX(created_at) FROM job_run
+                      WHERE kind = :kind AND status = 'completed'),
+                    '-infinity'::timestamptz
+                  )
+                """
+            ),
+            {"kind": kind.value, "marker": f"{_LEASE_EXPIRED_ERROR_PREFIX}%"},
+        )
+    ).scalar_one()
+
+    exhausted = (streak + 1) >= max_retries
+    status = JobRunStatus.DEAD_LETTER.value if exhausted else JobRunStatus.FAILED.value
+    error = (
+        f"{_LEASE_EXPIRED_ERROR_PREFIX} retry budget exhausted after {streak + 1}"
+        " consecutive lease timeouts"
+        if exhausted
+        else f"{_LEASE_EXPIRED_ERROR_PREFIX} heartbeat timeout"
     )
-    await session.execute(
-        sa.text(_sql),
-        {"kind": kind.value},
-    )
+
+    updated = (
+        await session.execute(
+            sa.text(
+                """
+                UPDATE job_run
+                SET status = :status,
+                    error = :error,
+                    worker_id = NULL,
+                    retry_count = retry_count + 1,
+                    completed_at = now()
+                WHERE id = :id AND status = 'in_progress'
+                RETURNING kind, origin, max_retries, retry_count, params
+                """
+            ),
+            {"id": run_id, "status": status, "error": error},
+        )
+    ).first()
+    await session.flush()
+    if updated is None or exhausted:
+        return
+
+    # Under budget: an on_demand-origin run (an interactive "Run now" / per-
+    # wallet request) is requeued immediately so the user's click isn't lost
+    # (AUD-689 point 4). A scheduled-origin run relies on claim_job's own
+    # backoff streak — now correctly fed by the 'failed' row above — to
+    # start a fresh attempt.
+    kind_db, origin, max_retries_row, retry_count, params = updated
+    if origin == _ORIGIN_ON_DEMAND and retry_count < max_retries_row:
+        await enqueue_job(
+            session,
+            kind=JobKind(kind_db),
+            max_retries=max_retries_row,
+            params=dict(params) if params is not None else None,
+            _retry_count=retry_count,
+        )
