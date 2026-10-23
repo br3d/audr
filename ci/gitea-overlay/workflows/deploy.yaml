@@ -2,7 +2,7 @@ name: Test, Build & Deploy (guarded)
 
 # Guarded test + build + auto-deploy pipeline for the audr stack.
 #
-# The test suite is IN THIS FILE, as three jobs the deploy `needs:`. That is the
+# The test suite is IN THIS FILE, as jobs the deploy `needs:`. That is the
 # whole point of AUD-687: until then the suite lived in a separate `ci.yaml`
 # triggered by the same `push: main`, with no ordering relation to this
 # workflow, so a merge to main ran `alembic upgrade head` against the live
