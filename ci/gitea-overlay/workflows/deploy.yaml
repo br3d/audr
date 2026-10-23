@@ -169,6 +169,8 @@ jobs:
           print(f"checked {len(paths)} files under python {sys.version.split()[0]}")
           sys.exit(1 if bad else 0)
           '
+      - name: No tracked symlink may point outside the worktree (AUD-711)
+        run: ./scripts/check-tracked-symlinks.sh
 
   backend-tests:
     runs-on: host
