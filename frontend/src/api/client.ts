@@ -1,3 +1,5 @@
+import type { components } from './schema.gen'
+
 const BASE = '/api/v1'
 
 let _csrfToken: string | null = null
@@ -491,33 +493,14 @@ export function fetchPortfolio(walletId?: string): Promise<PortfolioResponse> {
 
 // --- Settings types ---
 
-export interface ScheduleConfig {
-  enabled: boolean
-  interval_seconds: number
-  freshness_seconds?: number
-  next_due_at?: string | null
-}
+export type ScheduleConfig = components['schemas']['ScheduleConfig']
 
 // Keyed by schedule kind. The three below are always present; the backend may
 // also return other kinds (event_indexer, news_refresh, …), so keep it open.
-export interface SchedulesConfig {
-  balances?: ScheduleConfig
-  discovery?: ScheduleConfig
-  quotes?: ScheduleConfig
-  [kind: string]: ScheduleConfig | undefined
-}
+export type SchedulesConfig = Record<string, ScheduleConfig | undefined>
 
-export interface SettingsResponse {
-  revision: string
-  schedules?: SchedulesConfig
-  request_id?: string
-  generated_at?: string
-}
-
-export interface PatchSettingsInput {
-  revision: string
-  schedules?: SchedulesConfig
-}
+export type SettingsResponse = components['schemas']['SettingsResponse']
+export type PatchSettingsInput = components['schemas']['SettingsPatch']
 
 // --- Status types ---
 
@@ -746,24 +729,8 @@ export function fetchHistory(period: HistoryPeriod, cursor?: string): Promise<Hi
 
 // --- Asset news types ---
 
-export interface AssetNewsItem {
-  id: string
-  source: string
-  title: string
-  url: string
-  news_site: string
-  thumbnail_url: string | null
-  published_at: string
-  fetched_at: string
-}
-
-export interface AssetNewsResponse {
-  asset_id: string
-  total: number
-  limit: number
-  offset: number
-  news: AssetNewsItem[]
-}
+export type AssetNewsItem = components['schemas']['AssetNewsItem']
+export type AssetNewsResponse = components['schemas']['AssetNewsResponse']
 
 // --- Asset news API ---
 
@@ -778,50 +745,9 @@ export function fetchAssetNews(
 
 // --- News alerts types ---
 
-export interface AlertItem {
-  id: string
-  asset_news_id: string
-  asset_id: string
-  category: string
-  severity: string
-  summary: string
-  classifier: string
-  model: string | null
-  created_at: string
-  read_at: string | null
-  /** When notify.sh accepted this alert for delivery — null if it never has. */
-  dispatched_at: string | null
-  /**
-   * Which road that was (AUD-595): a sink name means a human was pushed at,
-   * `'spool'` means it only reached the host's undelivered.jsonl and the
-   * spool drain owns it now. Null is "not dispatched", or dispatched before
-   * the road was recorded — `dispatched_at` separates those two.
-   */
-  dispatched_via: 'board' | 'telegram' | 'board+telegram' | 'spool' | null
-  /** Ticker of the asset the alert fired for — null if the asset is gone. */
-  asset_symbol: string | null
-  /**
-   * Headline the alert was raised from, and its link — null only if the
-   * article row went missing. `summary` holds just the classifier's reason,
-   * which repeats verbatim across unrelated stories, so these two are what
-   * tell one alert apart from the next (AUD-683).
-   */
-  article_title: string | null
-  article_url: string | null
-}
-
-export interface AlertsResponse {
-  total: number
-  unread_count: number
-  limit: number
-  offset: number
-  alerts: AlertItem[]
-}
-
-export interface AlertReadResponse {
-  id: string
-  read_at: string
-}
+export type AlertItem = components['schemas']['AlertItem']
+export type AlertsResponse = components['schemas']['AlertsResponse']
+export type AlertReadResponse = components['schemas']['AlertReadResponse']
 
 // --- News alerts API ---
 
