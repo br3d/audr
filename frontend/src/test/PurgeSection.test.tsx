@@ -162,7 +162,11 @@ describe('PurgeSection', () => {
       confirm: true,
       current_password: 'wrong-password',
     })
-    expect(container.textContent).toContain('Current password is incorrect.')
+    // waitFor, not a bare assertion: `submitPurge` rejects, and the error only
+    // reaches the DOM after the rejection settles and React re-renders. One
+    // `act` flush is not guaranteed to cover that chain, so a bare expect here
+    // passes on an idle machine and fails on a loaded CI runner.
+    await vi.waitFor(() => expect(container.textContent).toContain('Current password is incorrect.'))
     // Preview stays open so the owner can retry without re-fetching the impact.
     expect(container.textContent).toContain('What will be deleted')
   })
