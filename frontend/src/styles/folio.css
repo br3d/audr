@@ -2022,6 +2022,12 @@ body {
   border: 0;
 }
 
+/* Matches HistoryChart's ResponsiveContainer height so the lazy-loaded
+   chart doesn't shift layout when it swaps in. */
+.chart-loading {
+  height: 300px;
+}
+
 /* ----------------------------------------------------------------
    Recharts overrides
    ---------------------------------------------------------------- */
