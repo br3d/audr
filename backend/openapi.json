@@ -4633,7 +4633,7 @@
     },
     "/api/v1/auth/password": {
       "patch": {
-        "operationId": "patch_password_api_v1_auth_password_patch",
+        "operationId": "change_password_patch",
         "parameters": [
           {
             "in": "header",
@@ -4696,7 +4696,7 @@
         "summary": "Patch Password"
       },
       "put": {
-        "operationId": "patch_password_api_v1_auth_password_put",
+        "operationId": "change_password",
         "parameters": [
           {
             "in": "header",

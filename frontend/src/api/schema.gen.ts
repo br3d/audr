@@ -224,13 +224,13 @@ export interface paths {
         };
         get?: never;
         /** Patch Password */
-        put: operations["patch_password_api_v1_auth_password_put"];
+        put: operations["change_password"];
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
         /** Patch Password */
-        patch: operations["patch_password_api_v1_auth_password_patch"];
+        patch: operations["change_password_patch"];
         trace?: never;
     };
     "/api/v1/auth/session": {
@@ -2716,7 +2716,7 @@ export interface operations {
             };
         };
     };
-    patch_password_api_v1_auth_password_put: {
+    change_password: {
         parameters: {
             query?: never;
             header?: {
@@ -2751,7 +2751,7 @@ export interface operations {
             };
         };
     };
-    patch_password_api_v1_auth_password_patch: {
+    change_password_patch: {
         parameters: {
             query?: never;
             header?: {
