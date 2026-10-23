@@ -249,7 +249,7 @@ services:
     # bundle are built by one Node (AUD-697). That file carries the reasoning for
     # why node — alone among the pins — is deliberately not on today's digest.
     image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
-    working_dir: /workspace
+    working_dir: /workspace/frontend
     # frontend_node_modules starts empty, so dependencies must be installed in
     # the container before vitest exists on PATH. Without this the stage exits
     # 127 ("vitest: not found") on every fresh volume — i.e. always in CI.
@@ -267,10 +267,18 @@ services:
     # TS to 6.x.
     command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run typecheck && npm run format:check && npm run test:coverage"]
     volumes:
-      # Not :ro — Docker must be able to create the /workspace/node_modules
-      # mountpoint, which does not exist in a fresh checkout.
-      - ./frontend:/workspace
-      - frontend_node_modules:/workspace/node_modules
+      # The repo layout is reproduced under /workspace rather than mounting
+      # ./frontend as the root, because `npm run typecheck` also compiles
+      # ../tests/e2e (AUD-699) and tests/e2e/tsconfig.json resolves the
+      # frontend tsconfig, @types and @playwright/test through ../../frontend.
+      # Flatten this and the e2e leg fails in the container while passing on
+      # the host — the whole reason that typecheck was unwired for so long.
+      #
+      # ./frontend is not :ro — Docker must be able to create the
+      # node_modules mountpoint, which does not exist in a fresh checkout.
+      - ./frontend:/workspace/frontend
+      - ./tests/e2e:/workspace/tests/e2e:ro
+      - frontend_node_modules:/workspace/frontend/node_modules
     networks:
       - test-net
     profiles:

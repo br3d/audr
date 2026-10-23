@@ -60,7 +60,7 @@ const MOCK_ALLOCATION_PORTFOLIO = {
   valuation_time: '2026-01-15T00:00:00Z',
   currency: 'USD',
   priced_subtotal_usd: null,
-  total_usd: '12345.67',
+  total_usd: '12345.67' as string | null,
   quality: {
     incomplete: false,
     stale_balances: false,

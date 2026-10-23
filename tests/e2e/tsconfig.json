@@ -1,0 +1,12 @@
+{
+  "extends": "../../frontend/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": ["../../frontend/node_modules/@types"],
+    "paths": {
+      "@playwright/test": ["../../frontend/node_modules/@playwright/test"]
+    }
+  },
+  "include": ["."]
+}

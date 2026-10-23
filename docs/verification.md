@@ -46,6 +46,21 @@ The infrastructure services (`db-test`, `provider-mock`) are started automatical
 
 > The `e2e` / `api-test` compose profiles were removed in AUD-329 — they referenced a `Dockerfile.e2e` that never existed. The `benchmark` profile was removed in the same change (it invoked `pytest --benchmark-only` against a suite with no `pytest-benchmark` dependency and no `benchmark` marker) and re-added in AUD-108 as a real service that runs `scripts/benchmark.py`. See `docs/benchmark.md`.
 
+**E2E status (AUD-699): local-only, by decision, not by oversight.** The 107
+Playwright specs under `tests/e2e` are not run by any CI job and are not
+expected to be — containerizing them needs a real `Dockerfile.e2e` and an app
+service that actually serves the SPA and accepts the auth settings the specs
+use (the blockers AUD-329 hit), and no one has signed up to build that. Until
+someone does, this is the gate: `tests/e2e` is typechecked by
+`frontend: npm run typecheck` (so it at least compiles) in all three places
+that script runs — on the host, in `compose.test.yaml`'s `frontend-tests`
+container, and in the Gitea `frontend-tests` job — and the suite itself
+is **run by hand before every release** — see the pre-release checklist in
+[`docs/releases.md`](releases.md#pre-release-checklist) — and whenever the
+auth, dashboard, history, or settings pages change. A release cut without a
+green `npm run e2e` run noted in its PR/issue is a release cut on an
+unverified suite.
+
 ---
 
 ## Historical snapshot — 2026-09-27
