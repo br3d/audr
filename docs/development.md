@@ -251,9 +251,10 @@ docker compose -f compose.test.yaml --profile backend run --rm backend-tests \
 
 ### Frontend tests
 
-Vitest with jsdom. Specs live in **two** places — `frontend/src/test/*.test.tsx`
-and `frontend/tests/*.test.ts(x)` — which is a historical split, not a
-distinction. Check both when adding coverage.
+Vitest with jsdom. Specs live in one place — `frontend/src/test/*.test.ts(x)`,
+the only root `vitest.config.ts` includes. Mock factories for `api/client`
+should reuse the shared `src/test/mockApiError.ts` class, so `instanceof
+ApiError` checks inside components still match the mocked module's export.
 
 ### End-to-end
 

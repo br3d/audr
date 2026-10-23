@@ -15,7 +15,9 @@ coverage.xml
 htmlcov/
 
 # Frontend / Node
-node_modules/
+# No trailing slash: a `node_modules` symlink is not a directory, so `node_modules/`
+# does not ignore it. That hole let an absolute-path symlink get committed once.
+node_modules
 frontend/dist/
 frontend/.vite/
 *.tsbuildinfo

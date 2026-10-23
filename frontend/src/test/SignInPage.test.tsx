@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import SignInPage from '../src/pages/SignInPage'
+import SignInPage from '../pages/SignInPage'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
 
