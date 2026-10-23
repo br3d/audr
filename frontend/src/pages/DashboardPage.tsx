@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Decimal } from 'decimal.js'
 import { fetchPortfolio, fetchHistory, fetchEvents, patchAsset } from '../api/client'
@@ -11,12 +11,15 @@ import { errorMessage } from '../api/errorMessage'
 import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
 import AllocationBar from '../components/AllocationBar'
-import HistoryChart from '../components/HistoryChart'
 import NewsFeed from '../components/NewsFeed'
 import ScanStatus from '../components/ScanStatus'
 import NoticeBadge from '../components/NoticeBadge'
 import EventRow from '../components/EventRow'
 import { shortenAddress } from '../portfolio/events'
+
+// Recharts (+ its d3 tree) is the heaviest dependency in the bundle and this
+// is its only consumer, so it's loaded on demand instead of in the main chunk.
+const HistoryChart = lazy(() => import('../components/HistoryChart'))
 
 const RECENT_EVENTS_LIMIT = 7
 
@@ -394,7 +397,9 @@ export default function DashboardPage({ setPage }: Props) {
                     ))}
                   </div>
                 </div>
-                <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
+                <Suspense fallback={<div className="chart-loading" aria-busy="true" />}>
+                  <HistoryChart points={historyQuery.data.items} period={historyPeriod} />
+                </Suspense>
               </section>
             )}
 
