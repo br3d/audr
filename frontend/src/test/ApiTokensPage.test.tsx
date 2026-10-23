@@ -5,21 +5,13 @@ import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-vi.mock('../api/client', () => {
-  class ApiError extends Error {
-    status: number
-    body: undefined
-    constructor(status: number, message: string) {
-      super(message)
-      this.name = 'ApiError'
-      this.status = status
-    }
-  }
+vi.mock('../api/client', async () => {
+  const { MockApiError } = await import('./mockApiError')
   return {
     fetchApiTokens: vi.fn(),
     createApiToken: vi.fn(),
     revokeApiToken: vi.fn(),
-    ApiError,
+    ApiError: MockApiError,
   }
 })
 
