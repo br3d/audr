@@ -60,6 +60,24 @@ export function clearUnauthorizedCallback(): void {
 
 // --- Internal fetch wrapper ---
 
+async function throwOnErrorStatus(response: Response): Promise<void> {
+  if (response.status === 401) {
+    clearCSRFToken()
+    _unauthorizedCallback?.()
+    throw new AuthError()
+  }
+
+  if (!response.ok) {
+    let errorBody: ApiErrorBody | undefined
+    try {
+      errorBody = (await response.json()) as ApiErrorBody
+    } catch {
+      // ignore parse failure — body may not be JSON
+    }
+    throw new ApiError(response.status, errorBody)
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -83,27 +101,29 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
-  if (response.status === 401) {
-    clearCSRFToken()
-    _unauthorizedCallback?.()
-    throw new AuthError()
-  }
-
-  if (!response.ok) {
-    let errorBody: ApiErrorBody | undefined
-    try {
-      errorBody = (await response.json()) as ApiErrorBody
-    } catch {
-      // ignore parse failure — body may not be JSON
-    }
-    throw new ApiError(response.status, errorBody)
-  }
+  await throwOnErrorStatus(response)
 
   if (response.status === 204) {
     return undefined as T
   }
 
   return response.json() as Promise<T>
+}
+
+/**
+ * GET a path and return the raw Response instead of parsing it as JSON —
+ * for streamed/binary bodies. Still goes through the same 401 and ApiError
+ * handling as `request`.
+ */
+async function getStream(path: string, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch(`${BASE}${path}`, {
+    credentials: 'same-origin',
+    signal,
+  })
+
+  await throwOnErrorStatus(response)
+
+  return response
 }
 
 function get<T>(path: string): Promise<T> {
@@ -519,6 +539,9 @@ export interface JobsResponse {
 
 // --- Export types ---
 
+export type ExportKind = 'portfolio' | 'history'
+export type ExportFormat = 'json' | 'csv'
+
 export interface ExportProgressEvent {
   type: 'progress' | 'complete' | 'error'
   records_written?: number
@@ -592,19 +615,25 @@ export function changePassword(
 
 // --- Export API ---
 
-export function exportPortfolioUrl(format: 'json' | 'csv'): string {
-  return `${BASE}/exports/portfolio?format=${format}`
+export interface ExportDataOptions {
+  from?: string
+  to?: string
+  signal?: AbortSignal
 }
 
-export function exportHistoryUrl(
-  format: 'json' | 'csv',
-  from?: string,
-  to?: string,
-): string {
+/** Streams a portfolio/history export. Goes through the same 401/ApiError
+ * handling as every other client call — the caller reads `response.body`. */
+export function exportData(
+  kind: ExportKind,
+  format: ExportFormat,
+  options: ExportDataOptions = {},
+): Promise<Response> {
   const params = new URLSearchParams({ format })
-  if (from) params.set('from', from)
-  if (to) params.set('to', to)
-  return `${BASE}/exports/history?${params.toString()}`
+  if (kind === 'history') {
+    if (options.from) params.set('from', options.from)
+    if (options.to) params.set('to', options.to)
+  }
+  return getStream(`/exports/${kind}?${params.toString()}`, options.signal)
 }
 
 // --- API Token types ---

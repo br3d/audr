@@ -18,7 +18,6 @@ source.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import uuid
@@ -38,6 +37,7 @@ from audr.jobs.news_feed_registry import (
     record_feed_not_modified,
     record_feed_success,
 )
+from audr.jobs.news_tiers import NewsTier, run_capped_tier
 from audr.jobs.news_tracked_registry import list_tracked_asset_symbols
 from audr.jobs.snapshot_registry import (
     SnapshotSpace,
@@ -48,12 +48,13 @@ from audr.jobs.snapshot_registry import (
 from audr.providers.feed_parser import FeedItem, FeedParseError, parse_feed
 from audr.providers.gdelt import GdeltArticle, GdeltProvider, GdeltRateLimited
 from audr.providers.hackernews import parse_search_response
+from audr.providers.http_base import NEWS_USER_AGENT
 from audr.providers.snapshot import SnapshotError, SnapshotProposal, SnapshotProvider
 
 logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = 15.0
-_USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
+_USER_AGENT = NEWS_USER_AGENT
 _GDELT_SOURCE = "gdelt"
 _SNAPSHOT_SOURCE = "snapshot"
 _HACKERNEWS_SOURCE = "hackernews"
@@ -226,41 +227,25 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         hn_due_now = [
             feed for feed in hn_due_feeds if not feed.symbols or (feed.symbols & held_symbols)
         ]
-        if len(hn_due_now) > _HN_MAX_QUERIES_PER_RUN:
-            logger.info(
-                "news_refresh run_id=%s hackernews capped — skipped %d feeds this run",
-                run_id,
-                len(hn_due_now) - _HN_MAX_QUERIES_PER_RUN,
-            )
-        hn_due_now = hn_due_now[:_HN_MAX_QUERIES_PER_RUN]
-        consecutive_429 = 0
-        for i, feed in enumerate(hn_due_now):
-            if i > 0:
-                await asyncio.sleep(_HN_QUERY_DELAY_S)
-            feed_inserted, rate_limited = await _poll_hackernews_feed(
-                session, client=client, feed=feed, assets=assets
-            )
-            inserted += feed_inserted
-            if rate_limited:
-                consecutive_429 += 1
-                logger.info(
-                    "news_refresh run_id=%s hackernews rate-limited feed=%s consecutive=%d",
-                    run_id,
-                    feed.key,
-                    consecutive_429,
-                )
-                if consecutive_429 >= _HN_MAX_CONSECUTIVE_429:
-                    logger.info(
-                        "news_refresh run_id=%s hackernews aborting tier after %d consecutive 429s",
-                        run_id,
-                        consecutive_429,
-                    )
-                    await session.commit()
-                    break
-            else:
-                consecutive_429 = 0
-                polled += 1
-            await session.commit()
+        hn_tier = NewsTier(
+            name="hackernews",
+            max_queries_per_run=_HN_MAX_QUERIES_PER_RUN,
+            max_consecutive_429=_HN_MAX_CONSECUTIVE_429,
+            query_delay_s=_HN_QUERY_DELAY_S,
+        )
+
+        async def _poll_hn_feed(feed: NewsFeed) -> tuple[int, bool]:
+            return await _poll_hackernews_feed(session, client=client, feed=feed, assets=assets)
+
+        hn_inserted, hn_polled = await run_capped_tier(
+            run_id=run_id,
+            tier=hn_tier,
+            items=hn_due_now,
+            poll_one=_poll_hn_feed,
+            commit=session.commit,
+        )
+        inserted += hn_inserted
+        polled += hn_polled
 
         covered = await covered_asset_symbols(session)
         gdelt_assets = [
@@ -271,46 +256,35 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
             and len(a.symbol) >= _GDELT_MIN_SYMBOL_LEN
         ]
         if gdelt_assets:
-            due_now, skipped_this_run = (
-                gdelt_assets[:_GDELT_MAX_QUERIES_PER_RUN],
-                gdelt_assets[_GDELT_MAX_QUERIES_PER_RUN:],
+            gdelt_tier = NewsTier(
+                name="gdelt",
+                max_queries_per_run=_GDELT_MAX_QUERIES_PER_RUN,
+                max_consecutive_429=_GDELT_MAX_CONSECUTIVE_429,
+                query_delay_s=_GDELT_QUERY_DELAY_S,
             )
-            if skipped_this_run:
-                logger.info(
-                    "news_refresh run_id=%s gdelt capped — skipped %d assets this run",
-                    run_id,
-                    len(skipped_this_run),
-                )
             async with GdeltProvider(http_client=client) as gdelt:
-                consecutive_429 = 0
-                for i, asset in enumerate(due_now):
-                    if i > 0:
-                        await asyncio.sleep(_GDELT_QUERY_DELAY_S)
+
+                async def _poll_gdelt_asset(asset: HeldAsset) -> tuple[int, bool]:
                     try:
                         articles = await gdelt.search_news(f'"{asset.symbol}"')
                     except GdeltRateLimited:
-                        consecutive_429 += 1
-                        logger.info(
-                            "news_refresh run_id=%s gdelt rate-limited symbol=%s consecutive=%d",
-                            run_id,
-                            asset.symbol,
-                            consecutive_429,
-                        )
-                        if consecutive_429 >= _GDELT_MAX_CONSECUTIVE_429:
-                            logger.info(
-                                "news_refresh run_id=%s gdelt aborting tier after %d"
-                                " consecutive 429s",
-                                run_id,
-                                consecutive_429,
-                            )
-                            break
-                        continue
-                    consecutive_429 = 0
+                        return 0, True
+                    asset_inserted = 0
                     for article in articles:
-                        inserted += await _insert_gdelt_article(
+                        asset_inserted += await _insert_gdelt_article(
                             session, asset_id=asset.id, article=article
                         )
-                    await session.commit()
+                    return asset_inserted, False
+
+                gdelt_inserted, _gdelt_polled = await run_capped_tier(
+                    run_id=run_id,
+                    tier=gdelt_tier,
+                    items=gdelt_assets,
+                    poll_one=_poll_gdelt_asset,
+                    commit=session.commit,
+                    commit_on_rate_limit=False,
+                )
+                inserted += gdelt_inserted
 
         due_spaces = await list_due_spaces(session)
         async with SnapshotProvider(http_client=client) as snapshot:

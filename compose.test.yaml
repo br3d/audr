@@ -65,7 +65,7 @@ services:
       pytest
       --tb=short
       -q
-      -m "unit or (integration and not slow) or contract"
+      -m "unit or integration or contract"
     environment:
       DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
       RPC_MOCK_URL: http://provider-mock:8080/rpc
@@ -124,6 +124,19 @@ services:
       # alert-dispatch.sh writes `news_alert.dispatched_via` from that word, and
       # every other caller reads the exit status as "is alerting itself broken".
       - ./scripts/notify.sh:/workspace/scripts/notify.sh:ro
+      # AUD-706: tests/unit/test_mirror_deploy_state.py executes the real
+      # mirror script against scratch git repositories standing in for GitHub
+      # and Gitea. Mounting it is what makes the retry bound, the single alert
+      # and the self-resolve assertions run on the shipped source — the bug
+      # being guarded was a one-line ordering mistake in a script that had
+      # never run anywhere but the live host, where the journal was its only
+      # witness.
+      - ./ci/gitea-overlay/audr-github-mirror.sh:/workspace/ci/gitea-overlay/audr-github-mirror.sh:ro
+      # Same test asserts the other half of that handshake, which no unit test
+      # can execute: the deploy workflow's step that writes `deployed-gitea-sha`
+      # on success, for main only. One step is all the mechanism has, and a
+      # rebase can lose it without anything going red.
+      - ./ci/gitea-overlay/workflows/deploy.yaml:/workspace/ci/gitea-overlay/workflows/deploy.yaml:ro
     profiles:
       - backend
 

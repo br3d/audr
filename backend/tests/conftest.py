@@ -116,3 +116,36 @@ _TEST_SECRET_KEY = "a" * 64  # 32-byte all-0xaa key — safe for tests only
 def test_secret_key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("SECRET_KEY", _TEST_SECRET_KEY)
     return _TEST_SECRET_KEY
+
+
+# ---------------------------------------------------------------------------
+# AUD-688: compose.test.yaml selects tests by `-m "unit or integration or
+# contract"`. That's an allowlist — a test file with no suite marker (or a
+# typo'd one) is silently deselected rather than failing, so it never runs in
+# CI. pytest_itemcollected fires for every collected item before -m
+# deselection happens, so the check below sees tests the selector would have
+# dropped.
+# ---------------------------------------------------------------------------
+
+_SUITE_MARKERS = ("unit", "integration", "contract")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config._suite_marker_violations = []  # type: ignore[attr-defined]
+
+
+def pytest_itemcollected(item: pytest.Item) -> None:
+    matched = [name for name in _SUITE_MARKERS if item.get_closest_marker(name)]
+    if len(matched) != 1:
+        item.config._suite_marker_violations.append((item.nodeid, matched))  # type: ignore[attr-defined]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    violations: list[tuple[str, list[str]]] = config._suite_marker_violations  # type: ignore[attr-defined]
+    if violations:
+        details = "\n".join(f"  {nodeid} -> {matched or 'none'}" for nodeid, matched in violations)
+        raise pytest.UsageError(
+            "Every collected test must carry exactly one suite marker "
+            f"({', '.join(_SUITE_MARKERS)}); the CI selector treats unmarked tests as an "
+            f"allowlist and silently drops them instead of failing collection:\n{details}"
+        )

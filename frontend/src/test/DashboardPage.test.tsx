@@ -6,21 +6,17 @@ import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AllocationItem, Holding, PortfolioResponse, HistoryPoint, HistoryResponse } from '../api/client'
 
-vi.mock('../api/client', () => ({
-  fetchPortfolio: vi.fn(),
-  fetchHistory: vi.fn(),
-  fetchEvents: vi.fn(),
-  fetchAssets: vi.fn(),
-  patchAsset: vi.fn(),
-  ApiError: class ApiError extends Error {
-    status = 500
-    body = undefined
-    constructor(msg = 'API error') {
-      super(msg)
-      this.name = 'ApiError'
-    }
-  },
-}))
+vi.mock('../api/client', async () => {
+  const { MockApiError } = await import('./mockApiError')
+  return {
+    fetchPortfolio: vi.fn(),
+    fetchHistory: vi.fn(),
+    fetchEvents: vi.fn(),
+    fetchAssets: vi.fn(),
+    patchAsset: vi.fn(),
+    ApiError: MockApiError,
+  }
+})
 
 vi.mock('../components/HistoryChart', () => ({
   default: () => null,

@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { Decimal } from 'decimal.js'
 import { useQuery } from '@tanstack/react-query'
-import { fetchAssets, ApiError } from '../api/client'
+import { fetchAssets } from '../api/client'
 import type { AllocationItem, ReadStatus } from '../api/client'
 import AssetEmblem from './AssetEmblem'
 import MoneyValue from './MoneyValue'
 import { IconSearch } from './Icons'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 interface Props {
   /**
@@ -209,7 +211,7 @@ function ExcludedAssetsStrip({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
 
   const { data } = useQuery({
-    queryKey: ['assets', 'excluded-strip'],
+    queryKey: queryKeys.assetsExcludedStrip(),
     queryFn: () => fetchAssets({ excluded: true, held: true }),
   })
 
@@ -235,7 +237,7 @@ function ExcludedAssetsStrip({
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
-        [assetId]: err instanceof ApiError ? err.message : 'Failed to include.',
+        [assetId]: errorMessage(err, 'Failed to include.'),
       }))
     } finally {
       setIncludingIds((prev) => {
@@ -307,7 +309,7 @@ export default function AllocationList({ items, onToggleExclude }: Props) {
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
-        [assetId]: err instanceof ApiError ? err.message : 'Failed to exclude.',
+        [assetId]: errorMessage(err, 'Failed to exclude.'),
       }))
     } finally {
       setExcludingIds((prev) => {

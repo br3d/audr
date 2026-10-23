@@ -30,19 +30,20 @@ from typing import Any
 
 import httpx
 
+from audr.providers.http_base import NEWS_USER_AGENT, ProviderHttpBase, RateLimitError
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://hn.algolia.com/api/v1/search_by_date"
 _TIMEOUT = 15.0
 _DEFAULT_HITS_PER_PAGE = 20
-_USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
+_USER_AGENT = NEWS_USER_AGENT
 
-
-class HackerNewsRateLimited(Exception):
-    """Raised on HTTP 429 — distinct from the "no results" cases this
-    adapter otherwise swallows, so the caller can abort the tier instead of
-    treating a rate limit as "nothing happened this run".
-    """
+# Raised on HTTP 429 — distinct from the "no results" cases this adapter
+# otherwise swallows, so the caller can abort the tier instead of treating a
+# rate limit as "nothing happened this run". Shared with GdeltRateLimited
+# (audr.providers.http_base.RateLimitError) — see that module's docstring.
+HackerNewsRateLimited = RateLimitError
 
 
 @dataclass(frozen=True)
@@ -66,11 +67,11 @@ class HackerNewsProvider:
         user_agent: str = _USER_AGENT,
     ) -> None:
         self._base = base_url
-        self._owns_client = http_client is None
-        self._client = http_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(_TIMEOUT),
+        self._http = ProviderHttpBase(
+            http_client=http_client,
+            timeout=_TIMEOUT,
+            user_agent=user_agent,
             follow_redirects=False,
-            headers={"User-Agent": user_agent},
         )
 
     async def __aenter__(self) -> HackerNewsProvider:
@@ -80,8 +81,7 @@ class HackerNewsProvider:
         await self.close()
 
     async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self._http.close()
 
     async def search_stories(
         self,
@@ -96,7 +96,7 @@ class HackerNewsProvider:
         "no results this run" rather than failing the whole job.
         """
         try:
-            response = await self._client.get(
+            response = await self._http.client.get(
                 self._base,
                 params={
                     "query": query,

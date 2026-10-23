@@ -1,40 +1,35 @@
 """FastAPI route for GET /portfolio (AUD-317).
 
 Returns the current portfolio envelope from the latest published
-valuation snapshot, matching the PortfolioResponse contract shape.
+valuation snapshot, matching the PortfolioResponse contract shape. The
+snapshot lookup, holdings assembly, allocation math, and 24h price delta
+live in audr.portfolio.aggregation; this module only parses the request
+and maps the resulting view onto the response DTO.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Annotated
 
-import sqlalchemy as sa
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import ReadPrincipal, _require_read_auth
-from audr.assets.constants import is_native_eth
 from audr.db import get_db
-from audr.portfolio.money import format_decimal, raw_to_quantity
+from audr.portfolio.aggregation import (
+    AllocationView,
+    HoldingView,
+    PortfolioView,
+    build_portfolio_view,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
-
-_SOURCE_TO_METADATA_SOURCE: dict[str, str] = {
-    "catalog": "catalog",
-    "manual": "owner",
-    "chain": "chain",
-}
-
-# Worst-status precedence for aggregating per-line read_status into a single
-# per-asset allocation row (AUD-404): error > stale > pending > ok.
-_STATUS_RANK: dict[str, int] = {"ok": 0, "pending": 1, "stale": 2, "error": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -146,70 +141,77 @@ def _icon_url(asset_id: str) -> str:
     return f"/api/v1/assets/{asset_id}/icon"
 
 
-async def _get_price_change_24h_pct(
-    db: AsyncSession,
-    current_prices: dict[str, str],
-    now: datetime,
-) -> dict[str, str]:
-    """Return {asset_id: price_change_24h_pct} for assets with a current price.
+def _holding_out(holding: HoldingView) -> HoldingOut:
+    """Map a HoldingView onto the contract shape.
 
-    The reference price is the quote_observation closest to now()-24h, within
-    a ±6h tolerance window — one query (DISTINCT ON) covering every asset, no
-    N+1. Assets with no reference observation in the window, or whose
-    reference price is zero, are omitted (unknown ≠ zero; caller treats a
-    missing key as null).
+    ``read_status`` is unconditionally "ok" here — per-line staleness only
+    ever surfaces through the aggregated allocation row's read_status, never
+    on the individual holding (existing contract behaviour, unchanged by
+    AUD-692).
     """
-    asset_ids = list(current_prices)
-    if not asset_ids:
-        return {}
-
-    target = now - timedelta(hours=24)
-    window_start = now - timedelta(hours=30)
-    window_end = now - timedelta(hours=18)
-
-    result = await db.execute(
-        sa.text(
-            """
-            SELECT DISTINCT ON (qo.asset_id)
-                qo.asset_id,
-                qo.price_usd::text AS ref_price_usd
-            FROM quote_observation qo
-            JOIN quote_set qs ON qs.id = qo.quote_set_id
-            WHERE qo.asset_id = ANY(:asset_ids ::uuid[])
-              AND qs.status = 'complete'
-              AND qs.fetched_at BETWEEN :window_start AND :window_end
-            ORDER BY qo.asset_id, ABS(EXTRACT(EPOCH FROM (qs.fetched_at - :target)))
-            """
-        ),
-        {
-            "asset_ids": asset_ids,
-            "window_start": window_start,
-            "window_end": window_end,
-            "target": target,
-        },
+    observed_str = holding.observed_at.isoformat() if holding.observed_at else None
+    return HoldingOut(
+        wallet_id=holding.wallet_id,
+        asset_id=holding.asset_id,
+        contract_address=None if holding.is_native else holding.token_address,
+        is_native=holding.is_native,
+        raw_balance=holding.raw_balance,
+        decimals=holding.decimals,
+        quantity=holding.quantity,
+        price_usd=holding.price_usd,
+        value_usd=holding.value_usd,
+        included=holding.included,
+        metadata_source=holding.metadata_source,
+        read_status="ok",
+        block_time=holding.block_time.isoformat() if holding.block_time else None,
+        observed_at=observed_str,
+        last_success_at=observed_str,
+        logo_url=_icon_url(holding.asset_id),
     )
 
-    pct_by_asset: dict[str, str] = {}
-    for row in result:
-        asset_id = str(row[0])
-        ref_price = Decimal(row[1])
-        if ref_price == 0:
-            continue
-        current_price = Decimal(current_prices[asset_id])
-        pct = ((current_price - ref_price) / ref_price * 100).quantize(Decimal("0.01"))
-        pct_by_asset[asset_id] = str(pct)
-    return pct_by_asset
+
+def _allocation_out(allocation: AllocationView) -> AllocationItemOut:
+    return AllocationItemOut(
+        asset_id=allocation.asset_id,
+        symbol=allocation.symbol,
+        name=allocation.name,
+        value_usd=allocation.value_usd,
+        percentage=allocation.percentage,
+        quantity=allocation.quantity,
+        price_usd=allocation.price_usd,
+        price_change_24h_pct=allocation.price_change_24h_pct,
+        wallet_count=allocation.wallet_count,
+        read_status=allocation.read_status,
+        included=allocation.included,
+        logo_url=_icon_url(allocation.asset_id),
+    )
 
 
-_EMPTY_QUALITY = PortfolioQualityOut(
-    incomplete=True,
-    stale_balances=False,
-    stale_prices=False,
-    mixed_observation_times=False,
-    discovery_overdue=False,
-    verification_pending=False,
-    invalidated=False,
-)
+def _to_response(view: PortfolioView, *, now: datetime) -> PortfolioResponseOut:
+    quality = _map_quality(view.quality, total_is_null=view.total_usd is None)
+    return PortfolioResponseOut(
+        snapshot_id=view.snapshot_id,
+        membership_revision=None,
+        valuation_time=view.valuation_time.isoformat() if view.valuation_time else None,
+        currency="USD",
+        priced_subtotal_usd=view.priced_subtotal_usd,
+        total_usd=view.total_usd,
+        unpriced_asset_count=view.unpriced_asset_count,
+        quality=quality,
+        balance_block=view.balance_block,
+        balance_block_time=(
+            view.balance_block_time.isoformat() if view.balance_block_time else None
+        ),
+        balance_observed_at=(
+            view.balance_observed_at.isoformat() if view.balance_observed_at else None
+        ),
+        discovery_completed_at=None,
+        holdings=[_holding_out(h) for h in view.holdings],
+        allocations=[_allocation_out(a) for a in view.allocations],
+        stale_contribution_usd=view.stale_contribution_usd,
+        request_id=str(uuid.uuid4()),
+        generated_at=now.isoformat(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -225,405 +227,5 @@ async def get_portfolio(
 ) -> PortfolioResponseOut:
     """Return the current portfolio from the latest published valuation snapshot."""
     now = datetime.now(tz=UTC)
-
-    # 1. Find the latest published valuation snapshot.
-    snap_result = await db.execute(
-        sa.text(
-            """
-            SELECT id, snapshotted_at, quality
-            FROM valuation_snapshot
-            WHERE published_at IS NOT NULL
-            ORDER BY published_at DESC
-            LIMIT 1
-            """
-        )
-    )
-    snap_row = snap_result.first()
-
-    if snap_row is None:
-        # No snapshot yet — return an empty but valid envelope.
-        return PortfolioResponseOut(
-            snapshot_id=None,
-            membership_revision=None,
-            valuation_time=None,
-            currency="USD",
-            priced_subtotal_usd=None,
-            total_usd=None,
-            unpriced_asset_count=0,
-            quality=_EMPTY_QUALITY,
-            balance_block=None,
-            balance_block_time=None,
-            balance_observed_at=None,
-            discovery_completed_at=None,
-            holdings=[],
-            allocations=[],
-            stale_contribution_usd=None,
-            request_id=str(uuid.uuid4()),
-            generated_at=now.isoformat(),
-        )
-
-    snapshot_id = str(snap_row[0])
-    valuation_time = snap_row[1]
-    quality_str = str(snap_row[2])
-
-    # 2. Query valuation lines joined with asset and wallet info.
-    #
-    # Exclusion is applied at read time against the asset's *current*
-    # `excluded` flag (AUD-447), but the excluded rows are still returned,
-    # flagged `included=false` (AUD-448). They are omitted from every total
-    # below — priced_subtotal, total_usd, the allocation percentages and the
-    # unpriced count — so Exclude takes full effect on the next refetch,
-    # while the client keeps the row's value and can therefore redraw
-    # instantly in *both* directions: dropping a row needs no round trip, and
-    # putting it back needs no re-scan to recover a number it never lost.
-    wallet_filter = "AND vl.wallet_id = :wallet_id" if wallet_id else ""
-    lines_result = await db.execute(
-        sa.text(
-            f"""
-            SELECT
-                vl.wallet_id,
-                vl.asset_id,
-                vl.raw_amount::text   AS raw_amount,
-                vl.block_number,
-                vl.block_time         AS block_time,
-                vl.price_usd::text    AS price_usd,
-                vl.value_usd::text    AS value_usd,
-                a.token_address,
-                a.symbol,
-                a.name,
-                COALESCE(a.decimals_override, a.decimals) AS decimals,
-                a.source,
-                COALESCE(a.excluded, false) AS excluded,
-                bo.observed_at        AS observed_at
-            FROM valuation_line vl
-            JOIN asset a ON a.id = vl.asset_id
-            LEFT JOIN LATERAL (
-                SELECT bo2.observed_at
-                FROM balance_observation bo2
-                WHERE bo2.id = vl.observation_id
-            ) bo ON true
-            WHERE vl.snapshot_id = :snap_id
-              {wallet_filter}
-            ORDER BY vl.value_usd DESC NULLS LAST
-            """  # noqa: S608 -- wallet_filter is a fixed ":param" fragment; the value is bound, never interpolated
-        ),
-        {"snap_id": snapshot_id, **({"wallet_id": wallet_id} if wallet_id else {})},
-    )
-
-    lines = [dict(r) for r in lines_result.mappings()]
-
-    # 3. Determine the freshest balance block among this snapshot's holdings.
-    # Every wallet/asset scanned in the same balance_scan run shares one
-    # block_number (jobs.__main__.handle_balance_scan reads it once per run),
-    # so a line whose block is behind the max was not updated by the latest
-    # run and is a carried-forward (stale) balance — this is what
-    # stale_contribution_usd below sums (AUD-72).
-    #
-    # Excluded lines are skipped: `balance_block` describes the portfolio the
-    # owner actually holds, and letting an excluded asset set the baseline
-    # would let it mark every real holding Stale (AUD-448).
-    max_block: int | None = None
-    max_block_time: datetime | None = None
-    for line in lines:
-        if line["excluded"]:
-            continue
-        block_number = line["block_number"]
-        if block_number is not None:
-            bn = int(block_number)
-            if max_block is None or bn > max_block:
-                max_block = bn
-                max_block_time = line["block_time"]
-
-    # 4. Build holdings and compute totals.
-    holdings: list[HoldingOut] = []
-    holding_is_stale: list[bool] = []
-    priced_subtotal = Decimal(0)
-    stale_subtotal = Decimal(0)
-    max_observed: datetime | None = None
-
-    for line in lines:
-        is_included = not bool(line["excluded"])
-        token_address = str(line["token_address"])
-        is_native = is_native_eth(token_address)
-        source = str(line["source"])
-        metadata_source = _SOURCE_TO_METADATA_SOURCE.get(source, "owner")
-
-        raw_amount_str: str | None = line["raw_amount"]
-        decimals_val = int(line["decimals"])
-
-        quantity_str: str | None = None
-        if raw_amount_str is not None:
-            try:
-                qty = raw_to_quantity(int(raw_amount_str), decimals_val)
-                quantity_str = format_decimal(qty)
-            except Exception:
-                logger.warning(
-                    "Failed to compute quantity for asset %s (raw_amount=%r, decimals=%r)",
-                    token_address,
-                    raw_amount_str,
-                    decimals_val,
-                    exc_info=True,
-                )
-
-        price_usd_str: str | None = line["price_usd"]
-        value_usd_str: str | None = line["value_usd"]
-
-        if is_included and price_usd_str is not None and value_usd_str is not None:
-            try:
-                priced_subtotal += Decimal(value_usd_str)
-            except Exception:
-                logger.warning(
-                    "Failed to parse value_usd %r for asset %s; excluded from priced_subtotal",
-                    value_usd_str,
-                    token_address,
-                    exc_info=True,
-                )
-
-        block_number = line["block_number"]
-        is_stale_balance = (
-            block_number is not None and max_block is not None and int(block_number) < max_block
-        )
-        if (
-            is_included
-            and is_stale_balance
-            and price_usd_str is not None
-            and value_usd_str is not None
-        ):
-            try:
-                stale_subtotal += Decimal(value_usd_str)
-            except Exception:
-                logger.warning(
-                    "Failed to parse value_usd %r for asset %s; excluded from stale_subtotal",
-                    value_usd_str,
-                    token_address,
-                    exc_info=True,
-                )
-
-        block_time_val = line["block_time"]
-        block_time_str: str | None = (
-            block_time_val.isoformat() if hasattr(block_time_val, "isoformat") else None
-        )
-
-        observed_at = line["observed_at"]
-        observed_str: str | None = None
-        if observed_at is not None:
-            if hasattr(observed_at, "isoformat"):
-                observed_str = observed_at.isoformat()
-                if max_observed is None or observed_at > max_observed:
-                    max_observed = observed_at
-            else:
-                observed_str = str(observed_at)
-
-        holdings.append(
-            HoldingOut(
-                wallet_id=str(line["wallet_id"]),
-                asset_id=str(line["asset_id"]),
-                contract_address=None if is_native else token_address,
-                is_native=is_native,
-                raw_balance=raw_amount_str,
-                decimals=decimals_val,
-                quantity=quantity_str,
-                price_usd=price_usd_str,
-                value_usd=value_usd_str,
-                included=is_included,
-                metadata_source=metadata_source,
-                read_status="ok",
-                block_time=block_time_str,
-                observed_at=observed_str,
-                last_success_at=observed_str,
-                logo_url=_icon_url(str(line["asset_id"])),
-            )
-        )
-        holding_is_stale.append(is_stale_balance)
-
-    # total_usd is null unless every unpriced holding has been confirmed
-    # unpriceable by the provider ("gaps") — a holding that has simply never
-    # been asked about yet ("partial") still blocks the total (AUD-361).
-    total_usd_str: str | None = (
-        format_decimal(priced_subtotal) if quality_str in ("complete", "gaps") else None
-    )
-    # "No subtotal" means nothing counts towards one. Excluded rows are in
-    # `holdings` now (AUD-448), so an all-excluded portfolio must still report
-    # a null subtotal rather than a misleading $0.00.
-    if not any(h.included for h in holdings):
-        priced_subtotal_str: str | None = None
-        stale_contribution_str: str | None = None
-    else:
-        priced_subtotal_str = format_decimal(priced_subtotal)
-        stale_contribution_str = format_decimal(stale_subtotal)
-
-    # 5. Aggregate allocations by asset_id across wallets (AUD-404). Two
-    # wallets holding the same asset must collapse into one row — summing
-    # value/quantity and tracking wallet_count/read_status/included across
-    # the contributing lines — rather than one row per (wallet, asset).
-    asset_order: list[str] = []
-    asset_aggs: dict[str, dict] = {}
-
-    for holding, is_stale in zip(holdings, holding_is_stale, strict=True):
-        agg = asset_aggs.get(holding.asset_id)
-        if agg is None:
-            matching = next(
-                (ln for ln in lines if str(ln["asset_id"]) == holding.asset_id),
-                None,
-            )
-            agg = {
-                "symbol": str(matching["symbol"]) if matching else "?",
-                "name": str(matching["name"]) if matching else "?",
-                "wallet_ids": set(),
-                "value_usd": Decimal(0),
-                "has_priced_line": False,
-                "quantity": Decimal(0),
-                "quantity_known": True,
-                "price_usd": None,
-                "status": "ok",
-                "included": False,
-            }
-            asset_aggs[holding.asset_id] = agg
-            asset_order.append(holding.asset_id)
-
-        agg["wallet_ids"].add(holding.wallet_id)
-        if holding.included:
-            agg["included"] = True
-
-        if holding.quantity is not None and agg["quantity_known"]:
-            agg["quantity"] += Decimal(holding.quantity)
-        else:
-            agg["quantity_known"] = False
-
-        if holding.value_usd is not None:
-            agg["has_priced_line"] = True
-            agg["value_usd"] += Decimal(holding.value_usd)
-            if agg["price_usd"] is None and holding.price_usd is not None:
-                agg["price_usd"] = holding.price_usd
-
-        line_status = "stale" if is_stale else "ok"
-        if _STATUS_RANK[line_status] > _STATUS_RANK[agg["status"]]:
-            agg["status"] = line_status
-
-    # Only included assets can leave the total incomplete — an excluded
-    # unpriced token is not a gap in a figure it never contributed to.
-    unpriced_asset_count = sum(
-        1
-        for asset_id in asset_order
-        if asset_aggs[asset_id]["included"] and not asset_aggs[asset_id]["has_priced_line"]
-    )
-
-    # price_change_24h_pct reuses the same current price already selected
-    # above for price_usd — one query covering every priced asset, no N+1.
-    current_prices = {
-        asset_id: asset_aggs[asset_id]["price_usd"]
-        for asset_id in asset_order
-        if asset_aggs[asset_id]["price_usd"] is not None
-    }
-    price_change_pcts = await _get_price_change_24h_pct(db, current_prices, now)
-
-    # Excluded rows are emitted with their value but a 0% share, and
-    # unconditionally — the `priced_subtotal > 0` guard below only governs
-    # whether a *share* is computable, and an all-excluded portfolio has a
-    # zero subtotal yet must still hand the client the rows it needs to put
-    # an asset back (AUD-448).
-    allocations: list[AllocationItemOut] = []
-    for asset_id in asset_order:
-        agg = asset_aggs[asset_id]
-        if not agg["has_priced_line"]:
-            continue
-        if not agg["included"]:
-            allocations.append(
-                AllocationItemOut(
-                    asset_id=asset_id,
-                    symbol=agg["symbol"],
-                    name=agg["name"],
-                    value_usd=format_decimal(agg["value_usd"]),
-                    percentage="0",
-                    quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
-                    price_usd=agg["price_usd"],
-                    price_change_24h_pct=price_change_pcts.get(asset_id),
-                    wallet_count=len(agg["wallet_ids"]),
-                    read_status=agg["status"],
-                    included=False,
-                    logo_url=_icon_url(asset_id),
-                )
-            )
-            continue
-        if priced_subtotal <= 0:
-            continue
-        try:
-            pct = (agg["value_usd"] / priced_subtotal * 100).quantize(Decimal("0.01"))
-        except Exception:
-            logger.warning(
-                "Failed to compute allocation percentage for asset %s; omitted",
-                asset_id,
-                exc_info=True,
-            )
-            continue
-        allocations.append(
-            AllocationItemOut(
-                asset_id=asset_id,
-                symbol=agg["symbol"],
-                name=agg["name"],
-                value_usd=format_decimal(agg["value_usd"]),
-                percentage=str(pct),
-                quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
-                price_usd=agg["price_usd"],
-                price_change_24h_pct=price_change_pcts.get(asset_id),
-                wallet_count=len(agg["wallet_ids"]),
-                read_status=agg["status"],
-                included=True,
-                logo_url=_icon_url(asset_id),
-            )
-        )
-
-    # Unpriced assets are surfaced in allocations too (sorted after the
-    # priced ones) — dropping the Holdings page must not make them invisible.
-    for asset_id in asset_order:
-        agg = asset_aggs[asset_id]
-        if agg["has_priced_line"]:
-            continue
-        allocations.append(
-            AllocationItemOut(
-                asset_id=asset_id,
-                symbol=agg["symbol"],
-                name=agg["name"],
-                value_usd=None,
-                percentage="0",
-                quantity=format_decimal(agg["quantity"]) if agg["quantity_known"] else None,
-                price_usd=None,
-                price_change_24h_pct=None,
-                wallet_count=len(agg["wallet_ids"]),
-                read_status=agg["status"],
-                included=agg["included"],
-                logo_url=_icon_url(asset_id),
-            )
-        )
-
-    quality = _map_quality(quality_str, total_is_null=total_usd_str is None)
-    valuation_time_str: str | None = None
-    if valuation_time is not None:
-        valuation_time_str = (
-            valuation_time.isoformat()
-            if hasattr(valuation_time, "isoformat")
-            else str(valuation_time)
-        )
-    balance_block_time_str: str | None = (
-        max_block_time.isoformat() if hasattr(max_block_time, "isoformat") else None
-    )
-
-    return PortfolioResponseOut(
-        snapshot_id=snapshot_id,
-        membership_revision=None,
-        valuation_time=valuation_time_str,
-        currency="USD",
-        priced_subtotal_usd=priced_subtotal_str,
-        total_usd=total_usd_str,
-        unpriced_asset_count=unpriced_asset_count,
-        quality=quality,
-        balance_block=max_block,
-        balance_block_time=balance_block_time_str,
-        balance_observed_at=max_observed.isoformat() if max_observed else None,
-        discovery_completed_at=None,
-        holdings=holdings,
-        allocations=allocations,
-        stale_contribution_usd=stale_contribution_str,
-        request_id=str(uuid.uuid4()),
-        generated_at=now.isoformat(),
-    )
+    view = await build_portfolio_view(db, wallet_id=wallet_id, now=now)
+    return _to_response(view, now=now)

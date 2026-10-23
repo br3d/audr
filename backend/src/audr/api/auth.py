@@ -358,8 +358,16 @@ async def post_logout(
     _clear_session_cookie(response)
 
 
-@router.put("/auth/password", status_code=http_status.HTTP_204_NO_CONTENT)
-@router.patch("/auth/password", status_code=http_status.HTTP_204_NO_CONTENT)
+@router.put(
+    "/auth/password",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    operation_id="change_password",
+)
+@router.patch(
+    "/auth/password",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    operation_id="change_password_patch",
+)
 async def patch_password(
     body: ChangePasswordBody,
     response: Response,

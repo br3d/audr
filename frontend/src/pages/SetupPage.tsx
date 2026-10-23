@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { setup, ApiError } from '../api/client'
+import { useMutation } from '@tanstack/react-query'
+import { setup } from '../api/client'
+import { errorMessage } from '../api/errorMessage'
 import { BrandLockup } from '../components/Logo'
 
 interface Props {
@@ -13,40 +15,39 @@ const MAX_PASSWORD_LENGTH = 128
 export default function SetupPage({ onSetupComplete }: Props) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  const setupMutation = useMutation({
+    mutationFn: () => setup(password),
+    onSuccess: onSetupComplete,
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setError(null)
+    setValidationError(null)
 
     if (password !== confirm) {
-      setError('Passwords do not match.')
+      setValidationError('Passwords do not match.')
       return
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
+      setValidationError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
       return
     }
     if (password.length > MAX_PASSWORD_LENGTH) {
-      setError(`Password must be at most ${MAX_PASSWORD_LENGTH} characters.`)
+      setValidationError(`Password must be at most ${MAX_PASSWORD_LENGTH} characters.`)
       return
     }
 
-    setSubmitting(true)
-    try {
-      await setup(password)
-      onSetupComplete()
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message)
-      } else {
-        setError('An unexpected error occurred. Please try again.')
-      }
-    } finally {
-      setSubmitting(false)
-    }
+    setupMutation.mutate()
   }
+
+  const submitting = setupMutation.isPending
+  const error =
+    validationError ??
+    (setupMutation.error
+      ? errorMessage(setupMutation.error, 'An unexpected error occurred. Please try again.')
+      : null)
 
   return (
     <div className="auth-screen">
