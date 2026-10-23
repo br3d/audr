@@ -100,7 +100,7 @@ Don't block yourself on it, and don't assume an e2e failure is yours.
 
 ## The mandatory gates
 
-Your change must be green on all four of these. They run on GitHub Actions
+Your change must be green on all six of these. They run on GitHub Actions
 ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) for every pull
 request, so you will get the same verdict we do — and the self-hosted pipeline
 the project actually deploys from is unreachable to you by design.
@@ -109,6 +109,8 @@ the project actually deploys from is unreachable to you by design.
 |---|---|---|
 | **ruff — full rule set** | `ruff check` **and** `ruff format --check`, in `backend/` *and* at the repo root for `scripts/`. Not an "errors only" subset: `E,F,I,UP,B,S,ANN` under `backend/`, the same minus `ANN` at the root. | `cd backend && uv run ruff check . && uv run ruff format --check .` |
 | **scripts-parse under 3.13** | Every `scripts/**/*.py` must `compile()` under `python:3.13-slim`. | see below |
+| **mypy --strict (backend)** | `mypy --strict` on `backend/src`, gated against the frozen backlog in `backend/mypy-baseline.txt` — a new error fails the gate, a pre-existing one doesn't (yet). | `docker compose -f compose.test.yaml --profile backend run --rm --build backend-mypy` |
+| **tsc --noEmit (frontend)** | `npm run typecheck`, run ahead of Vitest. | `cd frontend && npm run typecheck` |
 | **pytest** | Backend unit + contract + integration suites. | `./scripts/test.sh --backend-only` |
 | **Vitest** | Frontend specs. | `./scripts/test.sh --frontend-only` |
 
@@ -131,12 +133,13 @@ Two gate details that surprise people:
 - **Every `noqa` must carry a reason.** A bare `# noqa` will be asked about in
   review.
 
-mypy (strict, on `backend/src`) and `npm run typecheck` are not yet CI-gated but
-are expected to stay clean:
+`backend/mypy-baseline.txt` is not meant to grow: it exists to let the backlog
+get cleaned up gradually, not to absorb a new error from unrelated work. If a
+change legitimately touches many pre-existing error sites (a rename, a file
+move) and the diff needs rebasing onto a fresh baseline, regenerate it with:
 
 ```bash
-cd backend && uv run mypy src
-cd frontend && npm run typecheck
+cd backend && uv run mypy --cache-dir=/tmp/mypy_cache src 2>&1 | grep ': error:' > mypy-baseline.txt
 ```
 
 ---
@@ -153,8 +156,9 @@ commit access.
    `feat/<slug>` or `fix/<slug>` matches what we use.
 2. Implement the change **with tests**. A behaviour change without a test is the
    most common reason a PR stalls.
-3. Get all four gates green locally (`./scripts/test.sh` plus the lint
-   commands). The PR will run them again on GitHub-hosted runners.
+3. Get all six gates green locally (`./scripts/test.sh` plus the lint, mypy
+   and typecheck commands). The PR will run them again on GitHub-hosted
+   runners.
 4. Open the PR. In the description, say what changed and why, link the issue if
    there is one, and state what you ran. If it touches deployed behaviour or
    migrations, say so explicitly.

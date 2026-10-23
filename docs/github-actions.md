@@ -13,20 +13,28 @@ The Gitea pipeline stays the authority over what is deployed. Nothing in
 ## `tests.yml` — the gate behind the badge
 
 Runs on **pushes to `main`**, on **pull requests**, and on demand from
-`release.yml` via `workflow_call`. Three jobs, each mirroring its counterpart in
-the Gitea pipeline's test gate — the `lint`/`backend-tests`/`frontend-tests` jobs
-that `ci/gitea-overlay/workflows/deploy.yaml` makes its deploy depend on:
+`release.yml` via `workflow_call`. Four jobs, each mirroring its counterpart in
+the Gitea pipeline's test gate — the `lint`/`backend-tests`/`backend-mypy`/
+`frontend-tests` jobs that `ci/gitea-overlay/workflows/deploy.yaml` makes its
+deploy depend on:
 
 - `lint` — the full ruff rule set plus `format --check`, over `backend/` and
   `scripts/`. Pinned to `ghcr.io/astral-sh/ruff:0.16.10`; that pin must move
   together with the Gitea job and `backend/pyproject.toml`'s dev extra (AUD-392).
 - `scripts-parse` — compiles every `scripts/*.py` under Python 3.13, because
   those files are run by the host shell's `python3`, not inside the 3.14 image.
+- `backend-mypy` — `mypy --strict` on `backend/src` (AUD-690), gated against
+  the frozen backlog in `backend/mypy-baseline.txt` (see
+  `backend/check_mypy_baseline.py`) rather than the full pre-existing error
+  count, so a new error fails the gate from day one while the backlog is
+  cleaned up separately.
 - `tests` — `./scripts/test.sh`, i.e. the same docker-compose stack (postgres +
   WireMock + pytest + Vitest) the local loop uses. It needs **no secrets**: every
   credential in `compose.test.yaml` is a throwaway fixture. The two suite logs are
   uploaded as a run artifact (7-day retention) so a red run can be read without
-  re-running it.
+  re-running it. The frontend side of this job runs `npm run typecheck`
+  (`tsc --noEmit`) before Vitest (AUD-690) — a frontend type error used to
+  surface for the first time at the Docker image build, deploy-time.
 
 ### Why `push` is filtered to `main`
 

@@ -110,6 +110,21 @@ jobs:
           sys.exit(1 if bad else 0)
           '
 
+  backend-mypy:
+    # mypy --strict on backend/src (AUD-690), gated against a frozen baseline
+    # of pre-existing errors rather than the 86-error backlog the first real
+    # strict run turned up — see backend/mypy-baseline.txt and
+    # backend/check_mypy_baseline.py. Mirrors the `backend-mypy` job in
+    # ci/gitea-overlay/workflows/deploy.yaml. No database dependency, so no
+    # teardown beyond the ephemeral runner itself.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - name: mypy (strict) — backend/src, gated against the baseline
+        run: docker compose -f compose.test.yaml --profile backend run --rm --build backend-mypy
+
   tests:
     # scripts/test.sh drives docker compose (compose.test.yaml): postgres, a
     # WireMock provider stub, pytest and Vitest. Both docker and compose are
