@@ -31,8 +31,8 @@ def normalize(line: str) -> str | None:
     return f"{m['file']}\t{m['code'] or ''}\t{m['msg']}"
 
 
-def load(lines: list[str]) -> "Counter[str]":
-    counts: "Counter[str]" = Counter()
+def load(lines: list[str]) -> Counter[str]:
+    counts: Counter[str] = Counter()
     for line in lines:
         key = normalize(line.rstrip("\n"))
         if key is not None:

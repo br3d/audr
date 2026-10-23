@@ -250,6 +250,9 @@ jobs:
       - name: Frontend tests (vitest)
         working-directory: frontend
         run: npm run test:coverage
+      - name: Generated API types match backend/openapi.json (AUD-694)
+        working-directory: frontend
+        run: npm run check:api-types
 
   build-deploy:
     runs-on: host
