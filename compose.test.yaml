@@ -70,6 +70,11 @@ services:
       --cov=audr
       --cov-report=term-missing
     environment:
+      # ./backend is mounted :ro below; coverage.py's default data file
+      # (project-root/.coverage) would land inside that read-only mount and
+      # crash on `cov.erase()` at startup. /tmp is writable and thrown away
+      # with the container, which is all a CI run needs.
+      COVERAGE_FILE: /tmp/.coverage
       DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
       RPC_MOCK_URL: http://provider-mock:8080/rpc
       QUOTE_MOCK_URL: http://provider-mock:8080/quote
