@@ -223,7 +223,16 @@ jobs:
     # beyond the image compose already built.
     runs-on: host
     env:
-      COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      # `-mypy-` is load-bearing (AUD-720). This job ran under the SAME project
+      # name as `backend-tests` for its first six runs, and the two jobs share
+      # the runner: mypy finishes in ~2 minutes, the suite takes ~25, so the
+      # `down -v --remove-orphans` below deleted `db-test` out from under a
+      # live suite. Every integration test then errored with
+      # `failed to resolve host 'db-test'` — a red gate that left build-deploy
+      # 'skipped' and the stand undeployed, deterministically, on every commit
+      # from 3fdddac onward. Invisible on GitHub, where the jobs get separate
+      # runners and never share a Docker daemon.
+      COMPOSE_PROJECT: audr-test-ci-mypy-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - name: mypy (strict) — backend/src, gated against the baseline

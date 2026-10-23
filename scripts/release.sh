@@ -154,6 +154,39 @@ sub_once(
     r'^__version__ = "[^"]+"$',
     f'__version__ = "{nxt}"',
 )
+# backend/openapi.json carries the number too: it is a committed snapshot of
+# `app.openapi()` (AUD-694) and FastAPI fills `info.version` from
+# audr.version.__version__. Bumping version.py without it makes the snapshot
+# disagree with the live app, which is exactly what
+# tests/unit/test_export_openapi.py::test_committed_schema_matches_the_live_app
+# asserts — so skipping this file turns every release commit red and, since
+# build-deploy `needs:` the suite, leaves the stand undeployed (AUD-720).
+#
+# Rewritten textually rather than by re-running the exporter: the exporter
+# needs the backend's venv, which release.sh does not have and should not
+# require. `info.version` is the ONLY field a version bump can move, so a
+# one-line edit reproduces the generator's output exactly.
+#
+# Anchored on the `"info": {` object rather than on the number alone — the
+# document is `json.dumps(..., indent=2, sort_keys=True)`, so indent-4
+# `"version"` keys also appear inside component schemas.
+openapi = root / "backend/openapi.json"
+text = openapi.read_text()
+anchor = re.search(r'^  "info": \{$', text, flags=re.M)
+if not anchor:
+    sys.exit(f'FATAL: no `"info": {{` object found in {openapi}')
+head, tail = text[: anchor.end()], text[anchor.end() :]
+tail, n = re.subn(
+    r'^(    "version": )"[^"]+"$',
+    lambda m: m.group(1) + f'"{nxt}"',
+    tail,
+    count=1,
+    flags=re.M,
+)
+if n != 1:
+    sys.exit(f"FATAL: no info.version line matched in {openapi}")
+openapi.write_text(head + tail)
+
 # Top-level "version" in package.json: it sits at indent 2, dependency versions
 # sit at indent 4 inside their own objects.
 sub_once(

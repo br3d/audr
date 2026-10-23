@@ -43,6 +43,26 @@ def test_version_file_matches() -> None:
     )
 
 
+def test_committed_openapi_snapshot_carries_this_version() -> None:
+    """backend/openapi.json is a committed snapshot of `app.openapi()`
+    (AUD-694), and FastAPI fills its `info.version` from `__version__` — so it
+    is a version carrier like any other, and scripts/release.sh rewrites it.
+
+    test_export_openapi.py::test_committed_schema_matches_the_live_app already
+    fails when the two disagree, but it compares whole documents and reports a
+    truncated dict diff over ~3800 lines. That is how v0.4.0 shipped a red
+    suite nobody could read at a glance, and because build-deploy `needs:` the
+    suite, the stand stayed undeployed (AUD-720). This test names the number.
+    """
+    snapshot = json.loads((REPO_ROOT / "backend" / "openapi.json").read_text())
+    assert snapshot["info"]["version"] == __version__, (
+        f"backend/openapi.json says {snapshot['info']['version']}, "
+        f"audr.version says {__version__} — regenerate the snapshot with "
+        "`python -m audr.operations.export_openapi backend/openapi.json`, or "
+        "bump with scripts/release.sh, which rewrites it."
+    )
+
+
 def test_pyproject_matches() -> None:
     data = tomllib.loads((REPO_ROOT / "backend/pyproject.toml").read_text())
     assert data["project"]["version"] == __version__
