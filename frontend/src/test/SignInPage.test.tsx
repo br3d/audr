@@ -2,9 +2,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import SignInPage from '../pages/SignInPage'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
+
+function renderSignInPage(container: HTMLDivElement, onSignIn: () => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const root = createRoot(container)
+  flushSync(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: qc },
+        createElement(SignInPage, { onSignIn }),
+      ),
+    )
+  })
+  return root
+}
 
 describe('SignInPage', () => {
   let container: HTMLDivElement
@@ -19,37 +35,25 @@ describe('SignInPage', () => {
   })
 
   it('renders a form', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SignInPage, { onSignIn: () => {} }))
-    })
+    renderSignInPage(container, () => {})
     expect(container.querySelector('form')).not.toBeNull()
   })
 
   it('renders a password input', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SignInPage, { onSignIn: () => {} }))
-    })
+    renderSignInPage(container, () => {})
     const input = container.querySelector('#password') as HTMLInputElement
     expect(input).not.toBeNull()
     expect(input.type).toBe('password')
   })
 
   it('renders a submit button labelled "Sign in"', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SignInPage, { onSignIn: () => {} }))
-    })
+    renderSignInPage(container, () => {})
     const btn = container.querySelector('button[type="submit"]')
     expect(btn?.textContent).toBe('Sign in')
   })
 
   it('renders heading "Sign in"', () => {
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SignInPage, { onSignIn: () => {} }))
-    })
+    renderSignInPage(container, () => {})
     const h1 = container.querySelector('h1')
     expect(h1?.textContent).toBe('Sign in')
   })
@@ -63,10 +67,7 @@ describe('SignInPage', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const onSignIn = vi.fn()
-    const root = createRoot(container)
-    flushSync(() => {
-      root.render(createElement(SignInPage, { onSignIn }))
-    })
+    renderSignInPage(container, onSignIn)
 
     const input = container.querySelector('#password') as HTMLInputElement
     flushSync(() => {

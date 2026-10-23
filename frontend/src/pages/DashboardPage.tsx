@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Decimal } from 'decimal.js'
-import { fetchPortfolio, fetchHistory, fetchEvents, patchAsset, ApiError } from '../api/client'
+import { fetchPortfolio, fetchHistory, fetchEvents, patchAsset } from '../api/client'
 import type { HistoryPeriod, PortfolioQuality, HistoryPoint } from '../api/client'
 import type { MainPage } from '../components/Layout'
 import { applyExclusionOverrides, pruneSettledOverrides } from '../portfolio/exclusions'
 import type { ExcludeOverrides } from '../portfolio/exclusions'
+import { queryKeys, invalidatePortfolioGroup } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
 import AllocationBar from '../components/AllocationBar'
@@ -150,7 +152,7 @@ interface Props {
 export default function DashboardPage({ setPage }: Props) {
   const queryClient = useQueryClient()
   const { data: serverData, error, isLoading } = useQuery({
-    queryKey: ['portfolio'],
+    queryKey: queryKeys.portfolio(),
     queryFn: () => fetchPortfolio(),
     refetchInterval: 30_000,
   })
@@ -172,11 +174,13 @@ export default function DashboardPage({ setPage }: Props) {
     [serverData, excludeOverrides],
   )
 
-  async function handleToggleExclude(assetId: string, excluded: boolean): Promise<void> {
-    setExcludeOverrides((prev) => ({ ...prev, [assetId]: excluded }))
-    try {
-      await patchAsset(assetId, { excluded })
-    } catch (err) {
+  const toggleExcludeMutation = useMutation({
+    mutationFn: ({ assetId, excluded }: { assetId: string; excluded: boolean }) =>
+      patchAsset(assetId, { excluded }),
+    onMutate: ({ assetId, excluded }) => {
+      setExcludeOverrides((prev) => ({ ...prev, [assetId]: excluded }))
+    },
+    onError: (_err, { assetId }) => {
       // Nothing was persisted — drop the override so the row snaps back to the
       // server's answer instead of lying until the next refetch.
       setExcludeOverrides((prev) => {
@@ -184,32 +188,35 @@ export default function DashboardPage({ setPage }: Props) {
         delete next[assetId]
         return next
       })
-      throw err
-    }
-    void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
-    void queryClient.invalidateQueries({ queryKey: ['assets'] })
-    // The chart is a separate query and the backend re-cuts its points against
-    // the current exclusion set, so this is what redraws the line (AUD-448).
-    void queryClient.invalidateQueries({ queryKey: ['history'] })
+    },
+    onSuccess: () => {
+      // The chart is a separate query and the backend re-cuts its points against
+      // the current exclusion set, so this is what redraws the line (AUD-448).
+      invalidatePortfolioGroup(queryClient)
+    },
+  })
+
+  async function handleToggleExclude(assetId: string, excluded: boolean): Promise<void> {
+    await toggleExcludeMutation.mutateAsync({ assetId, excluded })
   }
 
   const [historyPeriod, setHistoryPeriod] = useState<HistoryPeriod>('30d')
 
   const historyQuery = useQuery({
-    queryKey: ['history', historyPeriod],
+    queryKey: queryKeys.history(historyPeriod),
     queryFn: () => fetchHistory(historyPeriod),
     refetchInterval: 60_000,
     placeholderData: keepPreviousData,
   })
 
   const history24hQuery = useQuery({
-    queryKey: ['history', '24h' as const],
+    queryKey: queryKeys.history('24h'),
     queryFn: () => fetchHistory('24h'),
     refetchInterval: 60_000,
   })
 
   const recentEventsQuery = useQuery({
-    queryKey: ['events', 'recent'],
+    queryKey: queryKeys.eventsRecent(),
     queryFn: () => fetchEvents({ limit: RECENT_EVENTS_LIMIT, offset: 0 }),
     refetchInterval: 60_000,
   })
@@ -222,7 +229,7 @@ export default function DashboardPage({ setPage }: Props) {
     return (
       <p role="alert" className="alert alert-danger">
         Failed to load portfolio.{' '}
-        {error instanceof ApiError ? error.message : 'Please try again.'}
+        {errorMessage(error, 'Please try again.')}
       </p>
     )
   }

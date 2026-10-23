@@ -162,7 +162,7 @@ describe('PurgeSection', () => {
       confirm: true,
       current_password: 'wrong-password',
     })
-    expect(container.textContent).toContain('Current password is incorrect.')
+    await vi.waitFor(() => expect(container.textContent).toContain('Current password is incorrect.'))
     // Preview stays open so the owner can retry without re-fetching the impact.
     expect(container.textContent).toContain('What will be deleted')
   })

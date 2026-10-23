@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconBell } from './Icons'
-import { fetchAlerts, markAlertRead, ApiError } from '../api/client'
+import { fetchAlerts, markAlertRead } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -22,7 +24,7 @@ export default function AlertsBell() {
   const queryClient = useQueryClient()
 
   const { data, error } = useQuery({
-    queryKey: ['alerts'],
+    queryKey: queryKeys.alerts(),
     queryFn: () => fetchAlerts(),
     refetchInterval: POLL_INTERVAL_MS,
   })
@@ -51,15 +53,12 @@ export default function AlertsBell() {
   const unreadCount = data?.unread_count ?? 0
   const alerts = data?.alerts ?? []
 
-  async function handleMarkRead(alertId: string) {
-    try {
-      await markAlertRead(alertId)
-      await queryClient.invalidateQueries({ queryKey: ['alerts'] })
-    } catch {
-      // Best-effort — a failed mark-read leaves the alert unread, which is
-      // the safe side to fail on; the next poll will show accurate state.
-    }
-  }
+  // Best-effort — a failed mark-read leaves the alert unread, which is the
+  // safe side to fail on; the next poll will show accurate state.
+  const markReadMutation = useMutation({
+    mutationFn: (alertId: string) => markAlertRead(alertId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.alerts() }),
+  })
 
   return (
     <div className="alerts-bell" ref={rootRef}>
@@ -83,7 +82,7 @@ export default function AlertsBell() {
           <div className="alerts-bell-header">Alerts</div>
           {error && (
             <p role="alert" className="alert alert-danger">
-              {error instanceof ApiError ? error.message : 'Failed to load alerts.'}
+              {errorMessage(error, 'Failed to load alerts.')}
             </p>
           )}
           {!error && alerts.length === 0 && (
@@ -101,7 +100,7 @@ export default function AlertsBell() {
                   <button
                     type="button"
                     className="alerts-bell-item-button"
-                    onClick={() => void handleMarkRead(a.id)}
+                    onClick={() => markReadMutation.mutate(a.id)}
                     disabled={a.read_at !== null}
                     aria-label={a.read_at ? 'Already read' : 'Mark as read'}
                   >

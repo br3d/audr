@@ -26,7 +26,7 @@ from audr.jobs.canonicality import (
 from audr.portfolio.history import materialize_history_point
 from tests.helpers import wallet_address_columns
 
-pytestmark = pytest.mark.anyio
+pytestmark = [pytest.mark.anyio, pytest.mark.integration]
 
 
 # ---------------------------------------------------------------------------

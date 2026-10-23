@@ -22,8 +22,7 @@ class RevisionConflictError(Exception):
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SELECT_SCHEDULE = """
-SELECT
+_SELECT_SCHEDULE_COLS = """
     id,
     kind,
     enabled,
@@ -34,23 +33,26 @@ SELECT
     last_run_at,
     next_run_at,
     updated_at
-FROM schedule
-WHERE kind = :kind
 """
 
+#  _SELECT_SCHEDULE_COLS is a module-level constant; nothing request-derived is interpolated.
+_SELECT_SCHEDULE = f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule WHERE kind = :kind"  # noqa: S608
 
-def _row_to_dict(row: tuple) -> dict:  # type: ignore[type-arg]
+_SELECT_ALL_SCHEDULES = f"SELECT {_SELECT_SCHEDULE_COLS} FROM schedule ORDER BY kind"  # noqa: S608 — see above
+
+
+def _mapping_to_dict(mapping: sa.RowMapping) -> dict:  # type: ignore[type-arg]
     return {
-        "id": row[0],
-        "kind": row[1],
-        "enabled": row[2],
-        "revision": row[3],
-        "paused_at": row[4],
-        "freshness_s": row[5],
-        "budget_calls_per_day": row[6],
-        "last_run_at": row[7],
-        "next_run_at": row[8],
-        "updated_at": row[9],
+        "id": mapping["id"],
+        "kind": mapping["kind"],
+        "enabled": mapping["enabled"],
+        "revision": mapping["revision"],
+        "paused_at": mapping["paused_at"],
+        "freshness_s": mapping["freshness_s"],
+        "budget_calls_per_day": mapping["budget_calls_per_day"],
+        "last_run_at": mapping["last_run_at"],
+        "next_run_at": mapping["next_run_at"],
+        "updated_at": mapping["updated_at"],
     }
 
 
@@ -62,16 +64,29 @@ def _row_to_dict(row: tuple) -> dict:  # type: ignore[type-arg]
 async def get_schedule(session: AsyncSession, *, kind: str) -> dict | None:  # type: ignore[type-arg]
     """Return the schedule row for *kind* as a dict, or None if not found."""
     result = await session.execute(sa.text(_SELECT_SCHEDULE), {"kind": kind})
-    row = result.first()
+    row = result.mappings().first()
     if row is None:
         return None
-    return _row_to_dict(row)
+    return _mapping_to_dict(row)
+
+
+async def list_schedules(session: AsyncSession) -> list[dict]:  # type: ignore[type-arg]
+    """Return every schedule row as a dict, ordered by kind."""
+    result = await session.execute(sa.text(_SELECT_ALL_SCHEDULES))
+    return [_mapping_to_dict(row) for row in result.mappings()]
+
+
+async def get_max_revision(session: AsyncSession) -> int:
+    """Return the highest revision across all schedule rows, or 0 if none exist."""
+    result = await session.execute(sa.text("SELECT MAX(revision) FROM schedule"))
+    return result.scalar() or 0
 
 
 async def update_schedule(
     session: AsyncSession,
     *,
     kind: str,
+    enabled: bool | None = None,
     freshness_s: int | None = None,
     budget_calls_per_day: int | None = None,
     expected_revision: int | None = None,
@@ -102,6 +117,9 @@ async def update_schedule(
     set_parts: list[str] = ["revision = revision + 1", "updated_at = now()"]
     params: dict = {"kind": kind}  # type: ignore[type-arg]
 
+    if enabled is not None:
+        set_parts.append("enabled = :enabled")
+        params["enabled"] = enabled
     if freshness_s is not None:
         set_parts.append("freshness_s = :freshness_s")
         params["freshness_s"] = freshness_s

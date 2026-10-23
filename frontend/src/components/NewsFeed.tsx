@@ -1,5 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { fetchAssetNews, ApiError } from '../api/client'
+import { fetchAssetNews } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
 
 const PAGE_SIZE = 5
 
@@ -22,7 +24,7 @@ function formatPublishedAt(iso: string): string {
 function AssetNewsCard({ asset }: AssetNewsCardProps) {
   const { data, error, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInfiniteQuery({
-      queryKey: ['asset-news', asset.asset_id],
+      queryKey: queryKeys.assetNews(asset.asset_id),
       queryFn: ({ pageParam }) => fetchAssetNews(asset.asset_id, PAGE_SIZE, pageParam as number),
       initialPageParam: 0,
       getNextPageParam: (lastPage, allPages) => {
@@ -47,7 +49,7 @@ function AssetNewsCard({ asset }: AssetNewsCardProps) {
 
       {error && (
         <p role="alert" className="alert alert-danger">
-          {error instanceof ApiError ? error.message : 'Failed to load news.'}
+          {errorMessage(error, 'Failed to load news.')}
         </p>
       )}
 

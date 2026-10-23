@@ -1,8 +1,9 @@
 # Scripts
 
-Seventeen files live here, but an operator only ever runs four of them. The
-rest are the team's build, release and maintenance machinery — they assume a
-registry, a deploy host or an SSH key that a self-hosting user does not have.
+Thirty-two scripts live here, but an operator only ever runs five of them. The
+rest are the team's build, release, alerting and maintenance machinery — they
+assume a registry, a deploy host or an SSH key that a self-hosting user does
+not have.
 
 ## If you are running audr
 
@@ -33,6 +34,23 @@ or an SSH key, and they act on infrastructure outside your installation.
 | `release.sh` | Cuts a semantic-version release: rewrites the version in the five in-repo files that carry it, commits, and creates the annotated tag. Pushing is opt-in (`--push`) because a pushed `v*` tag triggers the deploy pipeline. Deliberately does **not** touch `compose.yaml` — see `promote-image.py` |
 | `promote-image.py` | Step 3 of a release: points `compose.yaml`'s `x-backend-image` at `<version>` *after* proving that tag is in GHCR and was built from the release commit, and restores the inlined healthchecks the same way. Refuses, naming the dispatch, when the publish has not run; idempotent when it has (AUD-546). Also refuses to promote a release `main` has overtaken — off-`main`, or more than 20 commits behind — because the pin decides what every fresh clone installs; `--allow-stale` overrides |
 | `sync-ci-overlay.sh` | Reconciles `ci/gitea-overlay/workflows/` with the deploy host's mirror overlay. Maintenance only: the mirror reads the workflows out of the `main` commit, so this is not a step in shipping a workflow change — but it is how you prune a host-only copy the repo has deleted, which the mirror would otherwise keep baking in |
+
+## Internal — host installers and alerting
+
+These install or run on the deploy host only, and need the SSH key and
+`secrets/` that a self-hosting install does not have.
+
+| Script | What it does |
+|---|---|
+| `install-watchdog.sh` | Installs the watchdog and alert-dispatch timers/services on the deploy host, plus verbatim copies of the scripts they run. `--check` reports without changing anything |
+| `stand-watchdog.sh` | Probes `/health/ready` every minute from `audr-watchdog.timer`; alerts on a sustained outage, backup staleness, disk pressure, a mute alert dispatcher, or an undrained alert spool |
+| `alert-dispatch.sh` | Delivers pending critical news alerts from the stack, from `audr-alert-dispatch.timer`: reads what the worker has pending, sends it via `notify.sh`, then tells the worker to mark it delivered. `--dry-run` renders and reports without sending or marking |
+| `notify.sh` | Sends an operational alert to every configured channel — a `critical` Paperclip issue (via `notify-board.py`) and/or Telegram — and spools anything it cannot deliver for `drain-alert-spool.py` to replay later |
+| `notify-board.py` | Opens (and later closes) a Paperclip issue for an ongoing outage. Reached through `notify.sh`; nothing else calls it directly |
+| `drain-alert-spool.py` | Replays alerts `notify.sh` could not deliver from the host, run from inside an agent so a board credential is available. `--dry-run` shows without changing anything |
+| `install-mirror-dropin.sh` | Installs the boot-DNS-race drop-in for `audr-mirror.service` on the deploy host. `--check` reports without changing anything |
+| `test_notify_board.py` | Dependency-free unit tests for `notify-board.py`'s issue lifecycle: `python3 scripts/test_notify_board.py` |
+| `test_drain_alert_spool.py` | Dependency-free unit tests for the spool replay/collapse logic: `python3 scripts/test_drain_alert_spool.py` |
 
 ## Internal — maintenance and generated files
 

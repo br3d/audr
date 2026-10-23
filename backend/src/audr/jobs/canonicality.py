@@ -59,29 +59,34 @@ async def invalidate_observation(
     if reason not in ("reorg", "verification_pending"):
         raise ValueError(f"invalid invalidation reason: {reason!r}")
 
-    try:
-        await session.execute(
-            sa.text(
-                """
-                INSERT INTO balance_observation_invalidation
-                  (id, observation_id, reason, invalidated_at, reorg_depth)
-                VALUES (:id, :obs, :reason, :now, :depth)
-                """
-            ),
-            {
-                "id": str(uuid.uuid4()),
-                "obs": str(observation_id),
-                "reason": reason,
-                "now": datetime.now(tz=UTC),
-                "depth": reorg_depth,
-            },
-        )
-    except Exception as exc:
-        # Unique constraint violation: already invalidated.
-        if "uq_balance_observation_invalidation_observation_id" in str(exc):
-            logger.debug("observation %s already invalidated — skipping", observation_id)
-            return False
-        raise
+    # AUD-688: the re-invalidation path has to be handled by ON CONFLICT, not by
+    # catching the unique violation. In PostgreSQL a failed statement aborts the
+    # whole transaction, so the old `except` returned False with the session
+    # already poisoned — every statement the caller ran afterwards died with
+    # `InFailedSqlTransaction`. Overlapping reorg scans hit that path by design,
+    # which made the "idempotent" branch the one that broke the job. DO NOTHING
+    # never raises, so the transaction stays usable and rowcount tells us whether
+    # this call was the one that inserted.
+    result = await session.execute(
+        sa.text(
+            """
+            INSERT INTO balance_observation_invalidation
+              (id, observation_id, reason, invalidated_at, reorg_depth)
+            VALUES (:id, :obs, :reason, :now, :depth)
+            ON CONFLICT (observation_id) DO NOTHING
+            """
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "obs": str(observation_id),
+            "reason": reason,
+            "now": datetime.now(tz=UTC),
+            "depth": reorg_depth,
+        },
+    )
+    if result.rowcount == 0:
+        logger.debug("observation %s already invalidated — skipping", observation_id)
+        return False
 
     affected = await _mark_affected_history_points(session, observation_id)
     logger.info(

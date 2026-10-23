@@ -8,7 +8,16 @@ import {
   ApiError,
 } from '../api/client'
 import type { IntegrationEntry, ProviderOption } from '../api/client'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '../api/queryKeys'
+import { errorMessage } from '../api/errorMessage'
+
+// "Validation failed: <server message>" when the server names the reason,
+// vs. the bare "Validation failed." when it doesn't — distinct enough from
+// the generic errorMessage() fallback shape to keep its own ApiError check.
+function validationFailureMessage(err: unknown): string {
+  return err instanceof ApiError ? `Validation failed: ${err.message}` : 'Validation failed.'
+}
 
 function healthBadge(status: IntegrationEntry['health']['status']) {
   switch (status) {
@@ -57,50 +66,47 @@ function RpcForm({
   const [editing, setEditing] = useState(false)
   const [url, setUrl] = useState('')
   const [allowPrivate, setAllowPrivate] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [validating, setValidating] = useState(false)
-  const [validateMsg, setValidateMsg] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
-  async function handleSave(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    if (!url.trim()) {
-      setError('RPC URL is required.')
-      return
-    }
-    setSubmitting(true)
-    try {
-      await updateRpc({
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateRpc({
         revision: current?.revision ?? '0',
         url: url.trim(),
         allow_private_host: allowPrivate || undefined,
-      })
+      }),
+    onSuccess: () => {
       setEditing(false)
       setUrl('')
       onSaved()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
-    } finally {
-      setSubmitting(false)
+    },
+  })
+
+  const validateMutation = useMutation({
+    mutationFn: () => validateIntegration('rpc'),
+    onSuccess: onValidated,
+  })
+
+  function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    if (!url.trim()) {
+      setValidationError('RPC URL is required.')
+      return
     }
+    saveMutation.mutate()
   }
 
-  async function handleValidate() {
-    setValidateMsg(null)
-    setValidating(true)
-    try {
-      await validateIntegration('rpc')
-      setValidateMsg('Validation job queued.')
-      onValidated()
-    } catch (err) {
-      setValidateMsg(
-        err instanceof ApiError ? `Validation failed: ${err.message}` : 'Validation failed.',
-      )
-    } finally {
-      setValidating(false)
-    }
-  }
+  const submitting = saveMutation.isPending
+  const error =
+    validationError ??
+    (saveMutation.error ? errorMessage(saveMutation.error, 'An unexpected error occurred.') : null)
+  const validating = validateMutation.isPending
+  const validateMsg = validateMutation.isSuccess
+    ? 'Validation job queued.'
+    : validateMutation.error
+      ? validationFailureMessage(validateMutation.error)
+      : null
 
   return (
     <section aria-labelledby="rpc-heading" className="card">
@@ -131,7 +137,7 @@ function RpcForm({
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={handleValidate}
+              onClick={() => validateMutation.mutate()}
               disabled={validating}
               aria-label="Test RPC connection through the server"
             >
@@ -193,7 +199,7 @@ function RpcForm({
               className="btn btn-secondary"
               onClick={() => {
                 setEditing(false)
-                setError(null)
+                setValidationError(null)
               }}
               disabled={submitting}
             >
@@ -239,52 +245,49 @@ function QuotesForm({
   const [editing, setEditing] = useState(false)
   const [provider, setProvider] = useState(activeProvider)
   const [apiKey, setApiKey] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [validating, setValidating] = useState(false)
-  const [validateMsg, setValidateMsg] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
   const selected = options.find((o) => o.id === provider) ?? options[0]
 
-  async function handleSave(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    if (selected.requires_api_key && !apiKey.trim()) {
-      setError(`${selected.label} requires an API key.`)
-      return
-    }
-    setSubmitting(true)
-    try {
-      await updateQuotes({
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateQuotes({
         revision: current?.revision ?? '0',
         provider: selected.id,
         api_key: selected.requires_api_key ? apiKey.trim() : undefined,
-      })
+      }),
+    onSuccess: () => {
       setEditing(false)
       setApiKey('')
       onSaved()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
-    } finally {
-      setSubmitting(false)
+    },
+  })
+
+  const validateMutation = useMutation({
+    mutationFn: () => validateIntegration('quotes'),
+    onSuccess: onValidated,
+  })
+
+  function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    if (selected.requires_api_key && !apiKey.trim()) {
+      setValidationError(`${selected.label} requires an API key.`)
+      return
     }
+    saveMutation.mutate()
   }
 
-  async function handleValidate() {
-    setValidateMsg(null)
-    setValidating(true)
-    try {
-      await validateIntegration('quotes')
-      setValidateMsg('Validation job queued.')
-      onValidated()
-    } catch (err) {
-      setValidateMsg(
-        err instanceof ApiError ? `Validation failed: ${err.message}` : 'Validation failed.',
-      )
-    } finally {
-      setValidating(false)
-    }
-  }
+  const submitting = saveMutation.isPending
+  const error =
+    validationError ??
+    (saveMutation.error ? errorMessage(saveMutation.error, 'An unexpected error occurred.') : null)
+  const validating = validateMutation.isPending
+  const validateMsg = validateMutation.isSuccess
+    ? 'Validation job queued.'
+    : validateMutation.error
+      ? validationFailureMessage(validateMutation.error)
+      : null
 
   return (
     <section aria-labelledby="quotes-heading" className="card">
@@ -328,7 +331,7 @@ function QuotesForm({
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={handleValidate}
+              onClick={() => validateMutation.mutate()}
               disabled={validating}
               aria-label="Test quote provider connection through the server"
             >
@@ -350,7 +353,7 @@ function QuotesForm({
               value={selected.id}
               onChange={(e) => {
                 setProvider(e.target.value)
-                setError(null)
+                setValidationError(null)
               }}
               disabled={submitting}
             >
@@ -401,7 +404,7 @@ function QuotesForm({
               className="btn btn-secondary"
               onClick={() => {
                 setEditing(false)
-                setError(null)
+                setValidationError(null)
               }}
               disabled={submitting}
             >
@@ -423,7 +426,7 @@ function QuotesForm({
 export default function ConnectionsPage() {
   const queryClient = useQueryClient()
   const { data, error, isLoading } = useQuery({
-    queryKey: ['integrations'],
+    queryKey: queryKeys.integrations(),
     queryFn: fetchIntegrations,
     // While a validation job is in flight, poll so the badge advances from
     // "Validating…" to OK/Error without a manual reload (AUD-313).
@@ -435,11 +438,11 @@ export default function ConnectionsPage() {
   const quotes = data?.items.find((i) => i.kind === 'quotes') ?? null
 
   function handleRpcSaved() {
-    void queryClient.invalidateQueries({ queryKey: ['integrations'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.integrations() })
   }
 
   function handleQuotesSaved() {
-    void queryClient.invalidateQueries({ queryKey: ['integrations'] })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.integrations() })
   }
 
   if (isLoading) {
@@ -450,7 +453,7 @@ export default function ConnectionsPage() {
     return (
       <p role="alert" className="alert alert-danger">
         Failed to load connection settings.{' '}
-        {error instanceof ApiError ? error.message : 'Please try again.'}
+        {errorMessage(error, 'Please try again.')}
       </p>
     )
   }

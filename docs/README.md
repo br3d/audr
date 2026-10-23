@@ -40,7 +40,7 @@ than instructions.
 
 | Document | What it covers |
 |---|---|
-| [verification.md](verification.md) | One-command test invocations and a recorded pass/fail run log |
+| [verification.md](verification.md) | One-command test invocations, and where to check current pass/fail status (CI, not this file) |
 | [release-1-coverage.md](release-1-coverage.md) | Every release-1 requirement mapped to the test that proves it — or recorded as a gap |
 | [verification-history.md](verification-history.md) | The history/reorg verification narrative |
 | [benchmark.md](benchmark.md) | The warm-read latency gate and the catalog call-count report |

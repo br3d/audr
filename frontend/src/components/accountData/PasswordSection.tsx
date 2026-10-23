@@ -1,44 +1,50 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { changePassword, ApiError } from '../../api/client'
+import { useMutation } from '@tanstack/react-query'
+import { changePassword } from '../../api/client'
+import { errorMessage } from '../../api/errorMessage'
 
 export default function PasswordSection() {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setError(null)
-    setMsg(null)
-
-    if (next.length < 12) {
-      setError('New password must be at least 12 characters.')
-      return
-    }
-    if (next !== confirm) {
-      setError('New password and confirmation do not match.')
-      return
-    }
-
-    setSaving(true)
-    try {
-      await changePassword(current, next)
-      setMsg(
-        'Password changed. All other sessions have been signed out. Sign in again to continue.',
-      )
+  const changePasswordMutation = useMutation({
+    mutationFn: () => changePassword(current, next),
+    onSuccess: () => {
       setCurrent('')
       setNext('')
       setConfirm('')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to change password.')
-    } finally {
-      setSaving(false)
+    },
+  })
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    changePasswordMutation.reset()
+
+    if (next.length < 12) {
+      setValidationError('New password must be at least 12 characters.')
+      return
     }
+    if (next !== confirm) {
+      setValidationError('New password and confirmation do not match.')
+      return
+    }
+
+    changePasswordMutation.mutate()
   }
+
+  const saving = changePasswordMutation.isPending
+  const error =
+    validationError ??
+    (changePasswordMutation.error
+      ? errorMessage(changePasswordMutation.error, 'Failed to change password.')
+      : null)
+  const msg = changePasswordMutation.isSuccess
+    ? 'Password changed. All other sessions have been signed out. Sign in again to continue.'
+    : null
 
   return (
     <section aria-label="Change password" className="card">

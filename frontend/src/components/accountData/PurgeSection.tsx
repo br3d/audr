@@ -1,42 +1,43 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { fetchPurgePreview, submitPurge, ApiError } from '../../api/client'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { fetchPurgePreview, submitPurge } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
+import { errorMessage } from '../../api/errorMessage'
 
 export default function PurgeSection() {
   const [provider, setProvider] = useState('coingecko-demo')
   const [showPreview, setShowPreview] = useState(false)
   const [confirmPassword, setConfirmPassword] = useState('')
   const [confirmed, setConfirmed] = useState(false)
-  const [purging, setPurging] = useState(false)
   const [purgeMsg, setPurgeMsg] = useState<string | null>(null)
-  const [purgeError, setPurgeError] = useState<string | null>(null)
 
   const previewQuery = useQuery({
-    queryKey: ['purge-preview', provider],
+    queryKey: queryKeys.purgePreview(provider),
     queryFn: () => fetchPurgePreview(provider),
     enabled: showPreview,
   })
 
-  async function handlePurge(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    if (!confirmed || !confirmPassword) return
-    setPurgeError(null)
-    setPurging(true)
-    try {
-      await submitPurge({ provider, confirm: true, current_password: confirmPassword })
+  const purgeMutation = useMutation({
+    mutationFn: () => submitPurge({ provider, confirm: true, current_password: confirmPassword }),
+    onSuccess: () => {
       setPurgeMsg(
         `Provider data purge submitted for "${provider}". The affected quote integration has been disabled.`,
       )
       setShowPreview(false)
       setConfirmed(false)
       setConfirmPassword('')
-    } catch (err) {
-      setPurgeError(err instanceof ApiError ? err.message : 'Purge failed.')
-    } finally {
-      setPurging(false)
-    }
+    },
+  })
+
+  function handlePurge(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!confirmed || !confirmPassword) return
+    purgeMutation.mutate()
   }
+
+  const purging = purgeMutation.isPending
+  const purgeError = purgeMutation.error ? errorMessage(purgeMutation.error, 'Purge failed.') : null
 
   return (
     <section aria-label="Provider data purge" className="card">
@@ -81,9 +82,7 @@ export default function PurgeSection() {
       {showPreview && previewQuery.error && (
         <p role="alert" className="alert alert-danger mb-12">
           Failed to load purge preview.{' '}
-          {previewQuery.error instanceof ApiError
-            ? previewQuery.error.message
-            : 'Please try again.'}
+          {errorMessage(previewQuery.error, 'Please try again.')}
         </p>
       )}
 

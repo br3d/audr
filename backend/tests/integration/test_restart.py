@@ -160,10 +160,14 @@ async def test_missing_key_env_raises_missing_key_error(
 
 
 async def test_worker_lease_recovered_after_crash(db_session: AsyncSession) -> None:
-    """A stale in_progress lease is successfully reclaimed after the timeout window.
+    """A stale in_progress lease is terminated, then reclaimed once backoff clears.
 
     The first claim represents a worker that has since crashed (heartbeat backdated
-    beyond the lease timeout).  The second claim must succeed and return a new run_id.
+    beyond the lease timeout). Since AUD-689, the expired lease is terminated as
+    `failed` rather than recycled straight back to `pending` — that recycle used
+    to let it bypass claim_job's own backoff streak (AUD-356). So the very next
+    claim is still gated; only once the backoff window has elapsed does a fresh
+    run_id become claimable.
     """
     crashed_run_id = await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3)
     assert crashed_run_id is not None
@@ -171,6 +175,18 @@ async def test_worker_lease_recovered_after_crash(db_session: AsyncSession) -> N
     # Simulate a crashed worker by backdating the heartbeat past the lease timeout.
     await db_session.execute(
         text("UPDATE job_run SET heartbeat_at = now() - interval '10 minutes' WHERE id = :id"),
+        {"id": crashed_run_id},
+    )
+    await db_session.flush()
+
+    assert await claim_job(db_session, kind=JobKind.VALUATION, max_retries=3) is None
+
+    # Clear the backoff window and confirm the kind recovers on its own.
+    await db_session.execute(
+        text(
+            "UPDATE job_run SET created_at = now() - interval '2 hours',"
+            " completed_at = now() - interval '2 hours' WHERE id = :id"
+        ),
         {"id": crashed_run_id},
     )
     await db_session.flush()

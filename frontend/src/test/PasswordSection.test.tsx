@@ -3,6 +3,7 @@ import React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 vi.mock('../api/client', async () => {
   const { MockApiError } = await import('./mockApiError')
@@ -18,11 +19,16 @@ import { changePassword } from '../api/client'
 const mockChangePassword = vi.mocked(changePassword)
 
 function mountComponent() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(React.createElement(PasswordSection))
+    root.render(
+      React.createElement(QueryClientProvider, { client: qc }, React.createElement(PasswordSection)),
+    )
   })
   return { container, root }
 }
@@ -109,7 +115,7 @@ describe('PasswordSection', () => {
     await act(async () => { submitForm(container) })
 
     expect(mockChangePassword).toHaveBeenCalledWith('old-password-123', 'new-password-1234')
-    expect(container.textContent).toContain('All other sessions have been signed out.')
+    await vi.waitFor(() => expect(container.textContent).toContain('All other sessions have been signed out.'))
     expect(current.value).toBe('')
     expect(next.value).toBe('')
     expect(confirm.value).toBe('')
@@ -131,7 +137,7 @@ describe('PasswordSection', () => {
     })
     await act(async () => { submitForm(container) })
 
-    expect(container.textContent).toContain('Current password is incorrect.')
+    await vi.waitFor(() => expect(container.textContent).toContain('Current password is incorrect.'))
   })
 
   it('falls back to a generic message for a non-API error', async () => {
@@ -149,6 +155,6 @@ describe('PasswordSection', () => {
     })
     await act(async () => { submitForm(container) })
 
-    expect(container.textContent).toContain('Failed to change password.')
+    await vi.waitFor(() => expect(container.textContent).toContain('Failed to change password.'))
   })
 })

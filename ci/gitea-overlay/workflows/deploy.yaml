@@ -717,6 +717,42 @@ jobs:
             "Closing the alert opened by the earlier failed deploy. No action needed.")" || true
           exit 0
 
+      # Tell the mirror that this commit actually shipped (AUD-706).
+      #
+      # The mirror used to treat "I pushed it to Gitea" as "it is deployed",
+      # because its bookmark was written at push time and nothing ever
+      # contradicted it. A commit the gate above correctly refused was recorded
+      # as shipped and never retried; the stand went on serving a previous
+      # image, healthy and not main, until the next merge. This step is the
+      # contradiction: the only writer of `deployed-gitea-sha` is a deploy that
+      # reached this point, and this point is behind both `needs:` and
+      # `success()`.
+      #
+      # Runs on the host as the same user the mirror runs as, so this is a plain
+      # local write — no token, no API call, nothing to authenticate. That is
+      # the whole reason the handshake is a file.
+      #
+      # Only a push to Gitea `main` writes it. A `v*` tag or a dispatch build
+      # deploys something that is not main, and recording its sha would make the
+      # mirror believe main was live — which is precisely the state AUD-701 sat
+      # in, serving a scratch-branch image from a dispatch run while main had
+      # never deployed at all. The condition is on the ref, not on the branch
+      # name alone, so a tag that happens to be called `main` cannot pass.
+      #
+      # `|| true` plus `exit 0`: the deploy has already succeeded by the time we
+      # get here, and the stand is serving. Failing the run over a bookkeeping
+      # write would roll back a good deploy to protect a bookmark. The cost of
+      # the missed write is one unnecessary retry on the next mirror tick,
+      # which is the direction this mechanism should err in anyway.
+      - name: Record deployed sha for the mirror (success path)
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          set -uo pipefail
+          cfg="${AUDR_MIRROR_CFG:-$HOME/.config/audr-mirror}"
+          mkdir -p "$cfg" && printf '%s\n' "$GITHUB_SHA" > "$cfg/deployed-gitea-sha" || true
+          echo "deployed-gitea-sha = $(cat "$cfg/deployed-gitea-sha" 2>/dev/null || echo '<write failed>')"
+          exit 0
+
       # Every deploy mints a new per-sha image on this runner, and left
       # unattended they fill the root filesystem — hundreds of images plus
       # several GB of build cache. Runs on failure paths too (that is when the
