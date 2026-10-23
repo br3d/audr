@@ -20,6 +20,10 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# Intermediate OpenAPI export (AUD-694) — scripts/generate-api-types.sh output on
+# the way to frontend/src/api/schema.gen.ts, which IS committed.
+backend/openapi.json
+
 # Local Docker volumes
 pgdata/
 .volumes/

@@ -235,6 +235,17 @@ if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
     echo "==> Frontend suite exit=${FRONTEND_EXIT}"
     if [[ "${FRONTEND_EXIT}" -ne 0 ]]; then EXIT="${FRONTEND_EXIT}"; fi
   fi
+
+  # frontend/src/api/schema.gen.ts is generated from the backend's OpenAPI schema
+  # (AUD-694) and committed. Regenerate and diff here so a backend field rename —
+  # which a hand-written client type would absorb silently and surface as a
+  # runtime `undefined` — fails the build instead.
+  echo "==> Checking frontend/src/api/schema.gen.ts is current (AUD-694)"
+  set +e
+  "${ROOT}/scripts/generate-api-types.sh" --check
+  TYPES_EXIT=$?
+  set -e
+  if [[ "${TYPES_EXIT}" -ne 0 ]]; then EXIT="${TYPES_EXIT}"; fi
 fi
 
 if [[ "${EXIT}" -ne 0 ]]; then

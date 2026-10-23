@@ -1,0 +1,9 @@
+{
+  "name": "audr-openapi-codegen",
+  "private": true,
+  "description": "Isolated toolchain for openapi-typescript (AUD-694). openapi-typescript's runtime calls `ts.factory`, an API typescript@7 removed; the app itself is pinned to typescript@7 (frontend/package.json) for its own build, so this directory pins typescript@5 in its own node_modules instead of touching that pin.",
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}
