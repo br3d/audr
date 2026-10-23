@@ -1,9 +1,18 @@
 # Stage 1: build the frontend
-# Base images are referenced by tag, not by digest, so a reader can see at a
-# glance which Node and Python this builds on. The digests the tags resolved to
-# at each release are recorded in docs/third-party.md section 1.1 — look there
-# when a build has to be reproduced exactly.
-FROM node:22-alpine AS frontend-builder
+# Base images are pinned by digest, with the tag kept in front of the `@` so a
+# reader still sees at a glance which Node and Python this builds on. The tag is
+# decoration once a digest is present — docker resolves the digest — so these
+# two builds of one commit can never land on different base revisions (AUD-697).
+#
+# Bumping a pin: Dependabot's `docker` ecosystem (.github/dependabot.yml) opens
+# a weekly pull request when a pinned tag moves. To do it by hand, resolve the
+# tag and paste the result, then refresh the table in docs/third-party.md 1.1:
+#
+#   docker buildx imagetools inspect node:22-alpine --format '{{.Manifest.Digest}}'
+#
+# Pin the multi-arch manifest-list digest that command returns, not a
+# per-architecture one, or the build stops working on one of the two arches.
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -18,14 +27,16 @@ ENV AUDR_VERSION=${AUDR_VERSION} AUDR_GIT_SHA=${AUDR_GIT_SHA}
 RUN npm run build
 
 # Stage 2: install Python dependencies with uv
-FROM python:3.14-slim AS backend-builder
+FROM python:3.14-slim@sha256:0514bc76712d64f8bb48adcb95b1ab0d88c69fee95d62fe4c18ee948bee9b1e1 AS backend-builder
 RUN pip install --no-cache-dir uv
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Stage 3: final runtime image
-FROM python:3.14-slim AS runtime
+# Same digest as `backend-builder` on purpose: the venv copied out of that stage
+# is built against its interpreter, so the two must not drift apart.
+FROM python:3.14-slim@sha256:0514bc76712d64f8bb48adcb95b1ab0d88c69fee95d62fe4c18ee948bee9b1e1 AS runtime
 WORKDIR /app
 
 # No apt layer here on purpose: an apt install resolves to whatever the Debian
@@ -34,23 +45,37 @@ WORKDIR /app
 # which uses the interpreter already present rather than `curl`, for exactly
 # this reason — keep health checks stdlib-only. See docs/third-party.md 1.3.
 
-# Non-root user for runtime security
-RUN useradd -m -u 1000 -s /bin/bash audr
+# Non-root user for runtime security.
+#
+# `install -d` re-owns the WORKDIR itself, which `WORKDIR` above created as
+# root. Do not drop it: the worker's liveness beacon is a file the `audr` user
+# creates *inside* /app at runtime (`/app/worker-heartbeat`, written by
+# audr.jobs.__main__ and read by audr.operations.healthcheck), so a root-owned
+# /app makes every worker beat fail with EACCES and the container never reports
+# healthy. Ownership of the directory is what that needs — not ownership of its
+# contents, which the COPYs below set as they land.
+RUN useradd -m -u 1000 -s /bin/bash audr \
+ && install -d -o audr -g audr /app
+
+# Everything below lands owned by `audr` via `--chown`, rather than being
+# re-owned afterwards. A trailing `RUN chown -R audr:audr /app` used to do this
+# in one line, but chown rewrites the inode of every file it touches, and a
+# layer stores whole files rather than diffs — so that one line copied the venv
+# and the Vite bundle into the image a second time (AUD-697). `--chown` is free:
+# the COPY was already writing those files.
 
 # Copy virtual environment from builder
-COPY --from=backend-builder /app/.venv /app/.venv
+COPY --from=backend-builder --chown=audr:audr /app/.venv /app/.venv
 
 # Copy backend source and migration files
-COPY backend/src/ /app/src/
-COPY backend/alembic.ini /app/
-COPY backend/migrations/ /app/migrations/
+COPY --chown=audr:audr backend/src/ /app/src/
+COPY --chown=audr:audr backend/alembic.ini /app/
+COPY --chown=audr:audr backend/migrations/ /app/migrations/
 
 # Copy built frontend assets. The API serves the SPA from here
 # (audr.api.spa) — there is no separate web container — so this is the only
 # copy of the bundle and `frontend-builder` above is load-bearing.
-COPY --from=frontend-builder /app/dist/ /app/static/
-
-RUN chown -R audr:audr /app
+COPY --from=frontend-builder --chown=audr:audr /app/dist/ /app/static/
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH=/app/src

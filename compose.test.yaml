@@ -7,7 +7,9 @@ name: audr-test
 
 services:
   db-test:
-    image: postgres:16-alpine
+    # Same digest as compose.yaml's `db`, so the suite runs against the engine
+    # production runs. Keep the two in step when either is bumped.
+    image: postgres:16-alpine@sha256:deb28ee471183cb0c303113dac9b2433c51eeeeb678def7af9a9ec5820367815
     environment:
       POSTGRES_DB: audr_test
       POSTGRES_USER: audr_test
@@ -161,7 +163,9 @@ services:
       - benchmark
 
   frontend-tests:
-    image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
+    # Same digest as `frontend-builder` in Dockerfile, so Vitest and the shipped
+    # bundle are built by one Node (AUD-697).
+    image: node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
     working_dir: /workspace
     # frontend_node_modules starts empty, so dependencies must be installed in
     # the container before vitest exists on PATH. Without this the stage exits
