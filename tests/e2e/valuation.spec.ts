@@ -185,9 +185,6 @@ test.describe('MoneyValue display integrity', () => {
     await page.getByRole('button', { name: /dashboard/i }).click()
     // If the portfolio total is unavailable, the text must say "unavailable",
     // not "$0.00" or "0"
-    const zeroAmount = page.getByTestId('money-value').filter({ hasText: '$0.00' })
-    // $0.00 is a valid display only when the value is actually zero; we check
-    // that when the total note says "unavailable", there is no $0.00 next to it
     const unavailable = page.getByText(/unavailable/i)
     if (await unavailable.isVisible()) {
       // The portfolio section must not show a $0.00 amount alongside "unavailable"

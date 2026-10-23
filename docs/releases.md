@@ -84,6 +84,21 @@ contents. `backend/tests/unit/test_healthcheck.py` fails the build if
 anchors on — otherwise the revert would quietly become a no-op and the inline
 copies would outlive their reason.
 
+## Pre-release checklist
+
+One item that no CI job gates: run the Playwright suite by hand before
+cutting.
+
+```bash
+cd frontend && npm run e2e
+```
+
+This needs a running backend against an empty (un-setup) database and the
+frontend dev server with the `/api` proxy wired up — see
+[`docs/verification.md`](verification.md) for the full invocation and why
+this suite is local-only (AUD-699). Note the result (pass, or which spec
+failed and why) in the release's tracking issue.
+
 ## Cutting a release
 
 ```bash
