@@ -11,7 +11,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "e2e": "NODE_PATH=./node_modules playwright test"
+    "e2e": "NODE_PATH=./node_modules playwright test",
+    "generate:api-types": "bash tools/openapi-codegen/generate.sh --export",
+    "check:api-types": "bash tools/openapi-codegen/generate.sh --check"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.0",
