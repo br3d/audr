@@ -36,6 +36,7 @@ import httpx
 
 from audr.assets.constants import NATIVE_ETH_ADDRESS, is_native_eth
 from audr.jobs.policy import RateLimiter, RetryPolicy
+from audr.providers.http_base import ProviderHttpBase
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +86,8 @@ class CoinMarketCapProvider:
     ) -> None:
         self._resolver = resolver
         self._base = base_url.rstrip("/")
-        self._owns_client = http_client is None
-        self._client = http_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(_TIMEOUT),
-            follow_redirects=False,
+        self._http = ProviderHttpBase(
+            http_client=http_client, timeout=_TIMEOUT, follow_redirects=False
         )
         # Shared across job handlers when the caller passes the process-wide
         # limiter (see audr.jobs.policy.get_shared_cmc_rate_limiter); None
@@ -106,8 +105,7 @@ class CoinMarketCapProvider:
         await self.close()
 
     async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self._http.close()
 
     # ------------------------------------------------------------------
     # Public methods
@@ -241,7 +239,7 @@ class CoinMarketCapProvider:
         if self._rate_limiter is not None:
             await self._rate_limiter.acquire()
         url = f"{self._base}{path}"
-        response = await self._client.get(url, params=params)
+        response = await self._http.client.get(url, params=params)
         _check_response(response)
         return json.loads(response.text, parse_float=Decimal)  # type: ignore[no-any-return]
 

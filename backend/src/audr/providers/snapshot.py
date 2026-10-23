@@ -16,11 +16,13 @@ from typing import Any
 
 import httpx
 
+from audr.providers.http_base import NEWS_USER_AGENT, ProviderHttpBase
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://hub.snapshot.org/graphql"
 _TIMEOUT = 15.0
-_USER_AGENT = "audr-news-bot/1.0 (+https://github.com/br3d/audr)"
+_USER_AGENT = NEWS_USER_AGENT
 _MAX_PROPOSALS = 20
 
 _QUERY = """
@@ -68,10 +70,8 @@ class SnapshotProvider:
         user_agent: str = _USER_AGENT,
     ) -> None:
         self._base = base_url
-        self._owns_client = http_client is None
-        self._client = http_client or httpx.AsyncClient(
-            timeout=httpx.Timeout(_TIMEOUT),
-            headers={"User-Agent": user_agent},
+        self._http = ProviderHttpBase(
+            http_client=http_client, timeout=_TIMEOUT, user_agent=user_agent
         )
 
     async def __aenter__(self) -> SnapshotProvider:
@@ -81,8 +81,7 @@ class SnapshotProvider:
         await self.close()
 
     async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        await self._http.close()
 
     async def list_proposals(
         self, space_id: str, *, first: int = _MAX_PROPOSALS
@@ -94,7 +93,7 @@ class SnapshotProvider:
         "the space has no proposals" apart from "the fetch failed".
         """
         try:
-            response = await self._client.post(
+            response = await self._http.client.post(
                 self._base,
                 json={"query": _QUERY, "variables": {"space": space_id, "first": first}},
             )

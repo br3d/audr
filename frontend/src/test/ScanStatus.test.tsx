@@ -6,18 +6,14 @@ import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { JobRun } from '../api/client'
 
-vi.mock('../api/client', () => ({
-  fetchJob: vi.fn(),
-  triggerJob: vi.fn(),
-  ApiError: class ApiError extends Error {
-    status = 500
-    body = undefined
-    constructor(msg = 'API error') {
-      super(msg)
-      this.name = 'ApiError'
-    }
-  },
-}))
+vi.mock('../api/client', async () => {
+  const { MockApiError } = await import('./mockApiError')
+  return {
+    fetchJob: vi.fn(),
+    triggerJob: vi.fn(),
+    ApiError: MockApiError,
+  }
+})
 
 import ScanStatus from '../components/ScanStatus'
 import { fetchJob, triggerJob } from '../api/client'

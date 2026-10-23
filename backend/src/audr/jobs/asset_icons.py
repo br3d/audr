@@ -36,6 +36,7 @@ from audr.providers.asset_icons import (
     fetch_coingecko_icon,
     fetch_trust_wallet_icon,
 )
+from audr.providers.http_base import ProviderHttpBase
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,8 @@ async def handle_asset_icon_refresh(session: AsyncSession, run_id: uuid.UUID) ->
     missing = 0
     rate_limited = 0
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with ProviderHttpBase(follow_redirects=True) as http:
+        client = http.client
         for asset_id, token_address in candidates:
             try:
                 icon = await _resolve_icon(client, token_address, rate_limiter=rate_limiter)

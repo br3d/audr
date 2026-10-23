@@ -9,7 +9,7 @@ import {
   logout,
   getCSRFToken,
   clearCSRFToken,
-} from '../src/api/client'
+} from '../api/client'
 
 type MockResponse = {
   ok: boolean
