@@ -298,8 +298,15 @@ Configured in `backend/pyproject.toml` for `backend/`, and in the repo-root
   100. Rules `E,F,I,UP,B,S,ANN` under `backend/`, the same minus `ANN` at the
   root, with per-file ignores for tests and `src/audr/api/**`.
 - **mypy** — strict, `python_version 3.14`, pydantic plugin,
-  `warn_unreachable`.
-- **coverage** — source `src/audr`, omitting tests and migrations.
+  `warn_unreachable`. CI-gated (AUD-690) against the frozen backlog in
+  `backend/mypy-baseline.txt`, not the raw `mypy` exit code — see
+  CONTRIBUTING.md's gates table for the regenerate command.
+- **coverage** — source `src/audr`, omitting tests and migrations. `pytest`
+  runs with `--cov=audr --cov-report=term-missing` and Vitest with
+  `--coverage` (`npm run test:coverage`) on every CI invocation (AUD-690), so
+  both numbers are visible in every run's log. Neither is gated on a
+  threshold yet — the decision was visibility first, a floor later once there
+  is a baseline number to set one against.
 
 ```bash
 cd backend && uv run ruff check . && uv run mypy src
