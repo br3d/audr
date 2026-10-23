@@ -45,6 +45,7 @@ secrets/
 deploy.env
 
 # Local test-suite logs written by scripts/test.sh
+.test-env.log
 .test-backend.log
 .test-frontend.log
 

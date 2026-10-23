@@ -16,6 +16,81 @@ PROJECT="${AUDR_TEST_PROJECT:-audr-test-$$}"
 COMPOSE=(docker compose -p "${PROJECT}" -f "${COMPOSE_TEST}")
 EXIT=0
 
+# Transcript of everything that happens before (and around) the suites: the
+# environment snapshot, the image pulls, the `--wait` healthcheck, the builds
+# and the frontend dependency install. It exists because a run that dies in any
+# of those phases used to produce no file at all, and CI's only other record of
+# the phase was a job log nobody can read without repository admin rights
+# (AUD-714). Written from the first line of the run so there is always at least
+# one artifact to upload, however early the death.
+ENV_LOG="${ROOT}/.test-env.log"
+: >"${ENV_LOG}"
+
+# Exit status of the last run_phase, for callers that need it after the `if !`
+# that swallows `$?`.
+PHASE_RC=0
+
+# Run a pre-suite phase: announce it, stream its output to both the job log and
+# ENV_LOG, and report its status without letting `set -e` kill the script first
+# — the point is to fail *loudly*, not to stop failing.
+run_phase() {
+  local label="$1"
+  shift
+  echo "==> ${label}"
+  { echo; echo "### ${label}"; echo "### \$ $*"; } >>"${ENV_LOG}"
+  set +e
+  "$@" 2>&1 | tee -a "${ENV_LOG}"
+  PHASE_RC="${PIPESTATUS[0]}"
+  set -e
+  return "${PHASE_RC}"
+}
+
+# What the suite was handed. Nearly every unreadable red so far has come down to
+# a property of the runner rather than of the tree — two cores and a cold image
+# cache on GitHub against a warm self-hosted box, or an anonymous Docker Hub
+# pull allowance shared with every other job on that IP — so record those
+# properties before anything can fail.
+snapshot_env() {
+  {
+    echo "### environment snapshot"
+    echo "date:      $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "host:      $(uname -srm)  nproc=$(nproc 2>/dev/null || echo '?')"
+    echo "project:   ${PROJECT}"
+    echo "ci:        ${CI:-unset}  runner=${RUNNER_NAME:-unset}  gitea=${GITEA_ACTIONS:-unset}"
+    echo "commit:    $(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo '?')"
+    echo "--- memory"
+    free -m 2>/dev/null || true
+    echo "--- disk (docker root)"
+    df -h "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /)" 2>/dev/null || true
+    echo "--- docker"
+    docker version --format 'client={{.Client.Version}} server={{.Server.Version}}' 2>&1 || true
+    docker compose version --short 2>&1 || true
+    echo "--- docker login state (anonymous pulls are rate-limited per IP)"
+    docker info -f '{{range .RegistryConfig.IndexConfigs}}{{.Name}} {{end}}' 2>/dev/null || true
+    [[ -f "${HOME}/.docker/config.json" ]] && echo "docker config.json present" || echo "docker config.json absent (anonymous)"
+  } >>"${ENV_LOG}" 2>&1
+  echo "==> Environment snapshot written to .test-env.log"
+}
+
+# Everything we can cheaply say about why a pre-suite phase failed. `--wait`
+# reports only that it timed out; the healthcheck's own complaint is in the
+# container log, and whether the container exists at all is in `ps`.
+dump_compose_state() {
+  local why="$1"
+  {
+    echo
+    echo "==> PRE-SUITE FAILURE: ${why}"
+    echo "--- docker compose ps --all"
+    "${COMPOSE[@]}" ps --all 2>&1 || true
+    echo "--- docker compose logs db-test (tail 200)"
+    "${COMPOSE[@]}" logs --no-color --tail 200 db-test 2>&1 || true
+    echo "--- docker compose logs provider-mock (tail 50)"
+    "${COMPOSE[@]}" logs --no-color --tail 50 provider-mock 2>&1 || true
+    echo "--- disk after failure"
+    df -h "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /)" 2>&1 || true
+  } 2>&1 | tee -a "${ENV_LOG}"
+}
+
 RUN_BACKEND=1
 RUN_FRONTEND=1
 for arg in "$@"; do
@@ -196,14 +271,32 @@ reap_stale_projects() {
 # pinned name actually needs.
 reap_stale_projects || true
 
-echo "==> Starting test environment (db-test, waiting for healthcheck)"
-"${COMPOSE[@]}" up -d --wait db-test
+snapshot_env
+
+# `--wait-timeout` matters as much as the dump below. A healthcheck that fails
+# outright makes `--wait` return in seconds, but one that hangs in `starting`
+# never returns at all — and an unbounded wait would burn the workflow's whole
+# 45-minute job timeout before any artifact could be uploaded, defeating the
+# logging this ticket exists to add on exactly the failure mode it was opened
+# for. 180s is an order of magnitude past a healthy start (postgres goes healthy
+# in ~5s here, and the healthcheck's own budget is 15 retries x 3s).
+if ! run_phase "Starting test environment (db-test, waiting for healthcheck)" \
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${AUDR_TEST_WAIT_TIMEOUT:-180}" db-test; then
+  dump_compose_state "\`up -d --wait db-test\` exited ${PHASE_RC} (image pull, or healthcheck never went healthy)"
+  exit "${PHASE_RC}"
+fi
 
 if [[ "${RUN_BACKEND}" -eq 1 ]]; then
   # Rebuild both images: a stale migrate-test leaves the DB at an old migration
   # and backend tests then fail with "column does not exist".
-  echo "==> Building backend test images (migrate-test, backend-tests)"
-  "${COMPOSE[@]}" build migrate-test backend-tests
+  if ! run_phase "Building backend test images (migrate-test, backend-tests)" \
+      "${COMPOSE[@]}" build migrate-test backend-tests; then
+    # The builder's own output is the diagnosis here and run_phase has already
+    # streamed it to both sinks; `ps`/`logs` would add nothing about a build.
+    echo "==> PRE-SUITE FAILURE: \`build migrate-test backend-tests\` exited ${PHASE_RC}" \
+      | tee -a "${ENV_LOG}"
+    exit "${PHASE_RC}"
+  fi
 
   echo "==> Running backend tests (pytest)"
   set +e
@@ -218,8 +311,11 @@ fi
 if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
   echo "==> Installing frontend dependencies"
   set +e
+  # Full install output to .test-env.log, last 20 lines to the console: an
+  # `npm ci` that fails on a registry hiccup is a pre-suite death too, and the
+  # 20-line tail is rarely where the reason is.
   "${COMPOSE[@]}" --profile frontend run --rm --no-TTY --entrypoint sh frontend-tests \
-    -c 'npm ci --no-audit --no-fund' 2>&1 | tail -20
+    -c 'npm ci --no-audit --no-fund' 2>&1 | tee -a "${ENV_LOG}" | tail -20
   FRONTEND_INSTALL_EXIT="${PIPESTATUS[0]}"
   set -e
   if [[ "${FRONTEND_INSTALL_EXIT}" -ne 0 ]]; then

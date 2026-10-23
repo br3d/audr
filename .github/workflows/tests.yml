@@ -138,13 +138,66 @@ jobs:
           ref: ${{ inputs.ref }}
       - name: Backend + frontend suites
         run: ./scripts/test.sh
-      - name: Upload suite logs
+      # Why this step is configured so carefully (AUD-714): it used to report
+      # `success` while uploading nothing at all, on green and red runs alike.
+      # Two defaults combined to hide the suite logs completely:
+      #
+      #   * `include-hidden-files` defaults to **false**, and every path here is
+      #     dot-prefixed, so the glob matched nothing;
+      #   * `if-no-files-found: ignore` then turned "matched nothing" into a
+      #     silent pass.
+      #
+      # The visible symptom was `GET /actions/runs/<id>/artifacts` returning
+      # `total_count: 0` for a failing run, which reads like "the suite died
+      # before writing a log" — and cost two agents a verification cycle each on
+      # that false premise. The control that settles it: a *passing* run returned
+      # `total_count: 0` too.
+      #
+      # So: opt the dotfiles in, and fail if nothing was produced.
+      #
+      # One artifact per log, rather than one bundle of three, and that is
+      # deliberate. **No agent on this project can read an artifact's contents**
+      # — the download endpoint requires authentication, `/actions/jobs/<id>/logs`
+      # is 403 without repository admin, and `gh` is not installed on the agent
+      # host. What *is* readable tokenlessly on a public repo is run, job, step
+      # and artifact *metadata*: names, sizes, conclusions and timestamps.
+      #
+      # So the split carries the diagnosis in the only channel an unauthenticated
+      # reader can hear. `GET /runs/<id>/artifacts` returning `test-env` and
+      # `test-backend` but no `test-frontend` says the run died in the frontend
+      # leg, from metadata alone, to anyone, forever. A single bundled zip
+      # collapses all three into one opaque size.
+      #
+      # `error` on the env log only: scripts/test.sh writes it before anything
+      # in it can fail, so a run that executed test.sh at all has one. If that
+      # step goes red the suite died before test.sh's first line, which is
+      # itself the finding. The two suite logs get `warn`, because their absence
+      # is the signal and must not be masked into a pass nor confused with a
+      # genuine suite failure.
+      - name: Upload env + pre-suite log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .test-backend.log
-            .test-frontend.log
-          if-no-files-found: ignore
+          name: test-env-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-env.log
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload backend suite log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-backend-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-backend.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload frontend suite log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-frontend.log
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 7
