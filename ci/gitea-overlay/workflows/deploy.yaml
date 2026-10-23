@@ -239,7 +239,21 @@ jobs:
         run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build backend-mypy
       - name: Teardown
         if: always()
-        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml down -v --remove-orphans
+        run: |
+          docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml down -v --remove-orphans
+          # Reap this job's own built image, exactly as backend-tests does.
+          # Required *because* of the namespace split above: while both jobs
+          # shared one project name, backend-tests' reaper filter
+          # (`reference=$COMPOSE_PROJECT-*`) also matched `-backend-mypy`, so
+          # mypy's image was cleaned as a side effect. Now that mypy has its
+          # own prefix that filter no longer sees it, and without this the fix
+          # would trade a deploy bug for ~1 leaked image per CI run — the
+          # growth the backend-tests comment calls dominant on this runner.
+          imgs="$(docker images --filter "reference=${COMPOSE_PROJECT}-*" -q | sort -u)"
+          if [ -n "$imgs" ]; then
+            # shellcheck disable=SC2086
+            docker image rm -f $imgs >/dev/null 2>&1 || true
+          fi
 
   frontend-tests:
     # Runs in a container (ubuntu-latest label) with Node pinned to 22 to match
