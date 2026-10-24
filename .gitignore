@@ -48,6 +48,8 @@ deploy.env
 .test-env.log
 .test-backend.log
 .test-frontend.log
+# Per-phase exit codes and timings, replayed into CI step metadata (AUD-715)
+.test-phases.tsv
 
 # Playwright run output (traces/screenshots) — regenerated on every e2e run
 frontend/test-results/

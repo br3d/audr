@@ -132,6 +132,17 @@ services:
       # alert-dispatch.sh writes `news_alert.dispatched_via` from that word, and
       # every other caller reads the exit status as "is alerting itself broken".
       - ./scripts/notify.sh:/workspace/scripts/notify.sh:ro
+      # AUD-715: tests/unit/test_ci_phase_ledger.py runs the real phase-ledger
+      # replay over synthetic ledgers, and reads test.sh's own `record_phase`
+      # calls to assert the two files agree on the phase list. Both mounts are
+      # load-bearing: the thing that must not regress is that a *failed* suite
+      # phase never reports `pass` into GitHub step metadata, which is the only
+      # channel an agent can read a red run's cause from (AUD-714). Without the
+      # test.sh mount the drift guard — the only thing pairing the two lists —
+      # could only skip, and a phase added to one file would silently go
+      # unreported in CI.
+      - ./scripts/ci-phase-ledger.sh:/workspace/scripts/ci-phase-ledger.sh:ro
+      - ./scripts/test.sh:/workspace/scripts/test.sh:ro
       # AUD-706: tests/unit/test_mirror_deploy_state.py executes the real
       # mirror script against scratch git repositories standing in for GitHub
       # and Gitea. Mounting it is what makes the retry bound, the single alert

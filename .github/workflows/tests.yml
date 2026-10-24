@@ -140,6 +140,94 @@ jobs:
           ref: ${{ inputs.ref }}
       - name: Backend + frontend suites
         run: ./scripts/test.sh
+
+      # ---- Per-phase verdicts (AUD-715) -------------------------------------
+      #
+      # The step above is the gate; these steps are the *diagnosis*. It runs the
+      # whole suite in one step, so on a red run the job metadata says only
+      # "Backend + frontend suites: failure" — which does not distinguish the
+      # database never coming up, a failed image build, a pytest failure, a
+      # broken `npm ci`, a Vitest failure and an API-types drift. Five
+      # diagnoses, five different fixes.
+      #
+      # The artifacts below carry the answer, and nothing an agent has can open
+      # them: the download endpoint needs authentication, the job log needs
+      # repository admin, and `gh` is not installed on the agent host (AUD-714).
+      # Step *metadata* — names, conclusions, timestamps — is the only channel
+      # readable with no credentials on a public repo, and is how the AUD-714
+      # diagnosis was in fact done.
+      #
+      # So test.sh writes a phase ledger and these steps replay it into that
+      # channel. `GET /actions/jobs/<id>` then names the failing phase to any
+      # reader, forever, with no token.
+      #
+      # These steps cannot red a green run: each one mirrors a phase's recorded
+      # exit code, and a non-zero phase already failed the gate step above. A
+      # phase the run never reached reports `skip` and its step is skipped, so
+      # "the frontend leg died" and "the frontend leg passed" stay distinct.
+      - name: Phase ledger
+        id: phases
+        if: always()
+        run: ./scripts/ci-phase-ledger.sh .test-phases.tsv
+
+      # Each verdict reads its state from an `env:` mapping rather than
+      # interpolating `${{ }}` into the shell. These outputs are our own, but
+      # inlining a step output into `run:` is the shape that turns any future
+      # untrusted one into shell injection.
+      - name: 'phase: db-test up + healthcheck'
+        if: always() && steps.phases.outputs.db_up != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.db_up }}
+          DETAIL: ${{ steps.phases.outputs.db_up_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: backend test images build'
+        if: always() && steps.phases.outputs.backend_build != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.backend_build }}
+          DETAIL: ${{ steps.phases.outputs.backend_build_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: backend suite (pytest)'
+        if: always() && steps.phases.outputs.backend_suite != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.backend_suite }}
+          DETAIL: ${{ steps.phases.outputs.backend_suite_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: frontend dependency install (npm ci)'
+        if: always() && steps.phases.outputs.frontend_install != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.frontend_install }}
+          DETAIL: ${{ steps.phases.outputs.frontend_install_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: frontend suite (Vitest)'
+        if: always() && steps.phases.outputs.frontend_suite != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.frontend_suite }}
+          DETAIL: ${{ steps.phases.outputs.frontend_suite_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: generated API types vs backend/openapi.json'
+        if: always() && steps.phases.outputs.api_types != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.api_types }}
+          DETAIL: ${{ steps.phases.outputs.api_types_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
       # Why this step is configured so carefully (AUD-714): it used to report
       # `success` while uploading nothing at all, on green and red runs alike.
       # Two defaults combined to hide the suite logs completely:
@@ -176,12 +264,19 @@ jobs:
       # itself the finding. The two suite logs get `warn`, because their absence
       # is the signal and must not be masked into a pass nor confused with a
       # genuine suite failure.
+      # `.test-phases.tsv` rides along with the env log rather than taking an
+      # artifact of its own: the phase steps above already put its *verdicts* in
+      # readable metadata, so a separate artifact would add a name to the
+      # artifact list without adding a signal. test.sh truncates both files on
+      # its first lines, so both exist whenever test.sh ran at all.
       - name: Upload env + pre-suite log
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-env-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .test-env.log
+          path: |
+            .test-env.log
+            .test-phases.tsv
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
