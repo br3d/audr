@@ -14,11 +14,16 @@ from audr.jobs.news import (
     _compile_feed_pattern,
     is_noisy_release,
     match_assets,
+    match_assets_strict,
     should_drop_feed_item,
 )
 
 _WETH = HeldAsset(id=uuid.uuid4(), symbol="WETH", name="Wrapped Ether")
 _UNI = HeldAsset(id=uuid.uuid4(), symbol="UNI", name="Uniswap")
+_MATH = HeldAsset(id=uuid.uuid4(), symbol="MATH", name="MATH Wallet")
+_ASSET = HeldAsset(id=uuid.uuid4(), symbol="ASSET", name="Asset Token")
+_PORTAL = HeldAsset(id=uuid.uuid4(), symbol="PORTAL", name="Portal")
+_MIR = HeldAsset(id=uuid.uuid4(), symbol="MIR", name="Mirror Protocol")
 
 
 @pytest.mark.unit
@@ -52,6 +57,73 @@ class TestMatchAssets:
         """An asset appears once even if both its symbol and name match."""
         matched = match_assets("Uniswap's UNI token gains", [_UNI])
         assert matched == [_UNI.id]
+
+
+@pytest.mark.unit
+class TestMatchAssetsStrict:
+    """The aggregator tier's relevance gate (AUD-733): a bare word-boundary
+    symbol match is not trusted on its own, because some tickers are
+    ordinary English words. Titles are the real ones measured on the stand
+    (AUD-733 wake comment)."""
+
+    def test_math_homograph_headline_is_rejected(self) -> None:
+        """'MATH' word-boundary-matches an unrelated Hacker News headline
+        about mathematics, not the MATH Wallet token."""
+        matched = match_assets_strict("Security Rests on Hard Math Problems", [_MATH])
+        assert matched == []
+
+    def test_asset_homograph_headline_is_rejected(self) -> None:
+        """'ASSET' word-boundary-matches generic crypto-adjacent news that
+        never mentions the Asset Token project."""
+        matched = match_assets_strict(
+            "Can AI Hack Bitcoin? CZ Says the Real Danger Lies in Phishing and Data Leak",
+            [_ASSET],
+        )
+        assert matched == []
+
+    def test_portal_homograph_headline_is_rejected_even_though_name_equals_symbol(self) -> None:
+        """PORTAL's project name is itself the bare word 'Portal', so a name
+        check gives no extra protection here — this headline is about a
+        Coldcard claims portal, not the PORTAL token."""
+        matched = match_assets_strict("Portal Opens Claims Check", [_PORTAL])
+        assert matched == []
+
+    def test_dollar_ticker_citation_is_accepted(self) -> None:
+        matched = match_assets_strict("$MATH surges 12% after exchange listing", [_MATH])
+        assert matched == [_MATH.id]
+
+    def test_dollar_ticker_citation_is_case_insensitive(self) -> None:
+        matched = match_assets_strict("$math surges 12% after exchange listing", [_MATH])
+        assert matched == [_MATH.id]
+
+    def test_paren_ticker_citation_is_accepted(self) -> None:
+        """Proves the fix is not just a mute (AUD-733 acceptance criterion
+        3): a genuine PORTAL story still alerts when it cites the ticker."""
+        matched = match_assets_strict("Portal (PORTAL) Drained in $2M DeFi Exploit", [_PORTAL])
+        assert matched == [_PORTAL.id]
+
+    def test_asset_genuine_story_with_ticker_citation_is_accepted(self) -> None:
+        matched = match_assets_strict(
+            "Asset Token ($ASSET) Suffers Smart Contract Exploit", [_ASSET]
+        )
+        assert matched == [_ASSET.id]
+
+    def test_distinctive_name_match_is_accepted_without_a_ticker_citation(self) -> None:
+        """MIR's genuine true-positive shape: the full project name is
+        distinctive enough on its own, so no $/() citation is required."""
+        matched = match_assets_strict("Mirror Protocol Exploited", [_MIR])
+        assert matched == [_MIR.id]
+
+    def test_non_homograph_ticker_still_matches_by_name(self) -> None:
+        """Regression guard: tightening the gate must not break ordinary
+        aggregator coverage for a ticker with a genuinely distinctive name."""
+        sushi = HeldAsset(id=uuid.uuid4(), symbol="SUSHI", name="SushiSwap")
+        matched = match_assets_strict("SushiSwap exploit drains $3M from liquidity pool", [sushi])
+        assert matched == [sushi.id]
+
+    def test_unrelated_headline_matches_nothing(self) -> None:
+        matched = match_assets_strict("Bitcoin dominance rises", [_MATH, _ASSET, _PORTAL])
+        assert matched == []
 
 
 @pytest.mark.unit

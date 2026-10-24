@@ -339,6 +339,53 @@ def match_assets(title: str, assets: list[HeldAsset]) -> list[uuid.UUID]:
     return matched
 
 
+def _cites_ticker(title: str, symbol: str) -> bool:
+    """True when *title* cites *symbol* in the `$SYM` / `(SYM)` convention
+    crypto journalism uses to name a specific token (AUD-733).
+
+    This is a materially stronger signal than a bare word-boundary match: a
+    headline using 'math' or 'portal' in its ordinary English sense has no
+    reason to also spell out '$MATH' or '(PORTAL)'.
+    """
+    escaped = re.escape(symbol)
+    return bool(
+        re.search(rf"\${escaped}\b", title, re.IGNORECASE)
+        or re.search(rf"\({escaped}\)", title, re.IGNORECASE)
+    )
+
+
+def match_assets_strict(title: str, assets: list[HeldAsset]) -> list[uuid.UUID]:
+    """Like `match_assets`, but a bare ticker-symbol word match is not enough
+    on its own (AUD-733).
+
+    The aggregator tier's relevance signal is a loose, uncurated Google News
+    search (0039) — `match_assets` is its only defence against drift, and a
+    ticker that doubles as an ordinary English word ('MATH', 'ASSET',
+    'PORTAL') clears a bare word-boundary symbol check on any headline that
+    happens to use the word, whatever it is actually about. Word-boundary
+    matching is the wrong tool for a homograph: "Portal" *is* a word-boundary
+    match for PORTAL in a headline about an unrelated Coldcard exploit.
+
+    Accepted instead: a match on the asset's name (when that name is not
+    itself just the bare symbol spelled out — see PORTAL, whose name equals
+    its symbol and gets no benefit from a name check), or the symbol cited in
+    the `$SYM`/`(SYM)` convention real crypto journalism uses for an actual
+    token. A bare symbol word match with neither is dropped. This necessarily
+    costs some recall on this one tier for exactly the common-word tickers
+    that create the false positives — curated tiers (`project`/`press`/
+    `hackernews`) are unaffected and keep matching on a bare symbol, since a
+    human already vetted that feed as scoped to this asset.
+    """
+    matched: list[uuid.UUID] = []
+    for asset in assets:
+        name_is_distinctive = asset.name.strip().lower() != asset.symbol.strip().lower()
+        if name_is_distinctive and re.search(rf"\b{re.escape(asset.name)}\b", title, re.IGNORECASE):
+            matched.append(asset.id)
+        elif _cites_ticker(title, asset.symbol):
+            matched.append(asset.id)
+    return matched
+
+
 # ---------------------------------------------------------------------------
 # Feed polling
 # ---------------------------------------------------------------------------
@@ -433,7 +480,12 @@ def _targets_for_feed(
             # project blog is (AUD-654) — gate on the same symbol-or-name
             # match the press tier uses, reusing match_assets rather than a
             # second mechanism, scoped to this feed's own asset(s) only.
-            return lambda item: match_assets(item.title, scoped_assets)
+            # match_assets_strict (AUD-733), not match_assets: this is the
+            # one tier with no human-curated feed-to-asset scoping, so a bare
+            # symbol word match is not trusted the way it is everywhere else
+            # — see its docstring for the common-word-ticker false positives
+            # ('MATH', 'ASSET', 'PORTAL') this otherwise lets through.
+            return lambda item: match_assets_strict(item.title, scoped_assets)
         # Dedup by asset id: each symbol in feed.symbols matches at most one
         # held asset, but guard against the item inserting twice on one
         # asset_id regardless (AUD-571).
