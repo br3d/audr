@@ -112,7 +112,11 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
           // AUD-436: the delay demonstrates the pending state of the finished
           // interface, so it stays — but it is labelled as simulated rather
           // than dressed up as an assistant that is thinking.
-          <div aria-label="Simulated reply pending" data-testid="typing-indicator" className="assistant-message assistant-message-assistant assistant-typing">
+          <div
+            aria-label="Simulated reply pending"
+            data-testid="typing-indicator"
+            className="assistant-message assistant-message-assistant assistant-typing"
+          >
             Simulated reply…
           </div>
         )}

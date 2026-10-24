@@ -208,7 +208,16 @@ services:
     # typecheck (tsc --noEmit) runs before the suite (AUD-690): a type error
     # that compiles-and-crashes under Vitest's transform would otherwise only
     # surface at the Docker image build, deploy-time.
-    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run typecheck && npm run test:coverage"]
+    #
+    # format:check (AUD-696) gates Prettier formatting. `lint` (ESLint, same
+    # ticket) is NOT wired in here: @typescript-eslint/parser and
+    # eslint-plugin both hard-throw against TypeScript 7 at module load,
+    # regardless of config — not a rule-tuning problem, a tool that does not
+    # run yet. See frontend/eslint.config.js and
+    # https://github.com/typescript-eslint/typescript-eslint/issues/10940.
+    # Wire `npm run lint` in here once that lands or the project pins build
+    # TS to 6.x.
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run typecheck && npm run format:check && npm run test:coverage"]
     volumes:
       # Not :ro — Docker must be able to create the /workspace/node_modules
       # mountpoint, which does not exist in a fresh checkout.

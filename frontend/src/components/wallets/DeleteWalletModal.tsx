@@ -18,21 +18,14 @@ export default function DeleteWalletModal({
     onSuccess: (result) => {
       const rows = Object.values(result.deleted).reduce((a, b) => a + b, 0)
       onDeleted(
-        `Removed ${wallet.label || wallet.address} and ${rows} related record${
-          rows === 1 ? '' : 's'
-        }.`,
+        `Removed ${wallet.label || wallet.address} and ${rows} related record${rows === 1 ? '' : 's'}.`,
       )
       onClose()
     },
   })
 
   return (
-    <div
-      className="modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Delete tracked address"
-    >
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Delete tracked address">
       <div className="modal-box">
         <div className="modal-header">
           <div className="modal-title">Delete Tracked Address</div>
@@ -53,13 +46,12 @@ export default function DeleteWalletModal({
           <span className="wallet-address">{wallet.address}</span>
         </p>
         <p className="muted-text mt-8">
-          This permanently removes the address and everything derived from it —
-          balance observations, discovered token coverage, indexed on-chain events
-          and its share of valuation history. It cannot be undone.
+          This permanently removes the address and everything derived from it — balance observations,
+          discovered token coverage, indexed on-chain events and its share of valuation history. It cannot be
+          undone.
         </p>
         <p className="muted-text mt-8">
-          If you only want to pause scanning and keep the history, use{' '}
-          <strong>Stop tracking</strong> instead.
+          If you only want to pause scanning and keep the history, use <strong>Stop tracking</strong> instead.
         </p>
 
         {deleteMutation.error && (

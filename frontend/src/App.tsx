@@ -1,6 +1,13 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback, clearUnauthorizedCallback } from './api/client'
+import {
+  fetchSetupStatus,
+  fetchSession,
+  logout,
+  AuthError,
+  setUnauthorizedCallback,
+  clearUnauthorizedCallback,
+} from './api/client'
 import Layout from './components/Layout'
 import { useHashPage } from './routing'
 import SetupPage from './pages/SetupPage'

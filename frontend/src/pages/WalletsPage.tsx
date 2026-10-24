@@ -12,14 +12,7 @@ export default function WalletsPage() {
   const [showModal, setShowModal] = useState(false)
   const [jobMsg, setJobMsg] = useState<string | null>(null)
 
-  const {
-    data,
-    error,
-    isLoading,
-    hasNextPage,
-    fetchNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
+  const { data, error, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: queryKeys.wallets(),
     queryFn: ({ pageParam }) => fetchWallets(pageParam as string | undefined),
     initialPageParam: undefined as string | undefined,
@@ -68,8 +61,7 @@ export default function WalletsPage() {
   if (error) {
     return (
       <p role="alert" className="alert alert-danger">
-        Failed to load wallets.{' '}
-        {errorMessage(error, 'Please try again.')}
+        Failed to load wallets. {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -79,16 +71,12 @@ export default function WalletsPage() {
   return (
     <div>
       <p className="page-subheading">
-        Track any valid public Ethereum mainnet address. Labels are for your reference and
-        do not imply that this application verified ownership or control.
+        Track any valid public Ethereum mainnet address. Labels are for your reference and do not imply that
+        this application verified ownership or control.
       </p>
 
       <div className="toolbar mb-16">
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setShowModal(true)}
-        >
+        <button type="button" className="btn btn-primary" onClick={() => setShowModal(true)}>
           <IconPlus width={14} height={14} />
           Add address
         </button>
@@ -111,8 +99,16 @@ export default function WalletsPage() {
         >
           Discover tokens (all)
         </button>
-        {jobMsg !== null && <p role="status" className="muted-text">{jobMsg}</p>}
-        {jobError !== null && <p role="alert" className="alert alert-danger">{jobError}</p>}
+        {jobMsg !== null && (
+          <p role="status" className="muted-text">
+            {jobMsg}
+          </p>
+        )}
+        {jobError !== null && (
+          <p role="alert" className="alert alert-danger">
+            {jobError}
+          </p>
+        )}
       </div>
 
       {wallets.length === 0 ? (
@@ -153,12 +149,7 @@ export default function WalletsPage() {
         </>
       )}
 
-      {showModal && (
-        <AddWalletModal
-          onAdded={invalidate}
-          onClose={() => setShowModal(false)}
-        />
-      )}
+      {showModal && <AddWalletModal onAdded={invalidate} onClose={() => setShowModal(false)} />}
     </div>
   )
 }

@@ -62,7 +62,7 @@ describe('eventTitle', () => {
     expect(title).toBe('Sent 1.5 ETH to 0xc444…7d20')
   })
 
-  it('names a self-transfer between the owner\'s own wallets regardless of direction', () => {
+  it("names a self-transfer between the owner's own wallets regardless of direction", () => {
     expect(eventTitle(baseEvent({ event_type: 'transfer_in', counterparty_address: null }))).toBe(
       'Transfer between your wallets',
     )

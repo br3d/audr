@@ -96,76 +96,58 @@ describe('HistoryTable', () => {
   })
 
   it('renders a table with correct aria-label', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK] }))
     const table = container.querySelector('[aria-label="Portfolio value history"]')
     expect(table).toBeTruthy()
     await unmount(container, root)
   })
 
   it('displays formatted USD value for priced point', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK] }))
     expect(container.textContent).toContain('$5,000.00')
     await unmount(container, root)
   })
 
   it('shows "unknown" for null total_value_usd', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }))
     expect(container.textContent).toMatch(/unknown/i)
     await unmount(container, root)
   })
 
   it('renders gap marker for gap points', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_GAP] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_GAP] }))
     const gapMarker = container.querySelector('[data-testid="gap-marker"]')
     expect(gapMarker).toBeTruthy()
     await unmount(container, root)
   })
 
   it('does not render gap marker for non-gap points', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK] }))
     const gapMarker = container.querySelector('[data-testid="gap-marker"]')
     expect(gapMarker).toBeNull()
     await unmount(container, root)
   })
 
   it('shows "Stale" quality label', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_GAP] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_GAP] }))
     expect(container.textContent).toContain('Stale')
     await unmount(container, root)
   })
 
   it('shows "Gaps" quality label', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_INCOMPLETE] }))
     expect(container.textContent).toContain('Gaps')
     await unmount(container, root)
   })
 
   it('shows "Complete" quality label for complete quality', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK] }))
     expect(container.textContent).toContain('Complete')
     await unmount(container, root)
   })
 
   it('shows "Partial" and no gap badge for a has_gap point that still has a value', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_PARTIAL] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_PARTIAL] }))
     expect(container.textContent).toContain('Partial')
     expect(container.querySelector('[data-testid="gap-marker"]')).toBeNull()
     await unmount(container, root)
@@ -173,45 +155,35 @@ describe('HistoryTable', () => {
 
   it('renders one row per point', async () => {
     const points = [POINT_OK, POINT_GAP, POINT_INCOMPLETE]
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points }))
     const tbody = container.querySelector('tbody')
     expect(tbody?.querySelectorAll('tr').length).toBe(3)
     await unmount(container, root)
   })
 
   it('renders invalidated marker for non-canonical points', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }))
     const marker = container.querySelector('[data-testid="invalidated-marker"]')
     expect(marker).toBeTruthy()
     await unmount(container, root)
   })
 
   it('does not render invalidated marker for canonical points', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK] }))
     const marker = container.querySelector('[data-testid="invalidated-marker"]')
     expect(marker).toBeNull()
     await unmount(container, root)
   })
 
   it('labels the row as invalidated for non-canonical points', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_INVALIDATED] }))
     const row = container.querySelector('tbody tr')
     expect(row?.getAttribute('aria-label')).toMatch(/invalidated/i)
     await unmount(container, root)
   })
 
   it('contains no PnL terminology', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryTable, { points: [POINT_OK, POINT_GAP] }),
-    )
+    const { container, root } = mount(React.createElement(HistoryTable, { points: [POINT_OK, POINT_GAP] }))
     const text = container.textContent?.toLowerCase() ?? ''
     expect(text).not.toContain('profit')
     expect(text).not.toContain('loss')

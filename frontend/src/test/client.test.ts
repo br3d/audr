@@ -136,9 +136,7 @@ describe('login', () => {
     await login('second-login')
 
     const [, init] = secondFetch.mock.calls[0] as [string, RequestInit]
-    expect((init.headers as Record<string, string>)?.['X-CSRF-Token']).toBe(
-      'existing-token',
-    )
+    expect((init.headers as Record<string, string>)?.['X-CSRF-Token']).toBe('existing-token')
 
     vi.unstubAllGlobals()
   })
@@ -182,9 +180,7 @@ describe('logout', () => {
     const [url, init] = logoutFetch.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/v1/auth/logout')
     expect(init.method).toBe('POST')
-    expect((init.headers as Record<string, string>)?.['X-CSRF-Token']).toBe(
-      'active-token',
-    )
+    expect((init.headers as Record<string, string>)?.['X-CSRF-Token']).toBe('active-token')
     expect(getCSRFToken()).toBeNull()
 
     vi.unstubAllGlobals()

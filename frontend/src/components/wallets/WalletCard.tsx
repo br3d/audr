@@ -80,11 +80,7 @@ export default function WalletCard({
   }
 
   const saving = saveLabelMutation.isPending || toggleTrackingMutation.isPending
-  const jobPending = refreshMutation.isPending
-    ? 'balances'
-    : discoverMutation.isPending
-      ? 'discovery'
-      : null
+  const jobPending = refreshMutation.isPending ? 'balances' : discoverMutation.isPending ? 'discovery' : null
 
   const failed = allMutations.find((m) => m.error)
   const error = failed
@@ -172,11 +168,7 @@ export default function WalletCard({
           onClick={handleRefreshWallet}
           disabled={saving || !wallet.tracking_active || jobPending !== null}
           aria-label={`Refresh balances for ${wallet.address}`}
-          title={
-            wallet.tracking_active
-              ? undefined
-              : 'Resume tracking to refresh balances for this address.'
-          }
+          title={wallet.tracking_active ? undefined : 'Resume tracking to refresh balances for this address.'}
         >
           <IconRefresh width={14} height={14} />
           {jobPending === 'balances' ? 'Refreshing…' : 'Refresh balances'}
@@ -187,11 +179,7 @@ export default function WalletCard({
           onClick={handleDiscoverWallet}
           disabled={saving || !wallet.tracking_active || jobPending !== null}
           aria-label={`Discover tokens for ${wallet.address}`}
-          title={
-            wallet.tracking_active
-              ? undefined
-              : 'Resume tracking to discover tokens for this address.'
-          }
+          title={wallet.tracking_active ? undefined : 'Resume tracking to discover tokens for this address.'}
         >
           {jobPending === 'discovery' ? 'Discovering…' : 'Discover tokens'}
         </button>
@@ -200,11 +188,7 @@ export default function WalletCard({
           className={`btn btn-sm ${wallet.tracking_active ? 'btn-ghost' : 'btn-secondary'}`}
           onClick={handleToggleTracking}
           disabled={saving}
-          aria-label={
-            wallet.tracking_active
-              ? 'Stop tracking this address'
-              : 'Resume tracking this address'
-          }
+          aria-label={wallet.tracking_active ? 'Stop tracking this address' : 'Resume tracking this address'}
         >
           {wallet.tracking_active ? 'Stop tracking' : 'Resume tracking'}
         </button>
@@ -229,8 +213,7 @@ export default function WalletCard({
 
       {!wallet.tracking_active && (
         <p className="muted-text mt-8">
-          Stopping tracking removes this address from balance calculations but retains its
-          historical records.
+          Stopping tracking removes this address from balance calculations but retains its historical records.
         </p>
       )}
 
@@ -241,11 +224,7 @@ export default function WalletCard({
       )}
 
       {confirmingDelete && (
-        <DeleteWalletModal
-          wallet={wallet}
-          onDeleted={onDeleted}
-          onClose={() => setConfirmingDelete(false)}
-        />
+        <DeleteWalletModal wallet={wallet} onDeleted={onDeleted} onClose={() => setConfirmingDelete(false)} />
       )}
     </li>
   )

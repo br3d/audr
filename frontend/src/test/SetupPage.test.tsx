@@ -13,11 +13,7 @@ function renderSetupPage(container: HTMLDivElement, onSetupComplete: () => void)
   const root = createRoot(container)
   flushSync(() => {
     root.render(
-      createElement(
-        QueryClientProvider,
-        { client: qc },
-        createElement(SetupPage, { onSetupComplete }),
-      ),
+      createElement(QueryClientProvider, { client: qc }, createElement(SetupPage, { onSetupComplete })),
     )
   })
   return root
@@ -58,9 +54,7 @@ describe('SetupPage', () => {
 
     renderSetupPage(container, () => {})
 
-    const passwordInput = container.querySelector(
-      '#password',
-    ) as HTMLInputElement
+    const passwordInput = container.querySelector('#password') as HTMLInputElement
     const confirmInput = container.querySelector('#confirm') as HTMLInputElement
     const form = container.querySelector('form') as HTMLFormElement
 

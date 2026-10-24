@@ -1,12 +1,4 @@
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts'
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import type { DotItemDotProps } from 'recharts/types/util/types'
 import { Decimal } from 'decimal.js'
 import type { HistoryPoint, HistoryPeriod } from '../api/client'
@@ -133,9 +125,7 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
   const hasLineBreaks = data.some((d) => d.value === null)
   const hasPartialPoints = data.some((d) => d.has_gap && d.value !== null)
   const hasInvalidated = data.some((d) => !d.is_canonical && d.value !== null)
-  const values = data
-    .map((d) => d.value)
-    .filter((v): v is number => v !== null)
+  const values = data.map((d) => d.value).filter((v): v is number => v !== null)
   const domain = computeYDomain(values)
   const lastValueIndex = findLastValueIndex(data)
 
@@ -197,14 +187,13 @@ export default function HistoryChart({ points, period = '30d' }: Props) {
         )}
         {hasPartialPoints && (
           <span className="history-chart-legend-gap" role="note">
-            Some points are partial — a few asset values were unknown when the
-            snapshot was taken, so the total is an underestimate
+            Some points are partial — a few asset values were unknown when the snapshot was taken, so the
+            total is an underestimate
           </span>
         )}
         {hasInvalidated && (
           <span className="history-chart-legend-gap" role="note">
-            Hollow markers show invalidated points — recalculated after a reorg or
-            failed verification
+            Hollow markers show invalidated points — recalculated after a reorg or failed verification
           </span>
         )}
       </div>

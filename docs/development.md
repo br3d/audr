@@ -158,7 +158,7 @@ rendered shell with no data) is easy to misread as a backend bug.
 ### Available npm scripts
 
 `dev`, `build` (`tsc -b && vite build`), `preview`, `test`, `test:watch`,
-`test:coverage`, `typecheck`, `e2e`.
+`test:coverage`, `typecheck`, `lint`, `format`, `format:check`, `e2e`.
 
 ---
 

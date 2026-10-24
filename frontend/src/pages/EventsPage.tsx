@@ -72,12 +72,7 @@ function Pager({
         {from}–{to} of {total}
       </span>
       <div className="row gap-8">
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={onPrev}
-          disabled={offset === 0}
-        >
+        <button type="button" className="btn btn-sm btn-secondary" onClick={onPrev} disabled={offset === 0}>
           Previous
         </button>
         <button
@@ -199,8 +194,8 @@ export default function EventsPage() {
   return (
     <div>
       <p className="page-subheading">
-        On-chain activity and approval signals indexed from your tracked addresses. Approval
-        amounts are shown unscaled ("raw") since token decimals are not part of allowance data.
+        On-chain activity and approval signals indexed from your tracked addresses. Approval amounts are shown
+        unscaled ("raw") since token decimals are not part of allowance data.
       </p>
 
       <div className="toolbar mb-16">
@@ -238,9 +233,7 @@ export default function EventsPage() {
               id="events-type-filter"
               className="input-folio"
               value={eventTypeFilter}
-              onChange={(e) =>
-                handleEventTypeFilterChange(e.target.value as OnchainEventType | '')
-              }
+              onChange={(e) => handleEventTypeFilterChange(e.target.value as OnchainEventType | '')}
             >
               <option value="">All types</option>
               {EVENT_TYPES.map((t) => (
@@ -256,8 +249,7 @@ export default function EventsPage() {
 
         {eventsQuery.error && (
           <p role="alert" className="alert alert-danger">
-            Failed to load events.{' '}
-            {errorMessage(eventsQuery.error, 'Please try again.')}
+            Failed to load events. {errorMessage(eventsQuery.error, 'Please try again.')}
           </p>
         )}
 
@@ -266,8 +258,7 @@ export default function EventsPage() {
             <div className="empty-state-icon">⚡</div>
             <div className="empty-state-text">No events found</div>
             <div className="empty-state-hint">
-              Either nothing matches the current filters, or the indexer has not processed
-              this wallet yet.
+              Either nothing matches the current filters, or the indexer has not processed this wallet yet.
             </div>
           </div>
         )}
@@ -298,7 +289,10 @@ export default function EventsPage() {
         <div className="card-header">
           <div className="card-title">Permissions</div>
           {unlimitedCount > 0 && (
-            <span className="badge badge-danger" aria-label={`${unlimitedCount} unlimited approvals on this page`}>
+            <span
+              className="badge badge-danger"
+              aria-label={`${unlimitedCount} unlimited approvals on this page`}
+            >
               {unlimitedCount} unlimited
             </span>
           )}
@@ -320,8 +314,7 @@ export default function EventsPage() {
 
         {allowancesQuery.error && (
           <p role="alert" className="alert alert-danger">
-            Failed to load allowances.{' '}
-            {errorMessage(allowancesQuery.error, 'Please try again.')}
+            Failed to load allowances. {errorMessage(allowancesQuery.error, 'Please try again.')}
           </p>
         )}
 

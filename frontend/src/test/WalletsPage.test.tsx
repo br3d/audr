@@ -51,11 +51,7 @@ function mountPage() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc },
-        React.createElement(WalletsPage),
-      ),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(WalletsPage)))
   })
   return { container, root }
 }
@@ -88,15 +84,17 @@ describe('WalletsPage', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('(no label)'))
 
     // Click Edit button
-    const editBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'Edit',
-    )!
-    await act(async () => { editBtn.click() })
+    const editBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Edit')!
+    await act(async () => {
+      editBtn.click()
+    })
 
     // Input starts empty; submit the form immediately
     const form = container.querySelector('form[aria-label="Edit label"]') as HTMLFormElement
     expect(form).toBeTruthy()
-    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
 
     expect(mockPatchWallet).toHaveBeenCalledWith('w1', { label: null })
   })
@@ -115,31 +113,34 @@ describe('WalletsPage', () => {
     mockFetchWallets.mockResolvedValueOnce(makeWalletsResponse([WALLET_1], 'cursor-abc'))
     ;({ container, root } = mountPage())
     await vi.waitFor(() => {
-      const btn = Array.from(container.querySelectorAll('button')).find(
-        (b) => b.textContent === 'Load more',
-      )
+      const btn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Load more')
       expect(btn).toBeTruthy()
     })
   })
 
   it('fetches next page when Load more is clicked', async () => {
-    const WALLET_2 = { ...WALLET_1, id: 'w2', address: '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', label: 'Hot wallet' }
+    const WALLET_2 = {
+      ...WALLET_1,
+      id: 'w2',
+      address: '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      label: 'Hot wallet',
+    }
     mockFetchWallets
       .mockResolvedValueOnce(makeWalletsResponse([WALLET_1], 'cursor-abc'))
       .mockResolvedValueOnce(makeWalletsResponse([WALLET_2], null))
     ;({ container, root } = mountPage())
 
     await vi.waitFor(() => {
-      const btn = Array.from(container.querySelectorAll('button')).find(
-        (b) => b.textContent === 'Load more',
-      )
+      const btn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Load more')
       expect(btn).toBeTruthy()
     })
 
     const loadMoreBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Load more',
     )!
-    await act(async () => { loadMoreBtn.click() })
+    await act(async () => {
+      loadMoreBtn.click()
+    })
 
     await vi.waitFor(() => expect(container.textContent).toContain('Hot wallet'))
     expect(mockFetchWallets).toHaveBeenCalledTimes(2)
@@ -157,7 +158,9 @@ describe('WalletsPage', () => {
       `button[aria-label="Refresh balances for ${WALLET_1.address}"]`,
     ) as HTMLButtonElement
     expect(refreshBtn).toBeTruthy()
-    await act(async () => { refreshBtn.click() })
+    await act(async () => {
+      refreshBtn.click()
+    })
 
     expect(mockTriggerJob).toHaveBeenCalledWith('balances', WALLET_1.id)
   })
@@ -173,7 +176,9 @@ describe('WalletsPage', () => {
       `button[aria-label="Discover tokens for ${WALLET_1.address}"]`,
     ) as HTMLButtonElement
     expect(discoverBtn).toBeTruthy()
-    await act(async () => { discoverBtn.click() })
+    await act(async () => {
+      discoverBtn.click()
+    })
 
     expect(mockTriggerJob).toHaveBeenCalledWith('discovery', WALLET_1.id)
   })
@@ -194,7 +199,9 @@ describe('WalletsPage', () => {
     const refreshBtn = container.querySelector(
       `button[aria-label="Refresh balances for ${WALLET_1.address}"]`,
     ) as HTMLButtonElement
-    await act(async () => { refreshBtn.click() })
+    await act(async () => {
+      refreshBtn.click()
+    })
 
     await vi.waitFor(() => {
       const cards = Array.from(container.querySelectorAll('li.wallet-card'))
@@ -214,7 +221,9 @@ describe('WalletsPage', () => {
       'button[aria-label="Refresh all balances"]',
     ) as HTMLButtonElement
     expect(pageRefreshBtn).toBeTruthy()
-    await act(async () => { pageRefreshBtn.click() })
+    await act(async () => {
+      pageRefreshBtn.click()
+    })
 
     expect(mockTriggerJob).toHaveBeenCalledWith('balances')
     expect(mockTriggerJob).not.toHaveBeenCalledWith('balances', WALLET_1.id)

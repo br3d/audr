@@ -114,11 +114,7 @@ export default function ScanStatus({ runId, kind, label }: Props) {
         {triggering ? 'Starting…' : label}
       </button>
       {job !== undefined && (
-        <p
-          role="status"
-          aria-live="polite"
-          className={`scan-status-msg ${statusTone(job).text}`}
-        >
+        <p role="status" aria-live="polite" className={`scan-status-msg ${statusTone(job).text}`}>
           <span className={`status-dot ${statusTone(job).dot}`} aria-hidden="true" />
           {statusLabel(job)}
         </p>

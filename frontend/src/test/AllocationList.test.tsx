@@ -47,7 +47,9 @@ function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
-  await act(async () => { root.unmount() })
+  await act(async () => {
+    root.unmount()
+  })
   document.body.removeChild(container)
 }
 
@@ -170,13 +172,15 @@ describe('AllocationList', () => {
       expect(first.textContent).toContain('ETH')
       await unmount(container, root)
     })
-
   })
 
   describe('balance column', () => {
     it('renders the quantity with its symbol under the USD value', async () => {
       const { container, root } = render(
-        <AllocationList onToggleExclude={noopToggle} items={[makeItem({ quantity: '1.5', symbol: 'ETH' })]} />,
+        <AllocationList
+          onToggleExclude={noopToggle}
+          items={[makeItem({ quantity: '1.5', symbol: 'ETH' })]}
+        />,
       )
       const cell = container.querySelector('.allocation-quantity')!
       expect(cell.textContent).toBe('1.5 ETH')
@@ -308,9 +312,7 @@ describe('AllocationList', () => {
       const { container, root } = render(
         <AllocationList onToggleExclude={noopToggle} items={[makeItem({ read_status: status })]} />,
       )
-      expect(container.querySelector(`[aria-label="Read status: ${status}"]`)?.textContent).toBe(
-        label,
-      )
+      expect(container.querySelector(`[aria-label="Read status: ${status}"]`)?.textContent).toBe(label)
       await unmount(container, root)
     })
   })
@@ -374,9 +376,7 @@ describe('AllocationList', () => {
       const { container, root } = render(
         <AllocationList onToggleExclude={noopToggle} items={[makeItem({ symbol: 'ETH' })]} />,
       )
-      const headers = Array.from(container.querySelectorAll('thead th')).map((th) =>
-        th.textContent?.trim(),
-      )
+      const headers = Array.from(container.querySelectorAll('thead th')).map((th) => th.textContent?.trim())
       expect(headers).toEqual(['Asset', 'Price / 24h', 'Balance', 'Allocation', 'Actions'])
 
       const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
@@ -419,9 +419,7 @@ describe('AllocationList', () => {
     })
 
     it('renders an image emblem when logo_url is present', async () => {
-      const withLogo: AllocationItem[] = [
-        { ...ITEMS[0], logo_url: 'https://example.test/eth.png' },
-      ]
+      const withLogo: AllocationItem[] = [{ ...ITEMS[0], logo_url: 'https://example.test/eth.png' }]
       const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={withLogo} />)
       const img = container.querySelector('img.asset-emblem') as HTMLImageElement
       expect(img).toBeTruthy()
@@ -446,7 +444,9 @@ describe('AllocationList', () => {
 
   describe('small-share spoiler', () => {
     it('collapses the dust tail behind a toggle', async () => {
-      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />,
+      )
       const toggle = container.querySelector('.allocation-spoiler') as HTMLButtonElement
       expect(toggle).toBeTruthy()
       expect(toggle.getAttribute('aria-expanded')).toBe('false')
@@ -457,7 +457,9 @@ describe('AllocationList', () => {
     })
 
     it('summarises the hidden value and share on the collapsed toggle', async () => {
-      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />,
+      )
       const toggle = container.querySelector('.allocation-spoiler')!
       // 7 hidden dust rows at $10.00 / 0.10% each.
       expect(toggle.textContent).toContain('$70.00')
@@ -466,9 +468,13 @@ describe('AllocationList', () => {
     })
 
     it('reveals the hidden rows when the toggle is activated', async () => {
-      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />)
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(10)} />,
+      )
       const toggle = container.querySelector('.allocation-spoiler') as HTMLButtonElement
-      await act(async () => { toggle.click() })
+      await act(async () => {
+        toggle.click()
+      })
       expect(container.querySelectorAll('tbody tr').length).toBe(12)
       expect(toggle.getAttribute('aria-expanded')).toBe('true')
       expect(toggle.textContent).toContain('Hide')
@@ -476,7 +482,9 @@ describe('AllocationList', () => {
     })
 
     it('does not render a spoiler when only a couple of rows would be hidden', async () => {
-      const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(4)} />)
+      const { container, root } = render(
+        <AllocationList onToggleExclude={noopToggle} items={dustyPortfolio(4)} />,
+      )
       expect(container.querySelector('.allocation-spoiler')).toBeNull()
       expect(container.querySelectorAll('tbody tr').length).toBe(6)
       await unmount(container, root)
@@ -544,7 +552,9 @@ describe('AllocationList', () => {
       const onToggleExclude = vi.fn().mockResolvedValue(undefined)
       const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
-      await act(async () => { button.click() })
+      await act(async () => {
+        button.click()
+      })
       expect(onToggleExclude).toHaveBeenCalledWith('eth', true)
       await unmount(container, root)
     })
@@ -553,7 +563,9 @@ describe('AllocationList', () => {
       const onToggleExclude = vi.fn().mockRejectedValue(new Error('network down'))
       const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       const button = container.querySelector('[aria-label="Exclude ETH"]') as HTMLButtonElement
-      await act(async () => { button.click() })
+      await act(async () => {
+        button.click()
+      })
       expect(container.querySelector('[aria-label="Exclude ETH"]')).toBeTruthy()
       expect(container.querySelector('[role="alert"].allocation-row-error')).toBeTruthy()
       await unmount(container, root)
@@ -578,7 +590,9 @@ describe('AllocationList', () => {
 
     async function flush() {
       for (let i = 0; i < 5; i += 1) {
-        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
       }
     }
 
@@ -605,7 +619,9 @@ describe('AllocationList', () => {
       const { container, root } = render(<AllocationList onToggleExclude={noopToggle} items={ITEMS} />)
       await flush()
       const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
-      await act(async () => { toggle.click() })
+      await act(async () => {
+        toggle.click()
+      })
       expect(container.querySelector('[aria-label="Include DAI"]')).toBeTruthy()
       await unmount(container, root)
     })
@@ -616,9 +632,13 @@ describe('AllocationList', () => {
       const { container, root } = render(<AllocationList onToggleExclude={onToggleExclude} items={ITEMS} />)
       await flush()
       const toggle = container.querySelector('.allocation-excluded-strip button') as HTMLButtonElement
-      await act(async () => { toggle.click() })
+      await act(async () => {
+        toggle.click()
+      })
       const includeButton = container.querySelector('[aria-label="Include DAI"]') as HTMLButtonElement
-      await act(async () => { includeButton.click() })
+      await act(async () => {
+        includeButton.click()
+      })
       expect(onToggleExclude).toHaveBeenCalledWith('a-dai', false)
       await unmount(container, root)
     })

@@ -54,7 +54,9 @@ export default function PasswordSection() {
       </p>
       <form onSubmit={handleSubmit} noValidate aria-label="Change password form" className="form-grid">
         <div className="form-group">
-          <label htmlFor="current-password" className="form-label">Current password</label>
+          <label htmlFor="current-password" className="form-label">
+            Current password
+          </label>
           <input
             id="current-password"
             type="password"
@@ -67,7 +69,9 @@ export default function PasswordSection() {
           />
         </div>
         <div className="form-group">
-          <label htmlFor="new-password" className="form-label">New password</label>
+          <label htmlFor="new-password" className="form-label">
+            New password
+          </label>
           <input
             id="new-password"
             type="password"
@@ -79,10 +83,14 @@ export default function PasswordSection() {
             autoComplete="new-password"
             aria-describedby="new-password-hint"
           />
-          <p id="new-password-hint" className="form-hint">Minimum 12 characters.</p>
+          <p id="new-password-hint" className="form-hint">
+            Minimum 12 characters.
+          </p>
         </div>
         <div className="form-group">
-          <label htmlFor="confirm-password" className="form-label">Confirm new password</label>
+          <label htmlFor="confirm-password" className="form-label">
+            Confirm new password
+          </label>
           <input
             id="confirm-password"
             type="password"
@@ -94,8 +102,16 @@ export default function PasswordSection() {
             autoComplete="new-password"
           />
         </div>
-        {error !== null && <p role="alert" className="alert alert-danger">{error}</p>}
-        {msg !== null && <p role="status" className="alert alert-success">{msg}</p>}
+        {error !== null && (
+          <p role="alert" className="alert alert-danger">
+            {error}
+          </p>
+        )}
+        {msg !== null && (
+          <p role="status" className="alert alert-success">
+            {msg}
+          </p>
+        )}
         <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Changing password…' : 'Change password'}
         </button>

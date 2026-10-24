@@ -20,12 +20,14 @@ import { fetchPurgePreview, submitPurge } from '../api/client'
 const mockFetchPurgePreview = vi.mocked(fetchPurgePreview)
 const mockSubmitPurge = vi.mocked(submitPurge)
 
-function makePreview(overrides: Partial<{
-  provider: string
-  quote_observation_count: number
-  quote_set_count: number
-  affected_valuation_count: number
-}> = {}) {
+function makePreview(
+  overrides: Partial<{
+    provider: string
+    quote_observation_count: number
+    quote_set_count: number
+    affected_valuation_count: number
+  }> = {},
+) {
   return {
     provider: 'coingecko-demo',
     quote_observation_count: 1200,
@@ -43,9 +45,7 @@ function mountComponent() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(PurgeSection)),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(PurgeSection)))
   })
   return { container, root }
 }
@@ -65,7 +65,9 @@ function setValue(input: HTMLInputElement, value: string) {
 
 async function openPreview(container: HTMLElement) {
   const previewBtn = container.querySelector('button[aria-label="Preview purge impact"]') as HTMLButtonElement
-  await act(async () => { previewBtn.click() })
+  await act(async () => {
+    previewBtn.click()
+  })
 }
 
 describe('PurgeSection', () => {
@@ -114,7 +116,9 @@ describe('PurgeSection', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('What will be deleted'))
 
     const providerInput = container.querySelector('#purge-provider') as HTMLInputElement
-    await act(async () => { setValue(providerInput, 'other-provider') })
+    await act(async () => {
+      setValue(providerInput, 'other-provider')
+    })
 
     expect(container.textContent).not.toContain('What will be deleted')
   })
@@ -126,15 +130,21 @@ describe('PurgeSection', () => {
     await openPreview(container)
     await vi.waitFor(() => expect(container.textContent).toContain('What will be deleted'))
 
-    const confirmBtn = container.querySelector('button[aria-label="Confirm and submit purge"]') as HTMLButtonElement
+    const confirmBtn = container.querySelector(
+      'button[aria-label="Confirm and submit purge"]',
+    ) as HTMLButtonElement
     expect(confirmBtn.disabled).toBe(true)
 
     const checkbox = container.querySelector('#purge-confirm') as HTMLInputElement
     const password = container.querySelector('#purge-password') as HTMLInputElement
-    await act(async () => { checkbox.click() })
+    await act(async () => {
+      checkbox.click()
+    })
     expect(confirmBtn.disabled).toBe(true)
 
-    await act(async () => { setValue(password, 'owner-password-123') })
+    await act(async () => {
+      setValue(password, 'owner-password-123')
+    })
     expect(confirmBtn.disabled).toBe(false)
   })
 
@@ -155,7 +165,9 @@ describe('PurgeSection', () => {
     })
 
     const form = container.querySelector('form[aria-label="Confirm purge"]') as HTMLFormElement
-    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
 
     expect(mockSubmitPurge).toHaveBeenCalledWith({
       provider: 'coingecko-demo',
@@ -187,7 +199,9 @@ describe('PurgeSection', () => {
     })
 
     const form = container.querySelector('form[aria-label="Confirm purge"]') as HTMLFormElement
-    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
 
     expect(mockSubmitPurge).toHaveBeenCalledWith({
       provider: 'coingecko-demo',

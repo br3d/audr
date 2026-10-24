@@ -61,7 +61,9 @@ export default function SetupPage({ onSetupComplete }: Props) {
         </p>
         <form onSubmit={handleSubmit} noValidate className="form-grid">
           <div className="form-group">
-            <label htmlFor="password" className="form-label">Password</label>
+            <label htmlFor="password" className="form-label">
+              Password
+            </label>
             <input
               id="password"
               type="password"
@@ -76,7 +78,9 @@ export default function SetupPage({ onSetupComplete }: Props) {
             />
           </div>
           <div className="form-group">
-            <label htmlFor="confirm" className="form-label">Confirm password</label>
+            <label htmlFor="confirm" className="form-label">
+              Confirm password
+            </label>
             <input
               id="confirm"
               type="password"

@@ -13,8 +13,16 @@ interface Props {
  * pages and sessions without any server-side state.
  */
 const EMBLEM_HUES: Array<[number, number]> = [
-  [222, 262], [152, 182], [12, 32], [38, 58], [272, 302],
-  [192, 212], [332, 352], [102, 132], [252, 282], [172, 202],
+  [222, 262],
+  [152, 182],
+  [12, 32],
+  [38, 58],
+  [272, 302],
+  [192, 212],
+  [332, 352],
+  [102, 132],
+  [252, 282],
+  [172, 202],
 ]
 
 /** Stable, order-independent hash of the symbol — FNV-1a, truncated to 32 bits. */

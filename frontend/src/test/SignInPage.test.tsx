@@ -11,13 +11,7 @@ function renderSignInPage(container: HTMLDivElement, onSignIn: () => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const root = createRoot(container)
   flushSync(() => {
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client: qc },
-        createElement(SignInPage, { onSignIn }),
-      ),
-    )
+    root.render(createElement(QueryClientProvider, { client: qc }, createElement(SignInPage, { onSignIn })))
   })
   return root
 }
@@ -78,9 +72,7 @@ describe('SignInPage', () => {
     await new Promise<void>((resolve) => {
       flushSync(() => {
         const form = container.querySelector('form') as HTMLFormElement
-        form.dispatchEvent(
-          new Event('submit', { bubbles: true, cancelable: true }),
-        )
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       })
       // Allow the async login() call to complete
       setTimeout(resolve, 50)

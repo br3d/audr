@@ -35,7 +35,9 @@ function clickExportButton(container: HTMLElement) {
 function makeStreamingResponse(chunks: Uint8Array[], filename = 'audr-export.json') {
   let index = 0
   return {
-    headers: { get: (key: string) => (key === 'Content-Disposition' ? `attachment; filename="${filename}"` : null) },
+    headers: {
+      get: (key: string) => (key === 'Content-Disposition' ? `attachment; filename="${filename}"` : null),
+    },
     body: {
       getReader: () => ({
         read: async () => {
@@ -79,12 +81,12 @@ describe('ExportSection', () => {
   })
 
   it('streams the response, triggers a download, and reports the final size', async () => {
-    mockExportData.mockResolvedValue(
-      makeStreamingResponse([new Uint8Array(1024), new Uint8Array(512)]),
-    )
+    mockExportData.mockResolvedValue(makeStreamingResponse([new Uint8Array(1024), new Uint8Array(512)]))
     ;({ container, root } = mountComponent())
 
-    await act(async () => { clickExportButton(container) })
+    await act(async () => {
+      clickExportButton(container)
+    })
 
     expect(mockExportData).toHaveBeenCalledWith('portfolio', 'json', { signal: expect.any(AbortSignal) })
     expect(container.textContent).toContain('Download complete')
@@ -95,14 +97,18 @@ describe('ExportSection', () => {
     mockExportData.mockResolvedValue(makeStreamingResponse([]))
     ;({ container, root } = mountComponent())
 
-    const historyRadio = container.querySelector('input[name="export-kind"][value="history"]') as HTMLInputElement
+    const historyRadio = container.querySelector(
+      'input[name="export-kind"][value="history"]',
+    ) as HTMLInputElement
     const csvRadio = container.querySelector('input[name="export-format"][value="csv"]') as HTMLInputElement
     await act(async () => {
       historyRadio.click()
       csvRadio.click()
     })
 
-    await act(async () => { clickExportButton(container) })
+    await act(async () => {
+      clickExportButton(container)
+    })
 
     expect(mockExportData).toHaveBeenCalledWith('history', 'csv', { signal: expect.any(AbortSignal) })
   })
@@ -112,7 +118,9 @@ describe('ExportSection', () => {
     mockExportData.mockRejectedValue(new MockApiError(500, 'Export generation failed.'))
     ;({ container, root } = mountComponent())
 
-    await act(async () => { clickExportButton(container) })
+    await act(async () => {
+      clickExportButton(container)
+    })
 
     expect(container.textContent).toContain('Export generation failed.')
   })
@@ -128,16 +136,22 @@ describe('ExportSection', () => {
     })
     ;({ container, root } = mountComponent())
 
-    await act(async () => { clickExportButton(container) })
+    await act(async () => {
+      clickExportButton(container)
+    })
 
     const cancelBtn = container.querySelector('button[aria-label="Cancel export"]') as HTMLButtonElement
     expect(cancelBtn).toBeTruthy()
-    await act(async () => { cancelBtn.click() })
+    await act(async () => {
+      cancelBtn.click()
+    })
 
     expect(capturedSignal?.aborted).toBe(true)
 
     const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' })
-    await act(async () => { rejectExport(abortError) })
+    await act(async () => {
+      rejectExport(abortError)
+    })
 
     expect(container.querySelector('button[aria-label="Cancel export"]')).toBeNull()
     expect(container.querySelector('.alert-danger')).toBeNull()

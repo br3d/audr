@@ -45,30 +45,29 @@ function HistoryQualityNotices({ points }: { points: HistoryPoint[] }) {
   if (points.some((p) => p.is_gap_marker))
     notices.push(
       <>
-        This range contains gaps — periods where balance or price data was not
-        recorded. The chart shows gap markers.
+        This range contains gaps — periods where balance or price data was not recorded. The chart shows gap
+        markers.
       </>,
     )
   if (points.some((p) => p.quality === 'stale'))
     notices.push(
       <>
-        Some points are marked <strong>stale</strong> — the underlying data had not been
-        refreshed within the normal interval.
+        Some points are marked <strong>stale</strong> — the underlying data had not been refreshed within the
+        normal interval.
       </>,
     )
   if (points.some((p) => p.quality === 'partial' || p.quality === 'gaps'))
     notices.push(
       <>
-        Some points are marked <strong>incomplete</strong> — not all holdings had usable
-        balances and prices at that snapshot.
+        Some points are marked <strong>incomplete</strong> — not all holdings had usable balances and prices
+        at that snapshot.
       </>,
     )
   if (points.some((p) => !p.is_canonical))
     notices.push(
       <>
-        Some points are marked <strong>invalidated</strong> — they were recalculated
-        after a blockchain reorganization or a block that failed verification, and their
-        value is no longer considered current.
+        Some points are marked <strong>invalidated</strong> — they were recalculated after a blockchain
+        reorganization or a block that failed verification, and their value is no longer considered current.
       </>,
     )
 
@@ -115,9 +114,7 @@ export function computeHistoryChange(entries: HistoryPoint[]): HistoryChange | n
   const diff = last.minus(first)
   const sign = diff.isNegative() ? '-' : '+'
   const absUsd = diff.abs().toFixed(2)
-  const pctLabel = first.isZero()
-    ? null
-    : `${sign}${diff.abs().div(first).times(100).toFixed(2)}%`
+  const pctLabel = first.isZero() ? null : `${sign}${diff.abs().div(first).times(100).toFixed(2)}%`
 
   return { sign, absUsd, pctLabel }
 }
@@ -127,10 +124,8 @@ function QualityNotices({ quality }: { quality: PortfolioQuality }) {
 
   if (quality.stale_balances) notices.push('Some balance reads are stale.')
   if (quality.stale_prices) notices.push('Some price data is stale.')
-  if (quality.incomplete)
-    notices.push('Subtotal shown — not all holdings have usable balances and prices.')
-  if (quality.mixed_observation_times)
-    notices.push('Holdings were observed at different times.')
+  if (quality.incomplete) notices.push('Subtotal shown — not all holdings have usable balances and prices.')
+  if (quality.mixed_observation_times) notices.push('Holdings were observed at different times.')
   if (quality.discovery_overdue) notices.push('Token discovery is overdue.')
   if (quality.verification_pending) notices.push('Block verification is pending.')
   if (quality.invalidated) notices.push('Some observations have been invalidated.')
@@ -154,7 +149,11 @@ interface Props {
 
 export default function DashboardPage({ setPage }: Props) {
   const queryClient = useQueryClient()
-  const { data: serverData, error, isLoading } = useQuery({
+  const {
+    data: serverData,
+    error,
+    isLoading,
+  } = useQuery({
     queryKey: queryKeys.portfolio(),
     queryFn: () => fetchPortfolio(),
     refetchInterval: 30_000,
@@ -231,8 +230,7 @@ export default function DashboardPage({ setPage }: Props) {
   if (error) {
     return (
       <p role="alert" className="alert alert-danger">
-        Failed to load portfolio.{' '}
-        {errorMessage(error, 'Please try again.')}
+        Failed to load portfolio. {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -250,9 +248,7 @@ export default function DashboardPage({ setPage }: Props) {
   const totalValue = data.total_usd ?? data.priced_subtotal_usd
   const pricedCount = data.holdings.filter((h) => h.value_usd !== null && h.included).length
 
-  const historyChange = history24hQuery.data
-    ? computeHistoryChange(history24hQuery.data.items)
-    : null
+  const historyChange = history24hQuery.data ? computeHistoryChange(history24hQuery.data.items) : null
 
   const trackedNote =
     data.holdings.length === 0
@@ -317,9 +313,7 @@ export default function DashboardPage({ setPage }: Props) {
               {historyChange && (
                 <div
                   className={`metric-change ${
-                    historyChange.sign === '+'
-                      ? 'metric-change-positive'
-                      : 'metric-change-negative'
+                    historyChange.sign === '+' ? 'metric-change-positive' : 'metric-change-negative'
                   }`}
                 >
                   24h {historyChange.sign}
@@ -327,9 +321,7 @@ export default function DashboardPage({ setPage }: Props) {
                   {historyChange.pctLabel && <> ({historyChange.pctLabel})</>}
                 </div>
               )}
-              {!isComplete && (
-                <div className="metric-note text-warning">Subtotal (incomplete)</div>
-              )}
+              {!isComplete && <div className="metric-note text-warning">Subtotal (incomplete)</div>}
               {data.stale_contribution_usd !== null && (
                 <div className="metric-note text-warning">
                   Includes <MoneyValue value={data.stale_contribution_usd} /> from stale reads
@@ -339,9 +331,7 @@ export default function DashboardPage({ setPage }: Props) {
           ) : (
             <div className="metric-value metric-unknown">—</div>
           )}
-          {totalValue === null && (
-            <div className="metric-note">No priced holdings yet</div>
-          )}
+          {totalValue === null && <div className="metric-note">No priced holdings yet</div>}
         </section>
 
         <div className="metric-card">
@@ -418,8 +408,7 @@ export default function DashboardPage({ setPage }: Props) {
           ) : (
             hasHoldings && (
               <p role="note" className="alert alert-info mb-16">
-                No priced holdings — allocation unavailable. Configure a quote provider in
-                Connections.
+                No priced holdings — allocation unavailable. Configure a quote provider in Connections.
               </p>
             )
           )}
@@ -430,11 +419,7 @@ export default function DashboardPage({ setPage }: Props) {
               <div className="section-heading" style={{ marginBottom: 0 }}>
                 Recent Events
               </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setPage('events')}
-              >
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => setPage('events')}>
                 View all
               </button>
             </div>

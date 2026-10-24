@@ -51,11 +51,7 @@ export default function HistoryTable({ points }: Props) {
                 </span>
               )}
               {!point.is_canonical && (
-                <span
-                  aria-label="Invalidated marker"
-                  role="note"
-                  data-testid="invalidated-marker"
-                >
+                <span aria-label="Invalidated marker" role="note" data-testid="invalidated-marker">
                   Invalidated ·{' '}
                 </span>
               )}

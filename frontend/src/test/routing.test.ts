@@ -99,9 +99,7 @@ describe('parseQuery / serializeQuery', () => {
 
   it('serializes only non-default fields', () => {
     expect(serializeQuery({ period: '7d', q: '', on: false, n: 0 }, SCHEMA)).toBe('')
-    expect(serializeQuery({ period: '30d', q: 'eth', on: false, n: 0 }, SCHEMA)).toBe(
-      'period=30d&q=eth',
-    )
+    expect(serializeQuery({ period: '30d', q: 'eth', on: false, n: 0 }, SCHEMA)).toBe('period=30d&q=eth')
   })
 
   it('round-trips through parse -> serialize -> parse', () => {
@@ -132,16 +130,8 @@ function Harness() {
     React.createElement('span', { 'data-testid': 'q' }, state.q),
     React.createElement('span', { 'data-testid': 'on' }, String(state.on)),
     React.createElement('span', { 'data-testid': 'n' }, String(state.n)),
-    React.createElement(
-      'button',
-      { onClick: () => update({ period: '30d' }) },
-      'set-period',
-    ),
-    React.createElement(
-      'button',
-      { onClick: () => update({ q: 'eth', n: 5 }) },
-      'set-q-and-n',
-    ),
+    React.createElement('button', { onClick: () => update({ period: '30d' }) }, 'set-period'),
+    React.createElement('button', { onClick: () => update({ q: 'eth', n: 5 }) }, 'set-q-and-n'),
   )
 }
 

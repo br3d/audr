@@ -100,7 +100,7 @@ Don't block yourself on it, and don't assume an e2e failure is yours.
 
 ## The mandatory gates
 
-Your change must be green on all six of these. They run on GitHub Actions
+Your change must be green on all seven of these. They run on GitHub Actions
 ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) for every pull
 request, so you will get the same verdict we do — and the self-hosted pipeline
 the project actually deploys from is unreachable to you by design.
@@ -111,6 +111,7 @@ the project actually deploys from is unreachable to you by design.
 | **scripts-parse under 3.13** | Every `scripts/**/*.py` must `compile()` under `python:3.13-slim`. | see below |
 | **mypy --strict (backend)** | `mypy --strict` on `backend/src`, gated against the frozen backlog in `backend/mypy-baseline.txt` — a new error fails the gate, a pre-existing one doesn't (yet). | `docker compose -f compose.test.yaml --profile backend run --rm --build backend-mypy` |
 | **tsc --noEmit (frontend)** | `npm run typecheck`, run ahead of Vitest. | `cd frontend && npm run typecheck` |
+| **prettier --check (frontend)** | `npm run format:check`, run ahead of Vitest (AUD-696). `npm run lint` (ESLint) exists but is **not** a gate yet — `@typescript-eslint/parser`/`eslint-plugin` hard-throw against this project's TypeScript 7, see `frontend/eslint.config.js`. | `cd frontend && npm run format:check` |
 | **pytest** | Backend unit + contract + integration suites. | `./scripts/test.sh --backend-only` |
 | **Vitest** | Frontend specs. | `./scripts/test.sh --frontend-only` |
 

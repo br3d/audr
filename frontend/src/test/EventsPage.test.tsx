@@ -94,9 +94,7 @@ function mountPage() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(EventsPage)),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(EventsPage)))
   })
   return { container, root }
 }
@@ -172,12 +170,8 @@ describe('EventsPage', () => {
     })
 
     await vi.waitFor(() => {
-      expect(mockFetchEvents).toHaveBeenCalledWith(
-        expect.objectContaining({ walletId: 'w1' }),
-      )
-      expect(mockFetchAllowances).toHaveBeenCalledWith(
-        expect.objectContaining({ walletId: 'w1' }),
-      )
+      expect(mockFetchEvents).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w1' }))
+      expect(mockFetchAllowances).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w1' }))
     })
   })
 
@@ -198,9 +192,7 @@ describe('EventsPage', () => {
     })
 
     await vi.waitFor(() => {
-      expect(mockFetchEvents).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'transfer_out' }),
-      )
+      expect(mockFetchEvents).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'transfer_out' }))
     })
   })
 
@@ -222,15 +214,15 @@ describe('EventsPage', () => {
     })
 
     await vi.waitFor(() => {
-      expect(mockFetchAllowances).toHaveBeenCalledWith(
-        expect.objectContaining({ unlimitedOnly: true }),
-      )
+      expect(mockFetchAllowances).toHaveBeenCalledWith(expect.objectContaining({ unlimitedOnly: true }))
     })
   })
 
   it('paginates events via limit/offset using Previous/Next', async () => {
     mockFetchWallets.mockResolvedValue(makeWalletsResponse())
-    mockFetchEvents.mockResolvedValue(makeEventsResponse({ total: 120, limit: 50, offset: 0, events: [EVENT_1] }))
+    mockFetchEvents.mockResolvedValue(
+      makeEventsResponse({ total: 120, limit: 50, offset: 0, events: [EVENT_1] }),
+    )
     mockFetchAllowances.mockResolvedValue(makeAllowancesResponse())
     ;({ container, root } = mountPage())
 
@@ -269,9 +261,9 @@ describe('EventsPage', () => {
     expect(riskyRow).toBeTruthy()
     expect(riskyRow?.querySelector('.badge-danger')).toBeTruthy()
 
-    const safeRows = Array.from(container.querySelectorAll('table[aria-label="Token allowances"] tbody tr')).filter(
-      (r) => !r.classList.contains('row-risk'),
-    )
+    const safeRows = Array.from(
+      container.querySelectorAll('table[aria-label="Token allowances"] tbody tr'),
+    ).filter((r) => !r.classList.contains('row-risk'))
     expect(safeRows.length).toBe(1)
   })
 

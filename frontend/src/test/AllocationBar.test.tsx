@@ -17,7 +17,9 @@ function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
-  await act(async () => { root.unmount() })
+  await act(async () => {
+    root.unmount()
+  })
   document.body.removeChild(container)
 }
 

@@ -23,6 +23,7 @@
     "decimal.js": "10.6.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-is": "19.3.0",
     "recharts": "3.10.1"
   },
   "devDependencies": {

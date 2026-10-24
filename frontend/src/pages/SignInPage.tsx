@@ -37,7 +37,9 @@ export default function SignInPage({ onSignIn }: Props) {
         <p className="auth-subtitle">Enter your portfolio password to continue.</p>
         <form onSubmit={handleSubmit} noValidate className="form-grid">
           <div className="form-group">
-            <label htmlFor="password" className="form-label">Password</label>
+            <label htmlFor="password" className="form-label">
+              Password
+            </label>
             <input
               id="password"
               type="password"

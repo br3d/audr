@@ -61,12 +61,7 @@ export default function NoticeBadge({ label, notices }: Props) {
             strokeWidth="1.8"
             strokeLinejoin="round"
           />
-          <path
-            d="M12 10v4.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
+          <path d="M12 10v4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
           <circle cx="12" cy="17.4" r="1" fill="currentColor" />
         </svg>
         {notices.length > 1 && (

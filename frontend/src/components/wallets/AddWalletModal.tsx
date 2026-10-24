@@ -15,13 +15,7 @@ function validateEthAddress(value: string): string | null {
   return null
 }
 
-export default function AddWalletModal({
-  onAdded,
-  onClose,
-}: {
-  onAdded: () => void
-  onClose: () => void
-}) {
+export default function AddWalletModal({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
   const [address, setAddress] = useState('')
   const [label, setLabel] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -56,21 +50,11 @@ export default function AddWalletModal({
     (addMutation.error ? errorMessage(addMutation.error, 'An unexpected error occurred.') : null)
 
   return (
-    <div
-      className="modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add tracked address"
-    >
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Add tracked address">
       <div className="modal-box">
         <div className="modal-header">
           <div className="modal-title">Add Tracked Address</div>
-          <button
-            type="button"
-            className="modal-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             <IconX width={16} height={16} />
           </button>
         </div>
@@ -94,8 +78,8 @@ export default function AddWalletModal({
                 aria-describedby="wallet-address-hint"
               />
               <p id="wallet-address-hint" className="form-hint">
-                Any valid public Ethereum mainnet address (0x + 40 hex characters). No
-                proof of control is required or verified.
+                Any valid public Ethereum mainnet address (0x + 40 hex characters). No proof of control is
+                required or verified.
               </p>
             </div>
             <div className="form-group">
@@ -121,12 +105,7 @@ export default function AddWalletModal({
           )}
 
           <div className="modal-footer">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onClose}
-              disabled={submitting}
-            >
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
