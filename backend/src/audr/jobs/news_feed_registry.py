@@ -42,6 +42,14 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
     A feed's symbols come from `news_feed_symbol` (AUD-571) — zero rows
     means a press-tier feed matched by allow-list keyword, not a feed
     nobody has mapped yet.
+
+    Ordered oldest-polled-first, never-polled first of all (AUD-729): a
+    capped tier (`_HN_MAX_QUERIES_PER_RUN`) truncates this list to its
+    budget, so `ORDER BY nf.key` alphabetically starved every feed past
+    the budget forever whenever the run cadence exceeds
+    `MIN_POLL_INTERVAL` — the same alphabetical prefix is due, and wins
+    the cap, on every run. `nf.key` stays as the tiebreaker so the order
+    is still total and deterministic for tests.
     """
     result = await session.execute(
         sa.text(
@@ -58,7 +66,7 @@ async def list_due_feeds(session: AsyncSession) -> list[NewsFeed]:
               AND (nf.last_polled_at IS NULL OR nf.last_polled_at < :cutoff)
             GROUP BY nf.id, nf.key, nf.tier, nf.url, nf.etag, nf.last_modified,
                      nf.keep_pattern, nf.block_pattern
-            ORDER BY nf.key
+            ORDER BY nf.last_polled_at ASC NULLS FIRST, nf.key
             """
         ),
         {"cutoff": datetime.now(tz=UTC) - MIN_POLL_INTERVAL},

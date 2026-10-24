@@ -89,6 +89,53 @@ async def test_list_due_feeds_excludes_disabled(db_session: AsyncSession) -> Non
     assert due == []
 
 
+async def test_list_due_feeds_orders_oldest_polled_first(db_session: AsyncSession) -> None:
+    """AUD-729: a capped tier truncates this list to a per-run budget, so
+    alphabetical order (`ORDER BY nf.key`) starves every feed past the
+    budget forever. Keys are deliberately out of alphabetical order
+    relative to the expected result — a test that happens to pass under
+    `ORDER BY key` would not catch the regression.
+    """
+    await _insert_feed(db_session, key="z-oldest", last_polled_at_sql="now() - interval '2 hours'")
+    await _insert_feed(db_session, key="m-never-polled")
+    await _insert_feed(
+        db_session, key="a-least-stale", last_polled_at_sql="now() - interval '20 minutes'"
+    )
+    due = await list_due_feeds(db_session)
+    assert [f.key for f in due] == ["m-never-polled", "z-oldest", "a-least-stale"]
+
+
+async def test_list_due_feeds_rotates_past_a_capped_batch(db_session: AsyncSession) -> None:
+    """Regression test pinning the anti-starvation property directly.
+
+    Simulates a capped caller (`_HN_MAX_QUERIES_PER_RUN`-style) taking the
+    first `cap` feeds from one selection, stamping them as freshly polled
+    with a timestamp already *past* `MIN_POLL_INTERVAL` — reproducing the
+    real failure mode where the run cadence exceeds the poll interval, so
+    a just-polled feed is due again on the very next run. Under the old
+    `ORDER BY nf.key`, the same alphabetical prefix would win the cap
+    every time; the fix must advance past it.
+    """
+    cap = 3
+    total = cap * 3
+    for i in range(total):
+        await _insert_feed(db_session, key=f"feed-{i:02d}")
+
+    first_batch = (await list_due_feeds(db_session))[:cap]
+    assert len(first_batch) == cap
+
+    stale_but_due = "now() - interval '20 minutes'"  # > MIN_POLL_INTERVAL (15m)
+    for feed in first_batch:
+        await db_session.execute(
+            text(f"UPDATE news_feed SET last_polled_at = {stale_but_due} WHERE id = :id"),  # noqa: S608
+            {"id": str(feed.id)},
+        )
+
+    second_batch = (await list_due_feeds(db_session))[:cap]
+    assert len(second_batch) == cap
+    assert {f.key for f in second_batch}.isdisjoint({f.key for f in first_batch})
+
+
 async def test_list_due_feeds_symbols_empty_for_press_feed(db_session: AsyncSession) -> None:
     """No rows in `news_feed_symbol` for a feed means press tier, allow-list
     matched — distinct from a feed someone mapped explicitly (AUD-571).
