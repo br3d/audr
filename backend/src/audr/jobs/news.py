@@ -354,9 +354,45 @@ def _cites_ticker(title: str, symbol: str) -> bool:
     )
 
 
+# Asset names seen in the deployed catalogue that are ordinary English words
+# distinct from their symbol (AUD-739) — 'REAL', 'Chain', 'Everything' and the
+# rest of the table pulled from the live DB in that issue. A name landing in
+# this set gets no benefit from the bare name-match path below and falls back
+# to requiring the same `$SYM`/`(SYM)` citation the symbol path already
+# demands. Curate this list as new common-word names turn up.
+_COMMON_ENGLISH_NAME_WORDS = frozenset(
+    {
+        "real",
+        "chain",
+        "everything",
+        "compound",
+        "request",
+        "derive",
+        "maker",
+        "metal",
+        "movement",
+        "status",
+        "spark",
+        "quant",
+        "rally",
+        "swipe",
+        "bounce",
+        "billions",
+        "concrete",
+        "gravity",
+        "eclipse",
+        "maple",
+        "melon",
+        "lighter",
+        "checkmate",
+    }
+)
+
+
 def match_assets_strict(title: str, assets: list[HeldAsset]) -> list[uuid.UUID]:
     """Like `match_assets`, but a bare ticker-symbol word match is not enough
-    on its own (AUD-733).
+    on its own (AUD-733), and neither is a bare asset-name word match when
+    that name is itself an ordinary English word (AUD-739).
 
     The aggregator tier's relevance signal is a loose, uncurated Google News
     search (0039) — `match_assets` is its only defence against drift, and a
@@ -366,19 +402,31 @@ def match_assets_strict(title: str, assets: list[HeldAsset]) -> list[uuid.UUID]:
     matching is the wrong tool for a homograph: "Portal" *is* a word-boundary
     match for PORTAL in a headline about an unrelated Coldcard exploit.
 
+    AUD-733 fixed that for the symbol, but an asset's *name* can be an
+    ordinary word too ('REAL', 'Chain', 'Everything') — `name != symbol` only
+    excludes names that spell out the bare symbol (PORTAL/Portal); it says
+    nothing about a distinctive-but-common name, which is the same homograph
+    class under a different field. AUD-722 proved this live: asset `ASSET`
+    (name `REAL`) matched "CZ Says the Real Danger Lies in Phishing" on the
+    name path alone.
+
     Accepted instead: a match on the asset's name (when that name is not
-    itself just the bare symbol spelled out — see PORTAL, whose name equals
-    its symbol and gets no benefit from a name check), or the symbol cited in
-    the `$SYM`/`(SYM)` convention real crypto journalism uses for an actual
-    token. A bare symbol word match with neither is dropped. This necessarily
-    costs some recall on this one tier for exactly the common-word tickers
-    that create the false positives — curated tiers (`project`/`press`/
-    `hackernews`) are unaffected and keep matching on a bare symbol, since a
-    human already vetted that feed as scoped to this asset.
+    itself just the bare symbol spelled out, and not an ordinary English word
+    per `_COMMON_ENGLISH_NAME_WORDS` — see PORTAL and REAL respectively, which
+    get no benefit from a name check), or the symbol cited in the `$SYM`/
+    `(SYM)` convention real crypto journalism uses for an actual token. A bare
+    symbol or common-word-name match with neither is dropped. This
+    necessarily costs some recall on this one tier for exactly the
+    common-word names and tickers that create the false positives — curated
+    tiers (`project`/`press`/`hackernews`) are unaffected and keep matching on
+    a bare symbol or name, since a human already vetted that feed as scoped
+    to this asset.
     """
     matched: list[uuid.UUID] = []
     for asset in assets:
-        name_is_distinctive = asset.name.strip().lower() != asset.symbol.strip().lower()
+        name = asset.name.strip().lower()
+        symbol = asset.symbol.strip().lower()
+        name_is_distinctive = name != symbol and name not in _COMMON_ENGLISH_NAME_WORDS
         if name_is_distinctive and re.search(rf"\b{re.escape(asset.name)}\b", title, re.IGNORECASE):
             matched.append(asset.id)
         elif _cites_ticker(title, asset.symbol):

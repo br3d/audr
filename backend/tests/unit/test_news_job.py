@@ -24,6 +24,10 @@ _MATH = HeldAsset(id=uuid.uuid4(), symbol="MATH", name="MATH Wallet")
 _ASSET = HeldAsset(id=uuid.uuid4(), symbol="ASSET", name="Asset Token")
 _PORTAL = HeldAsset(id=uuid.uuid4(), symbol="PORTAL", name="Portal")
 _MIR = HeldAsset(id=uuid.uuid4(), symbol="MIR", name="Mirror Protocol")
+_CAKE = HeldAsset(id=uuid.uuid4(), symbol="CAKE", name="PancakeSwap")
+_ASSET_REAL = HeldAsset(id=uuid.uuid4(), symbol="ASSET", name="REAL")
+_XCN = HeldAsset(id=uuid.uuid4(), symbol="XCN", name="Chain")
+_EV = HeldAsset(id=uuid.uuid4(), symbol="EV", name="Everything")
 
 
 @pytest.mark.unit
@@ -121,9 +125,52 @@ class TestMatchAssetsStrict:
         matched = match_assets_strict("SushiSwap exploit drains $3M from liquidity pool", [sushi])
         assert matched == [sushi.id]
 
+    def test_cake_pancakeswap_is_the_subject_and_still_matches(self) -> None:
+        """CAKE *is* PancakeSwap (AUD-704) — a made-up compound name, not an
+        ordinary English word, so it keeps matching by name alone."""
+        matched = match_assets_strict(
+            "$820K stolen from NEM token's PancakeSwap pool due to contract flaw", [_CAKE]
+        )
+        assert matched == [_CAKE.id]
+
     def test_unrelated_headline_matches_nothing(self) -> None:
         matched = match_assets_strict("Bitcoin dominance rises", [_MATH, _ASSET, _PORTAL])
         assert matched == []
+
+
+@pytest.mark.unit
+class TestMatchAssetsStrictNameHomographs:
+    """AUD-739: AUD-733 hardened the *symbol* path (`_cites_ticker`) against
+    tickers that double as ordinary English words, but left the *name* path
+    guarded only by `name != symbol` — which does nothing when the asset's
+    name itself is a common word distinct from its symbol. Asset `ASSET`
+    (name `REAL`) proved this live on AUD-722: 'CZ Says the Real Danger Lies
+    in Phishing' cleared the name path on a bare word-boundary match for
+    'REAL', and was only stopped downstream by AUD-735's subject gate."""
+
+    def test_asset_real_homograph_headline_is_rejected(self) -> None:
+        """Regression test for AUD-722: the exact production false positive."""
+        matched = match_assets_strict("CZ Says the Real Danger Lies in Phishing", [_ASSET_REAL])
+        assert matched == []
+
+    def test_xcn_chain_homograph_headline_is_rejected(self) -> None:
+        matched = match_assets_strict("Retailers Scramble as Supply Chain Woes Continue", [_XCN])
+        assert matched == []
+
+    def test_ev_everything_homograph_headline_is_rejected(self) -> None:
+        matched = match_assets_strict("New Plan Promises Everything for One Low Price", [_EV])
+        assert matched == []
+
+    def test_common_word_name_still_matches_with_dollar_ticker_citation(self) -> None:
+        """Defense in depth must not cost the true positive: a genuine XCN
+        story still alerts when it cites the ticker, same as the symbol
+        path (AUD-733 acceptance criterion 3)."""
+        matched = match_assets_strict("Chain ($XCN) Launches New Mainnet Upgrade", [_XCN])
+        assert matched == [_XCN.id]
+
+    def test_common_word_name_still_matches_with_paren_ticker_citation(self) -> None:
+        matched = match_assets_strict("Everything (EV) Token Surges After Listing", [_EV])
+        assert matched == [_EV.id]
 
 
 @pytest.mark.unit
