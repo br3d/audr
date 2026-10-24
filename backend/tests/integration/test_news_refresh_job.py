@@ -1134,6 +1134,63 @@ async def test_aggregator_tier_drops_titles_that_do_not_mention_the_asset(
     assert [r["external_id"] for r in rows] == ["on-topic"]
 
 
+async def test_aggregator_tier_drops_common_word_ticker_homographs(
+    news_session: AsyncSession,
+) -> None:
+    """AUD-733: a ticker that doubles as an ordinary English word ('MATH',
+    'ASSET') clears `match_assets`'s word-boundary check on any headline that
+    happens to use the word, regardless of subject — these two titles are
+    the real ones measured on the stand. A headline that cites the ticker
+    properly ($SYM) still gets through, proving the fix is not just a mute.
+    """
+    math_id = await _hold_asset(news_session, symbol="MATH", name="MATH Wallet")
+    asset_id = await _hold_asset(news_session, symbol="ASSET", name="Asset Token")
+    await _insert_feed(
+        news_session,
+        key="aggregator:math",
+        tier="aggregator",
+        symbols=["MATH"],
+        url="https://example.com/aggregator-math.xml",
+    )
+    await _insert_feed(
+        news_session,
+        key="aggregator:asset",
+        tier="aggregator",
+        symbols=["ASSET"],
+        url="https://example.com/aggregator-asset.xml",
+    )
+
+    math_body = _rss(
+        ("homograph", "Security Rests on Hard Math Problems", "https://example.com/1"),
+        ("real", "$MATH surges 12% after exchange listing", "https://example.com/2"),
+    )
+    asset_body = _rss(
+        (
+            "homograph",
+            "Can AI Hack Bitcoin? CZ Says the Real Danger Lies in Phishing and Data Leak",
+            "https://example.com/3",
+        ),
+        (
+            "real",
+            "Asset Token ($ASSET) Suffers Smart Contract Exploit",
+            "https://example.com/4",
+        ),
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://example.com/aggregator-math.xml").mock(
+            return_value=Response(200, content=math_body)
+        )
+        mock.get("https://example.com/aggregator-asset.xml").mock(
+            return_value=Response(200, content=asset_body)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    math_rows = await _news_rows(news_session, asset_id=math_id)
+    asset_rows = await _news_rows(news_session, asset_id=asset_id)
+    assert [r["external_id"] for r in math_rows] == ["real"]
+    assert [r["external_id"] for r in asset_rows] == ["real"]
+
+
 async def test_aggregator_tier_filters_evergreen_explainer_noise(
     news_session: AsyncSession,
 ) -> None:
