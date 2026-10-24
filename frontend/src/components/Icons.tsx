@@ -143,7 +143,13 @@ export function IconPlus(props: IconProps) {
 export function IconX(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M4 4l12 12M16 4L4 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M4 4l12 12M16 4L4 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }
@@ -169,7 +175,10 @@ export function IconSun(props: IconProps) {
       <circle cx="10" cy="10" r="4" fill="none" stroke="currentColor" strokeWidth="1.6" />
       <path
         d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42"
-        fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
       />
     </svg>
   )
@@ -178,7 +187,14 @@ export function IconSun(props: IconProps) {
 export function IconMoon(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M17 12.5a7 7 0 1 1-9.5-9.5 5.5 5.5 0 0 0 9.5 9.5z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M17 12.5a7 7 0 1 1-9.5-9.5 5.5 5.5 0 0 0 9.5 9.5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }
@@ -186,8 +202,21 @@ export function IconMoon(props: IconProps) {
 export function IconSignOut(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M13 7l4 3-4 3M17 10H8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M13 7l4 3-4 3M17 10H8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }
@@ -196,7 +225,13 @@ export function IconUser(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
       <circle cx="10" cy="7" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M4 17a6 6 0 0 1 12 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path
+        d="M4 17a6 6 0 0 1 12 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }
@@ -219,7 +254,13 @@ export function IconBell(props: IconProps) {
         strokeWidth="1.6"
         strokeLinejoin="round"
       />
-      <path d="M8 16.5a2 2 0 0 0 4 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path
+        d="M8 16.5a2 2 0 0 0 4 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }
@@ -227,7 +268,14 @@ export function IconBell(props: IconProps) {
 export function IconArrowDown(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M10 3v12M5 11l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M10 3v12M5 11l5 5 5-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }
@@ -235,7 +283,14 @@ export function IconArrowDown(props: IconProps) {
 export function IconArrowUp(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M10 17V5M5 9l5-5 5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M10 17V5M5 9l5-5 5 5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }
@@ -243,8 +298,21 @@ export function IconArrowUp(props: IconProps) {
 export function IconRefresh(props: IconProps) {
   return (
     <svg {...defaults} {...props}>
-      <path d="M4 10a6 6 0 1 0 1.7-4.3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M4 4v3h3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 10a6 6 0 1 0 1.7-4.3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M4 4v3h3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

@@ -21,9 +21,7 @@ export interface AllocationSegment {
 }
 
 export function buildSegments(items: AllocationItem[]): AllocationSegment[] {
-  const sorted = [...items].sort((a, b) =>
-    new Decimal(b.percentage).comparedTo(new Decimal(a.percentage)),
-  )
+  const sorted = [...items].sort((a, b) => new Decimal(b.percentage).comparedTo(new Decimal(a.percentage)))
 
   const segments: AllocationSegment[] = []
   let otherPct = new Decimal(0)
@@ -46,7 +44,11 @@ export function buildSegments(items: AllocationItem[]): AllocationSegment[] {
 
 export default function AllocationBar({ items }: Props) {
   if (items.length === 0) {
-    return <p role="note" className="muted-text">No priced allocation to summarize.</p>
+    return (
+      <p role="note" className="muted-text">
+        No priced allocation to summarize.
+      </p>
+    )
   }
 
   const segments = buildSegments(items)

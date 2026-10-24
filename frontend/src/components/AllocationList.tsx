@@ -46,9 +46,7 @@ export function splitAllocations(items: AllocationItem[]): {
   visible: AllocationItem[]
   hidden: AllocationItem[]
 } {
-  const sorted = [...items].sort((a, b) =>
-    new Decimal(b.percentage).comparedTo(new Decimal(a.percentage)),
-  )
+  const sorted = [...items].sort((a, b) => new Decimal(b.percentage).comparedTo(new Decimal(a.percentage)))
   const significant = sorted.filter((i) =>
     new Decimal(i.percentage).greaterThanOrEqualTo(SIGNIFICANT_SHARE_PCT),
   ).length
@@ -117,9 +115,7 @@ function AllocationRow({
               <span className="allocation-name">{item.name}</span>
               <span className="allocation-asset-sub">
                 <span className="allocation-symbol">{item.symbol}</span>
-                <span aria-label={`Read status: ${item.read_status}`}>
-                  {readBadge(item.read_status)}
-                </span>
+                <span aria-label={`Read status: ${item.read_status}`}>{readBadge(item.read_status)}</span>
               </span>
             </div>
           </div>
@@ -127,21 +123,13 @@ function AllocationRow({
       </td>
       <td className="td-mono allocation-price-cell">
         <div className="allocation-price-value">
-          {isUnpriced ? (
-            <span className="text-muted">unpriced</span>
-          ) : (
-            <MoneyValue value={item.price_usd} />
-          )}
+          {isUnpriced ? <span className="text-muted">unpriced</span> : <MoneyValue value={item.price_usd} />}
         </div>
         <Change24h pct={item.price_change_24h_pct} />
       </td>
       <td className="td-mono allocation-balance-cell">
         <div className="allocation-value">
-          {isUnpriced ? (
-            <span className="text-muted">unpriced</span>
-          ) : (
-            <MoneyValue value={item.value_usd} />
-          )}
+          {isUnpriced ? <span className="text-muted">unpriced</span> : <MoneyValue value={item.value_usd} />}
         </div>
         <div className="allocation-quantity">
           {item.quantity !== null ? (
@@ -397,8 +385,7 @@ export default function AllocationList({ items, onToggleExclude }: Props) {
             {expanded ? '▾' : '▸'}
           </span>
           <span className="allocation-spoiler-label">
-            {expanded ? 'Hide' : 'Show'} {hidden.length} smaller{' '}
-            {hidden.length === 1 ? 'asset' : 'assets'}
+            {expanded ? 'Hide' : 'Show'} {hidden.length} smaller {hidden.length === 1 ? 'asset' : 'assets'}
           </span>
           <span className="allocation-spoiler-meta">
             <MoneyValue value={sum(hidden, 'value_usd')} />

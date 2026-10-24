@@ -6,10 +6,7 @@ import type { SettingsResponse } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { errorMessage } from '../api/errorMessage'
 
-function costWarning(
-  intervalSeconds: number,
-  kind: 'balances' | 'discovery' | 'quotes',
-): string | null {
+function costWarning(intervalSeconds: number, kind: 'balances' | 'discovery' | 'quotes'): string | null {
   const perDay = Math.floor(86400 / intervalSeconds)
   if (kind === 'quotes' && intervalSeconds < 300) {
     return `Fetching quotes every ${intervalSeconds}s runs ~${perDay} requests/day. Free-tier providers cap at 50–100 req/day. Consider 300s or longer.`
@@ -206,9 +203,7 @@ export default function SchedulesPage() {
   }
 
   const saving = saveMutation.isPending
-  const saveError = saveMutation.error
-    ? errorMessage(saveMutation.error, 'Failed to save settings.')
-    : null
+  const saveError = saveMutation.error ? errorMessage(saveMutation.error, 'Failed to save settings.') : null
   const saveMsg = saveMutation.isSuccess ? 'Schedule settings saved.' : null
 
   if (isLoading) return <p aria-busy="true">Loading schedule settings…</p>
@@ -216,8 +211,7 @@ export default function SchedulesPage() {
   if (error) {
     return (
       <p role="alert" className="alert alert-danger">
-        Failed to load settings.{' '}
-        {errorMessage(error, 'Please try again.')}
+        Failed to load settings. {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -231,16 +225,16 @@ export default function SchedulesPage() {
   return (
     <div>
       <p className="page-subheading">
-        Configure how often audr fetches balances, discovers tokens, and retrieves price
-        quotes. Changes take effect after the current run completes.
+        Configure how often audr fetches balances, discovers tokens, and retrieves price quotes. Changes take
+        effect after the current run completes.
       </p>
 
       <div className="card mb-20">
         <div className="metric-label mb-8">Projected usage</div>
         <p className="fw-600">{usageProjection(current)}</p>
         <p className="muted-text mt-8">
-          Free-tier providers typically cap at 100–10,000 requests/day. Set intervals
-          conservatively and monitor your provider dashboard.
+          Free-tier providers typically cap at 100–10,000 requests/day. Set intervals conservatively and
+          monitor your provider dashboard.
         </p>
       </div>
 
@@ -292,11 +286,7 @@ export default function SchedulesPage() {
         )}
 
         <div className="btn-group">
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={saving || draft === null}
-          >
+          <button type="submit" className="btn btn-primary" disabled={saving || draft === null}>
             {saving ? 'Saving…' : 'Save schedule settings'}
           </button>
           {draft !== null && (

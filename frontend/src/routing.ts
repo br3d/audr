@@ -51,9 +51,7 @@ export function hashForPage(page: MainPage, search?: string): string {
  * normalised on first render so the URL always names the visible tab.
  */
 export function useHashPage(): [MainPage, (page: MainPage) => void] {
-  const [page, setPageState] = useState<MainPage>(
-    () => pageFromHash(window.location.hash) ?? DEFAULT_PAGE,
-  )
+  const [page, setPageState] = useState<MainPage>(() => pageFromHash(window.location.hash) ?? DEFAULT_PAGE)
 
   // Follow browser back/forward and any external hash change.
   useEffect(() => {
@@ -105,12 +103,10 @@ export function stringField(defaultValue: string): FieldCodec<string> {
 }
 
 /** A field restricted to a fixed set of values; anything else normalises to the default. */
-export function enumField<T extends string>(
-  allowed: readonly T[],
-  defaultValue: T,
-): FieldCodec<T> {
+export function enumField<T extends string>(allowed: readonly T[], defaultValue: T): FieldCodec<T> {
   return {
-    parse: (raw) => (raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : defaultValue),
+    parse: (raw) =>
+      raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : defaultValue,
     serialize: (value) => (value === defaultValue ? null : value),
   }
 }

@@ -102,17 +102,12 @@ describe('App routing and auth guard', () => {
   })
 
   // Pre-populate cache so queries return data synchronously without async fetching
-  function mountWithCache(
-    setupData: { setup_required: boolean },
-    sessionData?: typeof SESSION_OK,
-  ) {
+  function mountWithCache(setupData: { setup_required: boolean }, sessionData?: typeof SESSION_OK) {
     const qc = makeQueryClient()
     qc.setQueryData(['setup-status'], setupData)
     if (sessionData) qc.setQueryData(['session'], sessionData)
     act(() => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
     return { qc }
   }
@@ -121,9 +116,7 @@ describe('App routing and auth guard', () => {
     mockSetupStatus.mockReturnValue(new Promise(() => {})) // never resolves
     const qc = makeQueryClient()
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
     expect(container.querySelector('[aria-busy="true"]')).toBeTruthy()
   })
@@ -141,14 +134,11 @@ describe('App routing and auth guard', () => {
     // Pre-populate setup-status so setup query resolves synchronously; session query will fetch+fail
     qc.setQueryData(['setup-status'], { setup_required: false })
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
     expect(container.querySelector('[data-testid="setup-page"]')).toBeNull()
   })
 
@@ -239,36 +229,29 @@ describe('App routing and auth guard', () => {
       completeBtn.click()
     })
     // After handleSetupComplete sets setup_required: false, session query runs + fails → SignInPage
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
   })
 
   it('transitions from SignInPage to main app after sign-in', async () => {
-    mockSession
-      .mockRejectedValueOnce(new AuthError())
-      .mockResolvedValue(SESSION_OK)
+    mockSession.mockRejectedValueOnce(new AuthError()).mockResolvedValue(SESSION_OK)
     const qc = makeQueryClient()
     qc.setQueryData(['setup-status'], { setup_required: false })
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
 
     const signInBtn = container.querySelector('button')!
     await act(async () => {
       signInBtn.click()
     })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
   })
 
   it('calls logout and returns to SignInPage on sign-out', async () => {
@@ -278,9 +261,7 @@ describe('App routing and auth guard', () => {
     qc.setQueryData(['setup-status'], { setup_required: false })
     qc.setQueryData(['session'], SESSION_OK)
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
 
@@ -295,10 +276,9 @@ describe('App routing and auth guard', () => {
       signOutBtn.click()
     })
     expect(mockLogout).toHaveBeenCalledOnce()
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
   })
 
   it('registers a global unauthorized callback on mount', async () => {
@@ -312,9 +292,7 @@ describe('App routing and auth guard', () => {
     qc.setQueryData(['setup-status'], { setup_required: false })
     qc.setQueryData(['session'], SESSION_OK)
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
 
@@ -324,10 +302,9 @@ describe('App routing and auth guard', () => {
     await act(async () => {
       callback?.()
     })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
   })
 
   it('unauthenticated boot fetches session exactly once — no infinite loop', async () => {
@@ -342,14 +319,11 @@ describe('App routing and auth guard', () => {
     })
 
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
 
     // Exactly one session fetch; retry is disabled for AuthError
     expect(mockSession).toHaveBeenCalledTimes(1)
@@ -378,22 +352,23 @@ describe('App routing and auth guard', () => {
     })
 
     await act(async () => {
-      root.render(
-        React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
-      )
+      root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)))
     })
     expect(container.querySelector('[data-testid="dashboard-page"]')).toBeTruthy()
 
     // First callback invocation: session is 'success' → triggers reset → session enters error
-    await act(async () => { capturedCallback?.() })
-    await vi.waitFor(
-      () => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(),
-      { timeout: 1000 },
-    )
+    await act(async () => {
+      capturedCallback?.()
+    })
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="sign-in-page"]')).toBeTruthy(), {
+      timeout: 1000,
+    })
     const fetchCountAfterFirst = mockSession.mock.calls.length
 
     // Second callback invocation: session is now 'error' → guard blocks → no additional fetches
-    await act(async () => { capturedCallback?.() })
+    await act(async () => {
+      capturedCallback?.()
+    })
     await new Promise((r) => setTimeout(r, 50))
     expect(mockSession).toHaveBeenCalledTimes(fetchCountAfterFirst)
   })

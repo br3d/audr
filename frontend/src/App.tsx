@@ -1,6 +1,13 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchSetupStatus, fetchSession, logout, AuthError, setUnauthorizedCallback, clearUnauthorizedCallback } from './api/client'
+import {
+  fetchSetupStatus,
+  fetchSession,
+  logout,
+  AuthError,
+  setUnauthorizedCallback,
+  clearUnauthorizedCallback,
+} from './api/client'
 import Layout from './components/Layout'
 import { useHashPage } from './routing'
 import SetupPage from './pages/SetupPage'
@@ -14,8 +21,9 @@ import SchedulesPage from './pages/SchedulesPage'
 import StatusPage from './pages/StatusPage'
 import AccountDataPage from './pages/AccountDataPage'
 import ApiTokensPage from './pages/ApiTokensPage'
-// AUD-436: prototype only, reachable at #/assistant-prototype and nowhere in the nav.
-import AssistantPrototypePage from './pages/AssistantPrototypePage'
+// AUD-436: prototype only, reachable at #/assistant-prototype and nowhere in
+// the nav — lazy so it never ships in the bundle every other page pays for.
+const AssistantPrototypePage = lazy(() => import('./pages/AssistantPrototypePage'))
 
 export default function App() {
   const queryClient = useQueryClient()
@@ -98,7 +106,11 @@ export default function App() {
       {page === 'status' && <StatusPage />}
       {page === 'account' && <AccountDataPage />}
       {page === 'api-tokens' && <ApiTokensPage />}
-      {page === 'assistant-prototype' && <AssistantPrototypePage />}
+      {page === 'assistant-prototype' && (
+        <Suspense fallback={<div aria-busy="true">Loading…</div>}>
+          <AssistantPrototypePage />
+        </Suspense>
+      )}
     </Layout>
   )
 }

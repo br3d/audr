@@ -46,9 +46,8 @@
   --r-lg: 16px;
   --r-full: 9999px;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
 
   --text-xs: 11px;
   --text-sm: 12px;
@@ -61,7 +60,7 @@
 }
 
 /* ---- Tokens: light theme ---- */
-[data-theme="light"] {
+[data-theme='light'] {
   --bg-base: #f2f4f8;
   --bg-surface: #f2f4f8;
   --bg-card: #ffffff;
@@ -200,7 +199,9 @@ body {
   cursor: pointer;
   text-align: left;
   width: 100%;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   text-decoration: none;
   line-height: 1.4;
 }
@@ -211,7 +212,7 @@ body {
 }
 
 .nav-item.active,
-.nav-item[aria-current="page"] {
+.nav-item[aria-current='page'] {
   background: rgba(74, 108, 247, 0.18);
   color: var(--text-primary);
 }
@@ -224,7 +225,7 @@ body {
 }
 
 .nav-item.active .nav-item-icon,
-.nav-item[aria-current="page"] .nav-item-icon {
+.nav-item[aria-current='page'] .nav-item-icon {
   opacity: 1;
   color: var(--accent);
 }
@@ -251,13 +252,13 @@ body {
 /* Secondary group (Schedules/Status/Connections/Account & Data): the owner
    reaches these far less than the portfolio views above, so inactive rows
    stay smaller and dimmer. Active state still matches the primary group. */
-.nav-group-secondary .nav-item:not(.active):not([aria-current="page"]) {
+.nav-group-secondary .nav-item:not(.active):not([aria-current='page']) {
   font-size: var(--text-xs);
   color: var(--text-muted);
   opacity: 0.85;
 }
 
-.nav-group-secondary .nav-item:not(.active):not([aria-current="page"]):hover {
+.nav-group-secondary .nav-item:not(.active):not([aria-current='page']):hover {
   opacity: 1;
 }
 
@@ -336,7 +337,9 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 16px;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .theme-toggle:hover {
@@ -404,7 +407,9 @@ body {
   cursor: pointer;
   text-align: left;
   width: 100%;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .user-menu-item:hover {
@@ -862,7 +867,9 @@ body {
   font-weight: 500;
   cursor: pointer;
   border: none;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
   line-height: 1.4;
   text-decoration: none;
   white-space: nowrap;
@@ -995,10 +1002,18 @@ body {
   flex-shrink: 0;
 }
 
-.status-dot-ok { background: var(--success); }
-.status-dot-warn { background: var(--warning); }
-.status-dot-err { background: var(--danger); }
-.status-dot-muted { background: var(--text-muted); }
+.status-dot-ok {
+  background: var(--success);
+}
+.status-dot-warn {
+  background: var(--warning);
+}
+.status-dot-err {
+  background: var(--danger);
+}
+.status-dot-muted {
+  background: var(--text-muted);
+}
 
 /* ----------------------------------------------------------------
    Scan controls (AUD-415) — Refresh balances / Discover tokens
@@ -1021,9 +1036,15 @@ body {
   color: var(--text-muted);
 }
 
-.scan-status-msg-ok { color: var(--success); }
-.scan-status-msg-warn { color: var(--warning); }
-.scan-status-msg-error { color: var(--danger); }
+.scan-status-msg-ok {
+  color: var(--success);
+}
+.scan-status-msg-warn {
+  color: var(--warning);
+}
+.scan-status-msg-error {
+  color: var(--danger);
+}
 
 /* ----------------------------------------------------------------
    Tables
@@ -1123,13 +1144,25 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
-.asset-emblem-len-1 { font-size: 13px; }
-.asset-emblem-len-2 { font-size: 11px; }
-.asset-emblem-len-3 { font-size: 9px; }
+.asset-emblem-len-1 {
+  font-size: 13px;
+}
+.asset-emblem-len-2 {
+  font-size: 11px;
+}
+.asset-emblem-len-3 {
+  font-size: 9px;
+}
 
-.asset-emblem-sm.asset-emblem-len-1 { font-size: 11px; }
-.asset-emblem-sm.asset-emblem-len-2 { font-size: 9px; }
-.asset-emblem-sm.asset-emblem-len-3 { font-size: 8px; }
+.asset-emblem-sm.asset-emblem-len-1 {
+  font-size: 11px;
+}
+.asset-emblem-sm.asset-emblem-len-2 {
+  font-size: 9px;
+}
+.asset-emblem-sm.asset-emblem-len-3 {
+  font-size: 8px;
+}
 
 .allocation-asset-cell {
   display: flex;
@@ -1239,7 +1272,9 @@ body {
   font-family: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .allocation-spoiler:hover {
@@ -1615,7 +1650,9 @@ body {
   font-family: var(--font-sans);
   outline: none;
   width: 260px;
-  transition: border-color 0.15s, width 0.2s;
+  transition:
+    border-color 0.15s,
+    width 0.2s;
 }
 
 .search-input:focus {
@@ -1660,7 +1697,9 @@ body {
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .range-tab:hover {
@@ -1979,33 +2018,79 @@ body {
   margin: 20px 0;
 }
 
-.text-accent { color: var(--accent); }
-.text-success { color: var(--success); }
-.text-warning { color: var(--warning); }
-.text-danger { color: var(--danger); }
-.text-muted { color: var(--text-muted); }
-.text-secondary { color: var(--text-secondary); }
+.text-accent {
+  color: var(--accent);
+}
+.text-success {
+  color: var(--success);
+}
+.text-warning {
+  color: var(--warning);
+}
+.text-danger {
+  color: var(--danger);
+}
+.text-muted {
+  color: var(--text-muted);
+}
+.text-secondary {
+  color: var(--text-secondary);
+}
 
-.fw-600 { font-weight: 600; }
-.fw-500 { font-weight: 500; }
+.fw-600 {
+  font-weight: 600;
+}
+.fw-500 {
+  font-weight: 500;
+}
 
-.mt-4 { margin-top: 4px; }
-.mt-8 { margin-top: 8px; }
-.mt-12 { margin-top: 12px; }
-.mt-16 { margin-top: 16px; }
-.mt-20 { margin-top: 20px; }
-.mt-24 { margin-top: 24px; }
+.mt-4 {
+  margin-top: 4px;
+}
+.mt-8 {
+  margin-top: 8px;
+}
+.mt-12 {
+  margin-top: 12px;
+}
+.mt-16 {
+  margin-top: 16px;
+}
+.mt-20 {
+  margin-top: 20px;
+}
+.mt-24 {
+  margin-top: 24px;
+}
 
-.mb-8 { margin-bottom: 8px; }
-.mb-12 { margin-bottom: 12px; }
-.mb-16 { margin-bottom: 16px; }
-.mb-20 { margin-bottom: 20px; }
-.mb-24 { margin-bottom: 24px; }
+.mb-8 {
+  margin-bottom: 8px;
+}
+.mb-12 {
+  margin-bottom: 12px;
+}
+.mb-16 {
+  margin-bottom: 16px;
+}
+.mb-20 {
+  margin-bottom: 20px;
+}
+.mb-24 {
+  margin-bottom: 24px;
+}
 
-.gap-8 { gap: 8px; }
-.gap-12 { gap: 12px; }
-.gap-16 { gap: 16px; }
-.gap-20 { gap: 20px; }
+.gap-8 {
+  gap: 8px;
+}
+.gap-12 {
+  gap: 12px;
+}
+.gap-16 {
+  gap: 16px;
+}
+.gap-20 {
+  gap: 20px;
+}
 
 /* ----------------------------------------------------------------
    Accessibility utilities
@@ -2020,6 +2105,12 @@ body {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Matches HistoryChart's ResponsiveContainer height so the lazy-loaded
+   chart doesn't shift layout when it swaps in. */
+.chart-loading {
+  height: 300px;
 }
 
 /* ----------------------------------------------------------------
@@ -2144,7 +2235,7 @@ body {
   color: var(--text-primary);
 }
 
-.range-switcher-btn[aria-pressed="true"] {
+.range-switcher-btn[aria-pressed='true'] {
   background: var(--bg-card);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);

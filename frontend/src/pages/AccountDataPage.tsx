@@ -5,9 +5,7 @@ import PurgeSection from '../components/accountData/PurgeSection'
 export default function AccountDataPage() {
   return (
     <div style={{ display: 'grid', gap: 20 }}>
-      <p className="page-subheading">
-        Manage your password, export your data, and purge provider records.
-      </p>
+      <p className="page-subheading">Manage your password, export your data, and purge provider records.</p>
       <PasswordSection />
       <ExportSection />
       <PurgeSection />

@@ -92,18 +92,14 @@ describe('HistoryChart', () => {
   })
 
   it('renders chart container with accessible aria-label', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     const chartEl = container.querySelector('[aria-label="Portfolio value history chart"]')
     expect(chartEl).toBeTruthy()
     await unmount(container, root)
   })
 
   it('renders accessible data table via details/summary', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     const details = container.querySelector('details')
     expect(details).toBeTruthy()
     const table = container.querySelector('[aria-label="Portfolio value history"]')
@@ -112,17 +108,13 @@ describe('HistoryChart', () => {
   })
 
   it('shows gap explanation note when gap points exist', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     expect(container.textContent).toMatch(/gap/i)
     await unmount(container, root)
   })
 
   it('does not show gap explanation note when no gaps', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS_NO_GAPS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS_NO_GAPS }))
     // Gap explanation paragraph should be absent (no reference lines or note)
     const gapNote = Array.from(container.querySelectorAll('[role="note"]')).find((el) =>
       el.textContent?.toLowerCase().includes('gap'),
@@ -132,9 +124,7 @@ describe('HistoryChart', () => {
   })
 
   it('contains no PnL terminology', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     const text = container.textContent?.toLowerCase() ?? ''
     expect(text).not.toContain('profit')
     expect(text).not.toContain('loss')
@@ -145,9 +135,7 @@ describe('HistoryChart', () => {
   })
 
   it('accessible table caption mentions point count', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     const summary = container.querySelector('summary')
     expect(summary?.textContent).toMatch(/3 points/i)
     await unmount(container, root)
@@ -288,9 +276,7 @@ describe('HistoryChart', () => {
     const data = buildChartData(allPartial)
     expect(data.every((d) => d.value !== null)).toBe(true)
 
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: allPartial }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: allPartial }))
     // No "breaks in the line" claim when the line is in fact continuous.
     const breakNote = Array.from(container.querySelectorAll('[role="note"]')).find((el) =>
       el.textContent?.toLowerCase().includes('breaks in the line'),
@@ -346,9 +332,7 @@ describe('HistoryChart', () => {
       is_canonical: i % 2 === 0,
       is_gap_marker: i % 2 !== 0,
     }))
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: manyGapPoints }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: manyGapPoints }))
     expect(container.querySelectorAll('.recharts-reference-line').length).toBe(0)
     await unmount(container, root)
   })
@@ -378,27 +362,21 @@ describe('HistoryChart', () => {
         is_gap_marker: false,
       },
     ]
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: withInvalidated }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: withInvalidated }))
     expect(container.querySelector('[data-testid="invalidated-point"]')).toBeTruthy()
     expect(container.textContent?.toLowerCase()).toContain('invalidated')
     await unmount(container, root)
   })
 
   it('does not render a hollow marker or note when all points are canonical', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS_NO_GAPS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS_NO_GAPS }))
     expect(container.querySelector('[data-testid="invalidated-point"]')).toBeNull()
     expect(container.textContent?.toLowerCase()).not.toContain('invalidated')
     await unmount(container, root)
   })
 
   it('renders an area chart (filled series), not a bare line chart', async () => {
-    const { container, root } = mount(
-      React.createElement(HistoryChart, { points: POINTS }),
-    )
+    const { container, root } = mount(React.createElement(HistoryChart, { points: POINTS }))
     expect(container.querySelector('.recharts-area-area')).toBeTruthy()
     await unmount(container, root)
   })
@@ -407,18 +385,18 @@ describe('HistoryChart', () => {
     const { container: hourly, root: hourlyRoot } = mount(
       React.createElement(HistoryChart, { points: POINTS_NO_GAPS, period: '24h' }),
     )
-    const hourlyTicks = Array.from(
-      hourly.querySelectorAll('.recharts-xAxis-tick-labels text'),
-    ).map((el) => el.textContent)
+    const hourlyTicks = Array.from(hourly.querySelectorAll('.recharts-xAxis-tick-labels text')).map(
+      (el) => el.textContent,
+    )
     expect(hourlyTicks.some((t) => /:\d{2}/.test(t ?? ''))).toBe(true)
     await unmount(hourly, hourlyRoot)
 
     const { container: monthly, root: monthlyRoot } = mount(
       React.createElement(HistoryChart, { points: POINTS_NO_GAPS, period: '30d' }),
     )
-    const monthlyTicks = Array.from(
-      monthly.querySelectorAll('.recharts-xAxis-tick-labels text'),
-    ).map((el) => el.textContent)
+    const monthlyTicks = Array.from(monthly.querySelectorAll('.recharts-xAxis-tick-labels text')).map(
+      (el) => el.textContent,
+    )
     expect(monthlyTicks.every((t) => !/:\d{2}/.test(t ?? ''))).toBe(true)
     await unmount(monthly, monthlyRoot)
   })

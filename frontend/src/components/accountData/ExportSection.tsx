@@ -77,9 +77,9 @@ export default function ExportSection() {
     <section aria-label="Export data" className="card">
       <h2 className="section-heading mb-8">Export Data</h2>
       <p className="muted-text mb-16">
-        Download a complete export of your portfolio data. Exports include wallet addresses,
-        asset metadata, balances, quotes, and valuation history. They do not include provider
-        credentials or the owner password.
+        Download a complete export of your portfolio data. Exports include wallet addresses, asset metadata,
+        balances, quotes, and valuation history. They do not include provider credentials or the owner
+        password.
       </p>
 
       <form
@@ -160,12 +160,7 @@ export default function ExportSection() {
             Export {kind} as {format.toUpperCase()}
           </button>
         ) : (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleAbort}
-            aria-label="Cancel export"
-          >
+          <button type="button" className="btn btn-ghost" onClick={handleAbort} aria-label="Cancel export">
             Cancel export
           </button>
         )}

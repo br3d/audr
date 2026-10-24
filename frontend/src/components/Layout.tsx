@@ -221,7 +221,10 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
 
           <nav className="sidebar-nav">
             {NAV_GROUPS.map((group) => (
-              <div key={group.key} className={`nav-group${group.key === 'system' ? ' nav-group-secondary' : ''}`}>
+              <div
+                key={group.key}
+                className={`nav-group${group.key === 'system' ? ' nav-group-secondary' : ''}`}
+              >
                 <span className="nav-section-label">{group.label}</span>
                 {group.items.map(({ page: p, label, Icon }) => (
                   <button
@@ -270,9 +273,7 @@ export default function Layout({ page, setPage, onSignOut, children }: LayoutPro
             </div>
           </header>
 
-          <main className="page-content">
-            {children}
-          </main>
+          <main className="page-content">{children}</main>
         </div>
       </div>
     </ThemeCtx.Provider>

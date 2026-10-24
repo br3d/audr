@@ -48,31 +48,21 @@ describe('ErrorBoundary', () => {
   it('shows fallback UI with reload button when a child throws', () => {
     act(() => {
       root.render(
-        React.createElement(
-          ErrorBoundary,
-          null,
-          React.createElement(ThrowOnRender, { message: 'boom' }),
-        ),
+        React.createElement(ErrorBoundary, null, React.createElement(ThrowOnRender, { message: 'boom' })),
       )
     })
     expect(container.querySelector('[role="alert"]')).toBeTruthy()
     expect(container.textContent).toContain('Something went wrong')
     expect(container.textContent).toContain('boom')
-    const reloadBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('Reload'),
+    const reloadBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Reload'),
     )
     expect(reloadBtn).toBeTruthy()
   })
 
   it('does not show the fallback when children render without error', () => {
     act(() => {
-      root.render(
-        React.createElement(
-          ErrorBoundary,
-          null,
-          React.createElement('span', null, 'OK'),
-        ),
-      )
+      root.render(React.createElement(ErrorBoundary, null, React.createElement('span', null, 'OK')))
     })
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })

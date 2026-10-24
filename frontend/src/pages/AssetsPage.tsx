@@ -14,13 +14,7 @@ const ASSETS_SCHEMA = {
   all: boolField(false),
 }
 
-function AddManualAssetForm({
-  onAdded,
-  onClose,
-}: {
-  onAdded: () => void
-  onClose: () => void
-}) {
+function AddManualAssetForm({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
   const [contractAddress, setContractAddress] = useState('')
   const [decimalsOverride, setDecimalsOverride] = useState('')
   const [symbolOverride, setSymbolOverride] = useState('')
@@ -70,7 +64,9 @@ function AddManualAssetForm({
         <form onSubmit={handleSubmit} noValidate>
           <div className="form-grid">
             <div className="form-group">
-              <label htmlFor="contract-address" className="form-label">Contract address</label>
+              <label htmlFor="contract-address" className="form-label">
+                Contract address
+              </label>
               <input
                 id="contract-address"
                 type="text"
@@ -114,7 +110,11 @@ function AddManualAssetForm({
             </div>
           </div>
 
-          {error !== null && <p role="alert" className="alert alert-danger mt-12">{error}</p>}
+          {error !== null && (
+            <p role="alert" className="alert alert-danger mt-12">
+              {error}
+            </p>
+          )}
 
           <div className="modal-footer">
             <button type="button" className="btn btn-ghost" onClick={onClose} disabled={submitting}>
@@ -130,13 +130,7 @@ function AddManualAssetForm({
   )
 }
 
-function AssetRow({
-  asset,
-  onChanged,
-}: {
-  asset: AssetItem
-  onChanged: () => void
-}) {
+function AssetRow({ asset, onChanged }: { asset: AssetItem; onChanged: () => void }) {
   const [decimalsInput, setDecimalsInput] = useState('')
   const [editingDecimals, setEditingDecimals] = useState(false)
 
@@ -169,7 +163,11 @@ function AssetRow({
   }
 
   const saving = toggleExcludeMutation.isPending || saveDecimalsMutation.isPending
-  const failed = toggleExcludeMutation.error ? toggleExcludeMutation : saveDecimalsMutation.error ? saveDecimalsMutation : null
+  const failed = toggleExcludeMutation.error
+    ? toggleExcludeMutation
+    : saveDecimalsMutation.error
+      ? saveDecimalsMutation
+      : null
   const error = failed
     ? errorMessage(
         failed.error,
@@ -182,10 +180,14 @@ function AssetRow({
       <td>
         <span className="fw-600">{asset.symbol}</span>
         {asset.excluded && (
-          <span className="badge badge-neutral" style={{ marginLeft: 8 }}>excluded</span>
+          <span className="badge badge-neutral" style={{ marginLeft: 8 }}>
+            excluded
+          </span>
         )}
         {asset.has_metadata_conflict && (
-          <span className="badge badge-warning" style={{ marginLeft: 8 }}>conflict</span>
+          <span className="badge badge-warning" style={{ marginLeft: 8 }}>
+            conflict
+          </span>
         )}
       </td>
       <td className="text-secondary">{asset.name ?? '—'}</td>
@@ -205,7 +207,9 @@ function AssetRow({
       </td>
       <td>
         {asset.decimals === null ? (
-          <span className="text-warning" role="note">unknown</span>
+          <span className="text-warning" role="note">
+            unknown
+          </span>
         ) : (
           <span className="text-secondary">{asset.decimals}</span>
         )}
@@ -266,7 +270,11 @@ function AssetRow({
           </form>
         )}
 
-        {error !== null && <p role="alert" className="alert alert-danger mt-8">{error}</p>}
+        {error !== null && (
+          <p role="alert" className="alert alert-danger mt-8">
+            {error}
+          </p>
+        )}
       </td>
     </tr>
   )
@@ -274,8 +282,10 @@ function AssetRow({
 
 export default function AssetsPage() {
   const queryClient = useQueryClient()
-  const [{ q: search, excluded: showExcluded, all: showAllCatalog }, updateQuery] =
-    useHashQueryState('assets', ASSETS_SCHEMA)
+  const [{ q: search, excluded: showExcluded, all: showAllCatalog }, updateQuery] = useHashQueryState(
+    'assets',
+    ASSETS_SCHEMA,
+  )
   const [showAddForm, setShowAddForm] = useState(false)
   const setSearch = (value: string) => updateQuery({ q: value })
   const setShowExcluded = (value: boolean) => updateQuery({ excluded: value })
@@ -287,14 +297,7 @@ export default function AssetsPage() {
   // escape hatch for pre-configuring a token before it has a balance.
   const heldFilter = showAllCatalog ? undefined : true
 
-  const {
-    data,
-    error,
-    isLoading,
-    hasNextPage,
-    fetchNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
+  const { data, error, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: queryKeys.assets({ excluded: showExcluded, showAllCatalog }),
     queryFn: ({ pageParam }) =>
       fetchAssets({
@@ -333,8 +336,7 @@ export default function AssetsPage() {
   if (error) {
     return (
       <p role="alert" className="alert alert-danger">
-        Failed to load assets.{' '}
-        {errorMessage(error, 'Please try again.')}
+        Failed to load assets. {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -359,8 +361,8 @@ export default function AssetsPage() {
     <div>
       {conflictCount > 0 && (
         <p role="note" className="alert alert-warning mb-16">
-          {conflictCount} asset{conflictCount !== 1 ? 's have' : ' has'} a metadata
-          conflict. Resolve to ensure correct quantities and values.
+          {conflictCount} asset{conflictCount !== 1 ? 's have' : ' has'} a metadata conflict. Resolve to
+          ensure correct quantities and values.
         </p>
       )}
 
@@ -462,10 +464,7 @@ export default function AssetsPage() {
       )}
 
       {showAddForm && (
-        <AddManualAssetForm
-          onAdded={onManualAssetAdded}
-          onClose={() => setShowAddForm(false)}
-        />
+        <AddManualAssetForm onAdded={onManualAssetAdded} onClose={() => setShowAddForm(false)} />
       )}
     </div>
   )

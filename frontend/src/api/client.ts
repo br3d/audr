@@ -78,11 +78,7 @@ async function throwOnErrorStatus(response: Response): Promise<void> {
   }
 }
 
-async function request<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
 
   if (body !== undefined) {
@@ -603,10 +599,7 @@ export function fetchStatus(): Promise<StatusResponse> {
 
 // --- Password API ---
 
-export function changePassword(
-  currentPassword: string,
-  newPassword: string,
-): Promise<void> {
+export function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   return put<void>('/auth/password', {
     current_password: currentPassword,
     new_password: newPassword,
@@ -680,9 +673,7 @@ export function revokeApiToken(id: string): Promise<void> {
 // --- Purge API ---
 
 export function fetchPurgePreview(provider: string): Promise<PurgePreviewResponse> {
-  return get<PurgePreviewResponse>(
-    `/data/provider-purge-preview?provider=${encodeURIComponent(provider)}`,
-  )
+  return get<PurgePreviewResponse>(`/data/provider-purge-preview?provider=${encodeURIComponent(provider)}`)
 }
 
 export function submitPurge(input: PurgeInput): Promise<JobRef> {
@@ -734,11 +725,7 @@ export type AssetNewsResponse = components['schemas']['AssetNewsResponse']
 
 // --- Asset news API ---
 
-export function fetchAssetNews(
-  assetId: string,
-  limit: number,
-  offset: number,
-): Promise<AssetNewsResponse> {
+export function fetchAssetNews(assetId: string, limit: number, offset: number): Promise<AssetNewsResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   return get<AssetNewsResponse>(`/assets/${assetId}/news?${params.toString()}`)
 }

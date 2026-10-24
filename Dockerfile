@@ -5,7 +5,7 @@
 # when a build has to be reproduced exactly.
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci
 COPY frontend/ ./
 # The SPA bakes its version in at build time (frontend/build-meta.ts).

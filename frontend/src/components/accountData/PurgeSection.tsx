@@ -43,13 +43,15 @@ export default function PurgeSection() {
     <section aria-label="Provider data purge" className="card">
       <h2 className="section-heading mb-8">Provider Data Purge</h2>
       <p className="muted-text mb-16">
-        Permanently remove all price quote data for a specific provider. This is
-        irreversible. On-chain balance records are unaffected.
+        Permanently remove all price quote data for a specific provider. This is irreversible. On-chain
+        balance records are unaffected.
       </p>
 
       <div className="row mb-12">
         <div className="form-group" style={{ flex: 1 }}>
-          <label htmlFor="purge-provider" className="form-label">Provider</label>
+          <label htmlFor="purge-provider" className="form-label">
+            Provider
+          </label>
           <input
             id="purge-provider"
             type="text"
@@ -76,13 +78,10 @@ export default function PurgeSection() {
         </div>
       </div>
 
-      {showPreview && previewQuery.isLoading && (
-        <p aria-busy="true">Loading purge preview…</p>
-      )}
+      {showPreview && previewQuery.isLoading && <p aria-busy="true">Loading purge preview…</p>}
       {showPreview && previewQuery.error && (
         <p role="alert" className="alert alert-danger mb-12">
-          Failed to load purge preview.{' '}
-          {errorMessage(previewQuery.error, 'Please try again.')}
+          Failed to load purge preview. {errorMessage(previewQuery.error, 'Please try again.')}
         </p>
       )}
 
@@ -108,8 +107,7 @@ export default function PurgeSection() {
             </div>
           </div>
           <p className="alert alert-warning mb-12">
-            This action is permanent and cannot be undone. The quote integration will be
-            disabled.
+            This action is permanent and cannot be undone. The quote integration will be disabled.
           </p>
 
           <form onSubmit={handlePurge} aria-label="Confirm purge" className="form-grid">
@@ -137,9 +135,7 @@ export default function PurgeSection() {
                 onChange={(e) => setConfirmed(e.target.checked)}
                 disabled={purging}
               />
-              <span className="toggle-label">
-                I understand this is permanent and cannot be undone
-              </span>
+              <span className="toggle-label">I understand this is permanent and cannot be undone</span>
             </label>
             {purgeError !== null && (
               <p role="alert" className="alert alert-danger">

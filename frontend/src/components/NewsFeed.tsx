@@ -22,16 +22,15 @@ function formatPublishedAt(iso: string): string {
 }
 
 function AssetNewsCard({ asset }: AssetNewsCardProps) {
-  const { data, error, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } =
-    useInfiniteQuery({
-      queryKey: queryKeys.assetNews(asset.asset_id),
-      queryFn: ({ pageParam }) => fetchAssetNews(asset.asset_id, PAGE_SIZE, pageParam as number),
-      initialPageParam: 0,
-      getNextPageParam: (lastPage, allPages) => {
-        const loaded = allPages.reduce((sum, p) => sum + p.news.length, 0)
-        return loaded < lastPage.total ? loaded : undefined
-      },
-    })
+  const { data, error, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: queryKeys.assetNews(asset.asset_id),
+    queryFn: ({ pageParam }) => fetchAssetNews(asset.asset_id, PAGE_SIZE, pageParam as number),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + p.news.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
+  })
 
   const items = data?.pages.flatMap((p) => p.news) ?? []
   const total = data?.pages[0]?.total ?? null

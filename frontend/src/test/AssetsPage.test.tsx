@@ -76,9 +76,7 @@ function mountPage() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)))
   })
   return { container, root }
 }
@@ -91,9 +89,7 @@ function mountPageWithClient() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssetsPage)))
   })
   return { container, root, qc }
 }
@@ -136,9 +132,7 @@ describe('AssetsPage — search and exclusion filter persistence in the URL (AUD
     window.history.replaceState(null, '', '#/assets?q=usdc&excluded=1')
     ;({ container, root } = mountPage())
 
-    await vi.waitFor(() =>
-      expect(container.querySelector('input[type="search"]')).toBeTruthy(),
-    )
+    await vi.waitFor(() => expect(container.querySelector('input[type="search"]')).toBeTruthy())
     expect(mockFetchAssets).toHaveBeenCalledWith({ excluded: true, held: true, cursor: undefined })
     const searchInput = container.querySelector('input[type="search"]') as HTMLInputElement
     expect(searchInput.value).toBe('usdc')
@@ -194,9 +188,7 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
   it('drops the held filter once "Show all catalog tokens" is checked', async () => {
     mockFetchAssets.mockResolvedValue(makeAssetsResponse())
     ;({ container, root } = mountPage())
-    await vi.waitFor(() =>
-      expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy(),
-    )
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy())
 
     const checkboxes = container.querySelectorAll('input[type="checkbox"]')
     const showAllToggle = checkboxes[1] as HTMLInputElement
@@ -226,9 +218,7 @@ describe('AssetsPage — held filter defaults to held-only (AUD-434)', () => {
     mockFetchAssets.mockResolvedValue(makeAssetsResponse())
     mockAddManualAsset.mockResolvedValue({} as never)
     ;({ container, root } = mountPage())
-    await vi.waitFor(() =>
-      expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy(),
-    )
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Filter assets"]')).toBeTruthy())
 
     const addButton = Array.from(container.querySelectorAll('button')).find((b) =>
       b.textContent?.includes('Add contract'),

@@ -14,10 +14,10 @@ export default function AssistantPrototypePage() {
   return (
     <div data-testid="assistant-prototype-page">
       <div className="alert alert-warning" role="note">
-        <strong>Interface prototype — not a working feature.</strong> This screen exists only
-        to show the shape of the planned assistant. Replies are fixed sample text played back
-        in order: nothing here reads your wallets, balances, or prices, and no answer is about
-        your portfolio. It is intentionally absent from the navigation.
+        <strong>Interface prototype — not a working feature.</strong> This screen exists only to show the
+        shape of the planned assistant. Replies are fixed sample text played back in order: nothing here reads
+        your wallets, balances, or prices, and no answer is about your portfolio. It is intentionally absent
+        from the navigation.
       </div>
       <AssistantPanel />
     </div>

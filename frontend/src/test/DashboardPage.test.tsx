@@ -148,12 +148,16 @@ function mountWithData(portfolio: PortfolioResponse): {
 // resolved promises) settle and their re-render lands before assertions run.
 async function flush() {
   for (let i = 0; i < 10; i++) {
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
   }
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
-  await act(async () => { root.unmount() })
+  await act(async () => {
+    root.unmount()
+  })
   document.body.removeChild(container)
 }
 
@@ -435,7 +439,9 @@ describe('DashboardPage', () => {
       const button = Array.from(container.querySelectorAll('button')).find(
         (b) => b.textContent === '+ Add Wallet',
       )!
-      act(() => { button.click() })
+      act(() => {
+        button.click()
+      })
       expect(setPage).toHaveBeenCalledWith('wallets')
       await unmount(container, root)
     })
@@ -461,7 +467,9 @@ describe('DashboardPage', () => {
       const button = Array.from(container.querySelectorAll('button')).find(
         (b) => b.textContent === 'Manage assets',
       )!
-      act(() => { button.click() })
+      act(() => {
+        button.click()
+      })
       expect(setPage).toHaveBeenCalledWith('assets')
       await unmount(container, root)
     })
@@ -573,7 +581,9 @@ describe('DashboardPage', () => {
       const button = Array.from(container.querySelectorAll('button')).find(
         (b) => b.textContent === 'View all',
       )!
-      act(() => { button.click() })
+      act(() => {
+        button.click()
+      })
       expect(setPage).toHaveBeenCalledWith('events')
       await unmount(container, root)
     })
@@ -654,14 +664,8 @@ describe('DashboardPage', () => {
           ':scope > [aria-label="Portfolio value history"],:scope > [aria-label="Asset allocation"],:scope > [aria-label="Recent events"]',
         ),
       ).map((el) => el.getAttribute('aria-label'))
-      expect(order).toEqual([
-        'Portfolio value history',
-        'Asset allocation',
-        'Recent events',
-      ])
-      expect(
-        container.querySelector('.dashboard-right [aria-label="Allocation summary"]'),
-      ).toBeTruthy()
+      expect(order).toEqual(['Portfolio value history', 'Asset allocation', 'Recent events'])
+      expect(container.querySelector('.dashboard-right [aria-label="Allocation summary"]')).toBeTruthy()
       await unmount(container, root)
     })
 
@@ -679,14 +683,10 @@ describe('DashboardPage', () => {
         allocations: [ETH_ALLOCATION],
       })
       expect(
-        Array.from(container.querySelectorAll('button')).some(
-          (b) => b.textContent === 'Refresh balances',
-        ),
+        Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Refresh balances'),
       ).toBe(true)
       expect(
-        Array.from(container.querySelectorAll('button')).some(
-          (b) => b.textContent === 'Discover tokens',
-        ),
+        Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Discover tokens'),
       ).toBe(true)
       await unmount(container, root)
     })
@@ -698,9 +698,7 @@ describe('DashboardPage', () => {
         priced_subtotal_usd: '4000.00',
         allocations: [ETH_ALLOCATION],
       })
-      const scanButtons = Array.from(
-        container.querySelectorAll('.scan-status button'),
-      )
+      const scanButtons = Array.from(container.querySelectorAll('.scan-status button'))
       expect(scanButtons.length).toBe(2)
       for (const btn of scanButtons) {
         expect(btn.className).toContain('btn')
@@ -747,9 +745,7 @@ describe('DashboardPage', () => {
         allocations: [ETH_ALLOCATION],
       })
       expect(container.querySelector('[aria-label="Asset news"]')).toBeTruthy()
-      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe(
-        '1 assets',
-      )
+      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe('1 assets')
       await unmount(container, root)
     })
 
@@ -770,9 +766,7 @@ describe('DashboardPage', () => {
           }),
         ],
       })
-      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe(
-        '1 assets',
-      )
+      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe('1 assets')
       await unmount(container, root)
     })
 
@@ -851,14 +845,7 @@ describe('DashboardPage', () => {
         priced_subtotal_usd: '4000.00',
       })
       const buttons = await waitForRangeButtons(container)
-      expect(buttons.map((b) => b.textContent)).toEqual([
-        '1D',
-        '1W',
-        '1M',
-        '3M',
-        '1Y',
-        'All',
-      ])
+      expect(buttons.map((b) => b.textContent)).toEqual(['1D', '1W', '1M', '3M', '1Y', 'All'])
       const active = buttons.find((b) => b.getAttribute('aria-pressed') === 'true')
       expect(active?.textContent).toBe('1M')
       expect(mockFetchHistory).toHaveBeenCalledWith('30d')
@@ -947,9 +934,7 @@ describe('DashboardPage', () => {
       })
       expect(trigger?.getAttribute('aria-expanded')).toBe('true')
 
-      const notices = Array.from(container.querySelectorAll('.notice-item')).map(
-        (n) => n.textContent ?? '',
-      )
+      const notices = Array.from(container.querySelectorAll('.notice-item')).map((n) => n.textContent ?? '')
       expect(notices).toHaveLength(4)
       expect(notices.some((t) => t.includes('gaps'))).toBe(true)
       expect(notices.some((t) => t.includes('stale'))).toBe(true)
@@ -976,7 +961,9 @@ describe('DashboardPage', () => {
         )
       })
       expect(container.textContent).toMatch(/loading/i)
-      await act(async () => { root.unmount() })
+      await act(async () => {
+        root.unmount()
+      })
       document.body.removeChild(container)
     })
   })
@@ -1038,13 +1025,23 @@ describe('DashboardPage', () => {
         ],
         allocations: [
           makeAllocation({ asset_id: 'eth', symbol: 'ETH', value_usd: '3000.00', percentage: '100.00' }),
-          makeAllocation({ asset_id: 'omg', symbol: 'OMG', value_usd: '1000.00', percentage: '0', included: false }),
+          makeAllocation({
+            asset_id: 'omg',
+            symbol: 'OMG',
+            value_usd: '1000.00',
+            percentage: '0',
+            included: false,
+          }),
         ],
       })
       await flush()
 
-      const spoiler = container.querySelector('.allocation-excluded-strip .allocation-spoiler') as HTMLButtonElement
-      await act(async () => { spoiler.click() })
+      const spoiler = container.querySelector(
+        '.allocation-excluded-strip .allocation-spoiler',
+      ) as HTMLButtonElement
+      await act(async () => {
+        spoiler.click()
+      })
       await act(async () => {
         ;(container.querySelector('[aria-label="Include OMG"]') as HTMLButtonElement).click()
       })
@@ -1101,8 +1098,7 @@ describe('DashboardPage', () => {
       const { container, root } = mountWithData(TWO_ASSET_PORTFOLIO)
       await flush()
 
-      const rail = () =>
-        container.querySelector('.dashboard-right [aria-label="Allocation summary"]')!
+      const rail = () => container.querySelector('.dashboard-right [aria-label="Allocation summary"]')!
       expect(rail().textContent).toContain('OMG')
       expect(rail().textContent).toContain('25.0%')
 

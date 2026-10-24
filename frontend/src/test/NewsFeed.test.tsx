@@ -39,9 +39,7 @@ function mount(element: React.ReactElement): { container: HTMLDivElement; root: 
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, element),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, element))
   })
   return { container, root, qc }
 }
@@ -136,9 +134,7 @@ describe('NewsFeed', () => {
       }
       return Promise.resolve(makeResponse({ asset_id: assetId, total: 0, news: [] }))
     })
-    const { container, root } = mount(
-      React.createElement(NewsFeed, { items: [ETH_ITEM, USDC_ITEM] }),
-    )
+    const { container, root } = mount(React.createElement(NewsFeed, { items: [ETH_ITEM, USDC_ITEM] }))
     await flush()
     expect(container.textContent).toContain('News provider is unavailable.')
     expect(container.textContent).toMatch(/no news cached yet/i)

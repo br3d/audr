@@ -60,11 +60,7 @@ function mountPage() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc },
-        React.createElement(ApiTokensPage),
-      ),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(ApiTokensPage)))
   })
   return { container, root }
 }
@@ -128,21 +124,31 @@ describe('ApiTokensPage', () => {
     const openBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Create token',
     )!
-    await act(async () => { openBtn.click() })
+    await act(async () => {
+      openBtn.click()
+    })
 
     const nameInput = container.querySelector('#token-name') as HTMLInputElement
-    await act(async () => { nativeSetValue(nameInput, 'claude-desktop') })
+    await act(async () => {
+      nativeSetValue(nameInput, 'claude-desktop')
+    })
 
     const form = container.querySelector('form') as HTMLFormElement
-    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
 
     await vi.waitFor(() => {
-      const tokenInput = container.querySelector('input[aria-label="New API token"]') as HTMLInputElement | null
+      const tokenInput = container.querySelector(
+        'input[aria-label="New API token"]',
+      ) as HTMLInputElement | null
       expect(tokenInput?.value).toBe('audr_pat_secretvalue')
     })
 
     // Simulate a page reload: unmount and remount a fresh page instance.
-    await act(async () => { root.unmount() })
+    await act(async () => {
+      root.unmount()
+    })
     document.body.removeChild(container)
     ;({ container, root } = mountPage())
 
@@ -151,9 +157,7 @@ describe('ApiTokensPage', () => {
   })
 
   it('requires confirmation before revoking and refreshes the list immediately after', async () => {
-    mockFetchApiTokens
-      .mockResolvedValueOnce({ items: [ACTIVE_TOKEN] })
-      .mockResolvedValueOnce({ items: [] })
+    mockFetchApiTokens.mockResolvedValueOnce({ items: [ACTIVE_TOKEN] }).mockResolvedValueOnce({ items: [] })
     mockRevokeApiToken.mockResolvedValue(undefined)
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.textContent).toContain('claude-desktop'))
@@ -161,13 +165,17 @@ describe('ApiTokensPage', () => {
     const revokeBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Revoke',
     )!
-    await act(async () => { revokeBtn.click() })
+    await act(async () => {
+      revokeBtn.click()
+    })
 
     expect(mockRevokeApiToken).not.toHaveBeenCalled()
     const confirmBtn = Array.from(container.querySelectorAll('button')).find(
       (b) => b.textContent === 'Confirm revoke',
     )!
-    await act(async () => { confirmBtn.click() })
+    await act(async () => {
+      confirmBtn.click()
+    })
 
     expect(mockRevokeApiToken).toHaveBeenCalledWith('t1')
     await vi.waitFor(() => expect(container.textContent).not.toContain('claude-desktop'))

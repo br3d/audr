@@ -1,12 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import {
-  fetchIntegrations,
-  updateRpc,
-  updateQuotes,
-  validateIntegration,
-  ApiError,
-} from '../api/client'
+import { fetchIntegrations, updateRpc, updateQuotes, validateIntegration, ApiError } from '../api/client'
 import type { IntegrationEntry, ProviderOption } from '../api/client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
@@ -47,9 +41,7 @@ function SourceSummary({ entry, fallback }: { entry: IntegrationEntry | null; fa
       <span className="text-secondary fw-500">In use: {source}</span>
       {entry?.using_default !== false && <span className="badge badge-neutral">Default</span>}
       {entry?.configured && healthBadge(entry.health.status)}
-      {entry?.health.error_message && (
-        <span className="text-danger">{entry.health.error_message}</span>
-      )}
+      {entry?.health.error_message && <span className="text-danger">{entry.health.error_message}</span>}
     </div>
   )
 }
@@ -114,15 +106,14 @@ function RpcForm({
         Ethereum RPC Endpoint
       </h2>
       <p className="muted-text mb-16">
-        Ethereum is the only supported network. Balances are read through a public endpoint
-        that needs no account or key; pointing audr at your own node or a hosted service
-        (Infura, Alchemy, …) is an optional upgrade with higher rate limits.
+        Ethereum is the only supported network. Balances are read through a public endpoint that needs no
+        account or key; pointing audr at your own node or a hosted service (Infura, Alchemy, …) is an optional
+        upgrade with higher rate limits.
       </p>
 
       <p className="muted-text mb-16">
-        <strong className="text-secondary">Disclosure:</strong> The RPC endpoint sees the
-        wallet and contract addresses queried on your behalf. It does not receive your
-        password, session, or quote credentials.
+        <strong className="text-secondary">Disclosure:</strong> The RPC endpoint sees the wallet and contract
+        addresses queried on your behalf. It does not receive your password, session, or quote credentials.
       </p>
 
       <SourceSummary entry={current} fallback="public endpoint (no key required)" />
@@ -180,8 +171,7 @@ function RpcForm({
             </label>
           </div>
           <p className="muted-text" style={{ marginTop: -8 }}>
-            Only enable if you run your own node on a private network. Redirects are always
-            denied.
+            Only enable if you run your own node on a private network. Redirects are always denied.
           </p>
 
           {error !== null && (
@@ -295,21 +285,20 @@ function QuotesForm({
         Price Quote Provider
       </h2>
       <p className="muted-text mb-16">
-        A quote provider supplies the USD prices your portfolio is valued at. One is always
-        in use — the default needs no account or API key — so you only need to come here to
-        switch providers or add a key for wider token coverage.
+        A quote provider supplies the USD prices your portfolio is valued at. One is always in use — the
+        default needs no account or API key — so you only need to come here to switch providers or add a key
+        for wider token coverage.
       </p>
 
       <p className="muted-text mb-16">
         audr supports exactly {options.length === 1 ? 'one price provider' : 'these price providers'}:{' '}
-        {options.map((o) => o.label).join(', ')}. The list is fixed — supporting another
-        provider takes a code change, not a setting here.
+        {options.map((o) => o.label).join(', ')}. The list is fixed — supporting another provider takes a code
+        change, not a setting here.
       </p>
 
       <p className="muted-text mb-16">
-        <strong className="text-secondary">Disclosure:</strong> The quote provider receives
-        token contract addresses and symbols. It does not receive your wallet addresses,
-        password, or session credentials.
+        <strong className="text-secondary">Disclosure:</strong> The quote provider receives token contract
+        addresses and symbols. It does not receive your wallet addresses, password, or session credentials.
       </p>
 
       <SourceSummary entry={current} fallback="public price endpoint (no key required)" />
@@ -383,8 +372,7 @@ function QuotesForm({
                 autoComplete="new-password"
               />
               <p className="form-hint">
-                Stored encrypted and never shown again. To stop using it, switch back to the
-                keyless default.
+                Stored encrypted and never shown again. To stop using it, switch back to the keyless default.
               </p>
             </div>
           )}
@@ -452,8 +440,7 @@ export default function ConnectionsPage() {
   if (error) {
     return (
       <p role="alert" className="alert alert-danger">
-        Failed to load connection settings.{' '}
-        {errorMessage(error, 'Please try again.')}
+        Failed to load connection settings. {errorMessage(error, 'Please try again.')}
       </p>
     )
   }
@@ -461,9 +448,9 @@ export default function ConnectionsPage() {
   return (
     <div style={{ display: 'grid', gap: 20 }}>
       <p className="page-subheading">
-        audr works with no configuration here: it reads Ethereum through a public endpoint
-        and prices your holdings through a keyless provider. Change either one below. No
-        wallet connection, private key, or seed phrase is ever requested.
+        audr works with no configuration here: it reads Ethereum through a public endpoint and prices your
+        holdings through a keyless provider. Change either one below. No wallet connection, private key, or
+        seed phrase is ever requested.
       </p>
       <RpcForm current={rpc} onSaved={handleRpcSaved} onValidated={handleRpcSaved} />
       <QuotesForm current={quotes} onSaved={handleQuotesSaved} onValidated={handleQuotesSaved} />

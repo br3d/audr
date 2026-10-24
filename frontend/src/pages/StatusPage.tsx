@@ -153,9 +153,7 @@ function SystemStatus({ status }: { status: StatusResponse }) {
 
         <div className="status-item">
           <div className="status-item-label">Last Heartbeat</div>
-          <div className="status-item-value">
-            {formatTimestamp(status.worker?.last_heartbeat_at ?? null)}
-          </div>
+          <div className="status-item-value">{formatTimestamp(status.worker?.last_heartbeat_at ?? null)}</div>
         </div>
 
         {status.recovery && (
@@ -247,8 +245,7 @@ export default function StatusPage() {
       {statusQuery.isLoading && <p aria-busy="true">Loading system status…</p>}
       {statusQuery.error && (
         <p role="alert" className="alert alert-danger mb-16">
-          Failed to load system status.{' '}
-          {errorMessage(statusQuery.error, 'Please try again.')}
+          Failed to load system status. {errorMessage(statusQuery.error, 'Please try again.')}
         </p>
       )}
       {statusQuery.data && <SystemStatus status={statusQuery.data} />}
@@ -299,8 +296,7 @@ export default function StatusPage() {
         {jobsQuery.isLoading && <p aria-busy="true">Loading job history…</p>}
         {jobsQuery.error && (
           <p role="alert" className="alert alert-danger">
-            Failed to load jobs.{' '}
-            {errorMessage(jobsQuery.error, 'Please try again.')}
+            Failed to load jobs. {errorMessage(jobsQuery.error, 'Please try again.')}
           </p>
         )}
         {(() => {

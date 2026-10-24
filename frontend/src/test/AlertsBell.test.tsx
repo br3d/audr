@@ -66,13 +66,17 @@ function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
-  await act(async () => { root.unmount() })
+  await act(async () => {
+    root.unmount()
+  })
   document.body.removeChild(container)
 }
 
 async function flush() {
   for (let i = 0; i < 5; i += 1) {
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
   }
 }
 
@@ -91,9 +95,7 @@ describe('AlertsBell', () => {
     })
 
     it('renders no badge when unread_count is 0', async () => {
-      mockFetchAlerts.mockResolvedValue(
-        makeResponse([makeAlert({ read_at: '2026-01-01T01:00:00Z' })]),
-      )
+      mockFetchAlerts.mockResolvedValue(makeResponse([makeAlert({ read_at: '2026-01-01T01:00:00Z' })]))
       const { container, root } = render(<AlertsBell />)
       await flush()
       expect(container.querySelector('.alerts-bell-badge')).toBeNull()
@@ -127,9 +129,9 @@ describe('AlertsBell', () => {
       await act(async () => {
         ;(container.querySelector('.alerts-bell-button') as HTMLButtonElement).click()
       })
-      const summaries = Array.from(
-        container.querySelectorAll('.alerts-bell-item-summary'),
-      ).map((el) => el.textContent)
+      const summaries = Array.from(container.querySelectorAll('.alerts-bell-item-summary')).map(
+        (el) => el.textContent,
+      )
       expect(summaries).toEqual(['ETHDrift exploit drains $61M', 'UNIUniswap hook drains LPs'])
       await unmount(container, root)
     })

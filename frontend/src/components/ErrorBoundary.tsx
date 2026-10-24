@@ -45,19 +45,11 @@ export default class ErrorBoundary extends Component<Props, State> {
             gap: '1rem',
           }}
         >
-          <p style={{ fontSize: '1.1rem', fontWeight: 600 }}>
-            Something went wrong.
-          </p>
+          <p style={{ fontSize: '1.1rem', fontWeight: 600 }}>Something went wrong.</p>
           {this.state.message && (
-            <p style={{ fontSize: '0.875rem', color: 'var(--color-muted, #888)' }}>
-              {this.state.message}
-            </p>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-muted, #888)' }}>{this.state.message}</p>
           )}
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={this.handleReload}
-          >
+          <button type="button" className="btn btn-primary" onClick={this.handleReload}>
             Reload page
           </button>
         </div>

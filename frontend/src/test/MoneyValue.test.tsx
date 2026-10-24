@@ -11,12 +11,16 @@ function render(ui: React.ReactElement): { container: HTMLDivElement; root: Root
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  act(() => { root.render(ui) })
+  act(() => {
+    root.render(ui)
+  })
   return { container, root }
 }
 
 async function unmount(container: HTMLDivElement, root: Root) {
-  await act(async () => { root.unmount() })
+  await act(async () => {
+    root.unmount()
+  })
   document.body.removeChild(container)
 }
 
@@ -32,9 +36,7 @@ describe('MoneyValue', () => {
     })
 
     it('renders custom unknownLabel for null value', async () => {
-      const { container, root } = render(
-        <MoneyValue value={null} unknownLabel="unavailable" />,
-      )
+      const { container, root } = render(<MoneyValue value={null} unknownLabel="unavailable" />)
       expect(container.textContent).toBe('unavailable')
       await unmount(container, root)
     })
@@ -85,9 +87,7 @@ describe('MoneyValue', () => {
 
     it('handles a very large value without floating-point distortion', async () => {
       // 9_007_199_254_740_992 is beyond JS Number precision but Decimal.js handles it
-      const { container, root } = render(
-        <MoneyValue value="9007199254740992.50" />,
-      )
+      const { container, root } = render(<MoneyValue value="9007199254740992.50" />)
       expect(container.textContent).toBe('$9,007,199,254,740,992.50')
       await unmount(container, root)
     })

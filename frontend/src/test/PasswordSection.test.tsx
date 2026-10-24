@@ -75,7 +75,9 @@ describe('PasswordSection', () => {
       setValue(next, 'short')
       setValue(confirm, 'short')
     })
-    await act(async () => { submitForm(container) })
+    await act(async () => {
+      submitForm(container)
+    })
 
     expect(container.textContent).toContain('New password must be at least 12 characters.')
     expect(mockChangePassword).not.toHaveBeenCalled()
@@ -93,7 +95,9 @@ describe('PasswordSection', () => {
       setValue(next, 'new-password-1234')
       setValue(confirm, 'new-password-9999')
     })
-    await act(async () => { submitForm(container) })
+    await act(async () => {
+      submitForm(container)
+    })
 
     expect(container.textContent).toContain('New password and confirmation do not match.')
     expect(mockChangePassword).not.toHaveBeenCalled()
@@ -112,7 +116,9 @@ describe('PasswordSection', () => {
       setValue(next, 'new-password-1234')
       setValue(confirm, 'new-password-1234')
     })
-    await act(async () => { submitForm(container) })
+    await act(async () => {
+      submitForm(container)
+    })
 
     expect(mockChangePassword).toHaveBeenCalledWith('old-password-123', 'new-password-1234')
     expect(container.textContent).toContain('All other sessions have been signed out.')
@@ -135,7 +141,9 @@ describe('PasswordSection', () => {
       setValue(next, 'new-password-1234')
       setValue(confirm, 'new-password-1234')
     })
-    await act(async () => { submitForm(container) })
+    await act(async () => {
+      submitForm(container)
+    })
 
     expect(container.textContent).toContain('Current password is incorrect.')
   })
@@ -153,7 +161,9 @@ describe('PasswordSection', () => {
       setValue(next, 'new-password-1234')
       setValue(confirm, 'new-password-1234')
     })
-    await act(async () => { submitForm(container) })
+    await act(async () => {
+      submitForm(container)
+    })
 
     expect(container.textContent).toContain('Failed to change password.')
   })

@@ -19,13 +19,7 @@ function isExpired(token: ApiTokenItem): boolean {
   return token.expires_at !== null && new Date(token.expires_at).getTime() <= Date.now()
 }
 
-function TokenRow({
-  token,
-  onRevoke,
-}: {
-  token: ApiTokenItem
-  onRevoke: (id: string) => void
-}) {
+function TokenRow({ token, onRevoke }: { token: ApiTokenItem; onRevoke: (id: string) => void }) {
   const [confirming, setConfirming] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const expired = isExpired(token)
@@ -45,9 +39,7 @@ function TokenRow({
       <td>{token.name}</td>
       <td className="text-secondary">{formatDate(token.created_at)}</td>
       <td className="text-secondary">{formatDate(token.expires_at)}</td>
-      <td className="text-secondary">
-        {token.last_used_at ? formatDate(token.last_used_at) : 'Never used'}
-      </td>
+      <td className="text-secondary">{token.last_used_at ? formatDate(token.last_used_at) : 'Never used'}</td>
       <td>
         {expired ? (
           <span className="badge badge-warning">Expired</span>
@@ -76,11 +68,7 @@ function TokenRow({
             </button>
           </span>
         ) : (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setConfirming(true)}
-          >
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirming(true)}>
             Revoke
           </button>
         )}
@@ -151,8 +139,8 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
           This token will not be shown again. Store it securely before closing this panel.
         </p>
         <p className="muted-text mb-8" style={{ fontStyle: 'italic', fontSize: '0.85em' }}>
-          Warning: pasting this token into a hosted assistant (ChatGPT, Claude.ai, etc.) shares
-          your portfolio data with that vendor. For private use, prefer the local stdio MCP path.
+          Warning: pasting this token into a hosted assistant (ChatGPT, Claude.ai, etc.) shares your portfolio
+          data with that vendor. For private use, prefer the local stdio MCP path.
         </p>
         <div className="row gap-8 mb-16">
           <input
@@ -222,11 +210,7 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
 
         <div className="form-group">
           <label className="row gap-8" style={{ cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={redact}
-              onChange={(e) => setRedact(e.target.checked)}
-            />
+            <input type="checkbox" checked={redact} onChange={(e) => setRedact(e.target.checked)} />
             <span>
               Redact wallet addresses{' '}
               <span className="muted-text">(replace with label + truncated hash)</span>
@@ -240,12 +224,7 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
           <button type="submit" className="btn btn-primary" disabled={saving}>
             {saving ? 'Creating…' : 'Create'}
           </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={reset}
-            disabled={saving}
-          >
+          <button type="button" className="btn btn-ghost" onClick={reset} disabled={saving}>
             Cancel
           </button>
         </div>
@@ -282,21 +261,18 @@ export default function ApiTokensPage() {
       <section aria-label="API tokens" className="card">
         <h2 className="section-heading mb-8">API Tokens</h2>
         <p className="muted-text mb-16">
-          Read-only Bearer tokens for scripts and local LLM clients. Tokens can only read
-          portfolio, holdings, history, events, assets, news, and alerts — never your
-          integrations, settings, or exports.
+          Read-only Bearer tokens for scripts and local LLM clients. Tokens can only read portfolio, holdings,
+          history, events, assets, news, and alerts — never your integrations, settings, or exports.
         </p>
 
         {tokensQuery.isPending && <p className="muted-text">Loading…</p>}
-        {tokensQuery.isError && (
-          <p className="text-danger">Failed to load tokens.</p>
-        )}
+        {tokensQuery.isError && <p className="text-danger">Failed to load tokens.</p>}
 
         {!tokensQuery.isPending && tokens.length === 0 && (
           <p className="muted-text mb-16">
-            No active tokens. Create one to connect a local LLM client — Claude Desktop,
-            ChatGPT, or your own script — to this portfolio over its read-only API. A token
-            grants read access to your entire portfolio, so treat it like a password.
+            No active tokens. Create one to connect a local LLM client — Claude Desktop, ChatGPT, or your own
+            script — to this portfolio over its read-only API. A token grants read access to your entire
+            portfolio, so treat it like a password.
           </p>
         )}
 

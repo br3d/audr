@@ -93,10 +93,7 @@ export default function AlertsBell() {
           {alerts.length > 0 && (
             <ul role="list" className="alerts-bell-list">
               {alerts.map((a) => (
-                <li
-                  key={a.id}
-                  className={`alerts-bell-item${a.read_at ? '' : ' alerts-bell-item-unread'}`}
-                >
+                <li key={a.id} className={`alerts-bell-item${a.read_at ? '' : ' alerts-bell-item-unread'}`}>
                   <button
                     type="button"
                     className="alerts-bell-item-button"
@@ -110,9 +107,7 @@ export default function AlertsBell() {
                       {a.category.replace('_', ' ')}
                     </span>
                     <span className="alerts-bell-item-summary">
-                      {a.asset_symbol && (
-                        <span className="alerts-bell-item-symbol">{a.asset_symbol}</span>
-                      )}
+                      {a.asset_symbol && <span className="alerts-bell-item-symbol">{a.asset_symbol}</span>}
                       {a.article_title ?? a.summary}
                     </span>
                     <span className="alerts-bell-item-meta text-secondary">
