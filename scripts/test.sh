@@ -26,22 +26,49 @@ EXIT=0
 ENV_LOG="${ROOT}/.test-env.log"
 : >"${ENV_LOG}"
 
+# Machine-readable ledger of which phase ran, how it ended and how long it took
+# (AUD-715). One tab-separated row per phase, appended as each phase ends:
+#
+#   <slug> <rc> <start epoch> <end epoch> <human label>
+#
+# ENV_LOG above says the same thing in prose, but nothing that can read it is
+# available to an agent inheriting a red CI run: the artifact download endpoint
+# needs authentication and the job log needs repository admin (AUD-714). This
+# file is the machine-readable half, and scripts/ci-phase-ledger.sh replays it
+# into one *workflow step* per phase — step names and conclusions being the one
+# channel a reader with no credentials can hear. See that script's header.
+#
+# Written here, next to ENV_LOG and before anything can fail, for the same
+# reason: a run that dies early must still leave a ledger saying so.
+PHASE_LEDGER="${ROOT}/.test-phases.tsv"
+: >"${PHASE_LEDGER}"
+
+# Keep the slugs passed here in step with ci-phase-ledger.sh's PHASES list — a
+# slug only this file knows is a phase no CI reader can see. That script warns
+# when the two drift.
+record_phase() {
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >>"${PHASE_LEDGER}"
+}
+
 # Exit status of the last run_phase, for callers that need it after the `if !`
 # that swallows `$?`.
 PHASE_RC=0
 
 # Run a pre-suite phase: announce it, stream its output to both the job log and
-# ENV_LOG, and report its status without letting `set -e` kill the script first
-# — the point is to fail *loudly*, not to stop failing.
+# ENV_LOG, record it in the ledger, and report its status without letting
+# `set -e` kill the script first — the point is to fail *loudly*, not to stop
+# failing.
 run_phase() {
-  local label="$1"
-  shift
+  local slug="$1" label="$2" start
+  shift 2
   echo "==> ${label}"
   { echo; echo "### ${label}"; echo "### \$ $*"; } >>"${ENV_LOG}"
+  start="$(date +%s)"
   set +e
   "$@" 2>&1 | tee -a "${ENV_LOG}"
   PHASE_RC="${PIPESTATUS[0]}"
   set -e
+  record_phase "${slug}" "${PHASE_RC}" "${start}" "$(date +%s)" "${label}"
   return "${PHASE_RC}"
 }
 
@@ -280,7 +307,7 @@ snapshot_env
 # logging this ticket exists to add on exactly the failure mode it was opened
 # for. 180s is an order of magnitude past a healthy start (postgres goes healthy
 # in ~5s here, and the healthcheck's own budget is 15 retries x 3s).
-if ! run_phase "Starting test environment (db-test, waiting for healthcheck)" \
+if ! run_phase db_up "Starting test environment (db-test, waiting for healthcheck)" \
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${AUDR_TEST_WAIT_TIMEOUT:-180}" db-test; then
   dump_compose_state "\`up -d --wait db-test\` exited ${PHASE_RC} (image pull, or healthcheck never went healthy)"
   exit "${PHASE_RC}"
@@ -289,7 +316,7 @@ fi
 if [[ "${RUN_BACKEND}" -eq 1 ]]; then
   # Rebuild both images: a stale migrate-test leaves the DB at an old migration
   # and backend tests then fail with "column does not exist".
-  if ! run_phase "Building backend test images (migrate-test, backend-tests)" \
+  if ! run_phase backend_build "Building backend test images (migrate-test, backend-tests)" \
       "${COMPOSE[@]}" build migrate-test backend-tests; then
     # The builder's own output is the diagnosis here and run_phase has already
     # streamed it to both sinks; `ps`/`logs` would add nothing about a build.
@@ -299,17 +326,21 @@ if [[ "${RUN_BACKEND}" -eq 1 ]]; then
   fi
 
   echo "==> Running backend tests (pytest)"
+  BACKEND_START="$(date +%s)"
   set +e
   "${COMPOSE[@]}" --profile backend run --rm --no-TTY backend-tests \
     2>&1 | tee "${ROOT}/.test-backend.log"
   BACKEND_EXIT="${PIPESTATUS[0]}"
   set -e
+  record_phase backend_suite "${BACKEND_EXIT}" "${BACKEND_START}" "$(date +%s)" \
+    "Backend suite (pytest)"
   echo "==> Backend suite exit=${BACKEND_EXIT}"
   if [[ "${BACKEND_EXIT}" -ne 0 ]]; then EXIT="${BACKEND_EXIT}"; fi
 fi
 
 if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
   echo "==> Installing frontend dependencies"
+  FRONTEND_INSTALL_START="$(date +%s)"
   set +e
   # Full install output to .test-env.log, last 20 lines to the console: an
   # `npm ci` that fails on a registry hiccup is a pre-suite death too, and the
@@ -318,16 +349,21 @@ if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
     -c 'npm ci --no-audit --no-fund' 2>&1 | tee -a "${ENV_LOG}" | tail -20
   FRONTEND_INSTALL_EXIT="${PIPESTATUS[0]}"
   set -e
+  record_phase frontend_install "${FRONTEND_INSTALL_EXIT}" "${FRONTEND_INSTALL_START}" \
+    "$(date +%s)" "Frontend dependency install (npm ci)"
   if [[ "${FRONTEND_INSTALL_EXIT}" -ne 0 ]]; then
     echo "==> Frontend dependency install FAILED (exit ${FRONTEND_INSTALL_EXIT})"
     EXIT="${FRONTEND_INSTALL_EXIT}"
   else
     echo "==> Running frontend tests (Vitest)"
+    FRONTEND_START="$(date +%s)"
     set +e
     "${COMPOSE[@]}" --profile frontend run --rm --no-TTY frontend-tests \
       2>&1 | tee "${ROOT}/.test-frontend.log"
     FRONTEND_EXIT="${PIPESTATUS[0]}"
     set -e
+    record_phase frontend_suite "${FRONTEND_EXIT}" "${FRONTEND_START}" "$(date +%s)" \
+      "Frontend suite (Vitest)"
     echo "==> Frontend suite exit=${FRONTEND_EXIT}"
     if [[ "${FRONTEND_EXIT}" -ne 0 ]]; then EXIT="${FRONTEND_EXIT}"; fi
 
@@ -335,10 +371,13 @@ if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
     # not in the frontend-tests container: it only needs Node to diff against
     # the already-checked-out schema file, and does not touch Docker.
     echo "==> Checking generated API types against backend/openapi.json"
+    API_TYPES_START="$(date +%s)"
     set +e
     (cd "${ROOT}/frontend" && npm run check:api-types)
     API_TYPES_EXIT="$?"
     set -e
+    record_phase api_types "${API_TYPES_EXIT}" "${API_TYPES_START}" "$(date +%s)" \
+      "Generated API types vs backend/openapi.json"
     echo "==> API types check exit=${API_TYPES_EXIT}"
     if [[ "${API_TYPES_EXIT}" -ne 0 ]]; then EXIT="${API_TYPES_EXIT}"; fi
   fi
