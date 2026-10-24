@@ -248,6 +248,21 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
         polled += hn_polled
 
         covered = await covered_asset_symbols(session)
+        # AUD-729: `gdelt_assets` is capped by `run_capped_tier` exactly like
+        # `hn_due_now` above, and this list has no per-item throttling
+        # column analogous to `news_feed.last_polled_at` — the hackernews
+        # fix (ordering `list_due_feeds` oldest-polled-first) cannot be
+        # applied here, and `_get_held_assets`'s unordered `SELECT DISTINCT`
+        # gives no fairness guarantee of its own. This is currently safe only
+        # because `news_tracked_asset` is a deliberately small, static
+        # allow-list (migration 0026: WETH/UNI/AAVE/LINK, all already
+        # covered by dedicated feeds per 0026/0031/0035's own docstrings) —
+        # `tracked_symbols - covered` is empty by design, so the cap never
+        # bites. If `news_tracked_asset` ever grows past
+        # `_GDELT_MAX_QUERIES_PER_RUN` uncovered symbols, this tier can form
+        # the same starvation fixed point hackernews did, and fixing it for
+        # real needs a persisted per-asset "last GDELT query" timestamp — a
+        # schema change, not an ordering tweak.
         gdelt_assets = [
             a
             for a in assets
