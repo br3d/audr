@@ -189,21 +189,88 @@ class HeuristicResult:
     reason: str
 
 
-def classify_heuristic(title: str) -> HeuristicResult:
+# Attribution gate (AUD-735): a headline can name an asset as the mere
+# *instrument* an event passed through (funds moved "in Ethereum", a rival
+# token named as delisting's beneficiary) rather than as the thing the event
+# happened to. The cheap heuristic cannot parse grammar, so it falls back to
+# a proximity signal: a word that is genuinely the event's subject is named
+# within a few words of the matched keyword ("Mirror Protocol Exploited",
+# "NEM token's PancakeSwap pool" + "stolen"); an incidental mention sits
+# further away, past a second verb or relational clause ("Sends $61 Million
+# in Ethereum to Tornado Cash", "Propel Rival cbBTC"). Measured on the four
+# fixtures this gate exists to fix: true subjects sit at a 1- and 3-word
+# gap, instrument-only mentions at a 4-word gap — this threshold sits
+# between them.
+_PROXIMITY_WINDOW = 3
+
+_TOKEN_RE = re.compile(r"\S+")
+
+
+def _token_index_at(spans: list[tuple[int, int]], char_pos: int) -> int:
+    for index, (start, end) in enumerate(spans):
+        if start <= char_pos < end:
+            return index
+    return len(spans) - 1
+
+
+def _is_near_event(title: str, keyword_match: re.Match[str], asset_terms: tuple[str, ...]) -> bool:
+    """True if any asset term sits within `_PROXIMITY_WINDOW` words of the keyword.
+
+    Fails open (returns True) when none of `asset_terms` can be located in
+    the title — this gate only narrows an existing match, so it must never
+    be the reason a real match goes unmatched because of a lookup gap
+    upstream.
+    """
+    spans = [m.span() for m in _TOKEN_RE.finditer(title)]
+    keyword_index = _token_index_at(spans, keyword_match.start())
+    found = False
+    for term in asset_terms:
+        if not term:
+            continue
+        asset_match = re.search(rf"\b{re.escape(term)}\b", title, re.IGNORECASE)
+        if asset_match is None:
+            continue
+        found = True
+        asset_index = _token_index_at(spans, asset_match.start())
+        gap = abs(asset_index - keyword_index) - 1
+        if gap <= _PROXIMITY_WINDOW:
+            return True
+    return not found
+
+
+def classify_heuristic(
+    title: str, *, asset_symbol: str | None = None, asset_name: str | None = None
+) -> HeuristicResult:
     """Classify a headline with the keyword lexicon above.
 
     Returns ``severity=None`` for a headline matching no threat keyword —
     the false-positive-averse default (AUD-583 acceptance criteria): a
     neutral headline must never create an alert.
+
+    When `asset_symbol`/`asset_name` are given, a keyword match is also
+    gated on `_is_near_event` (AUD-735): the asset must be the event's
+    grammatical subject, not merely named elsewhere in the headline as the
+    instrument it passed through or a beneficiary it names.
     """
     for category, severity, keywords in _LEXICON:
         for keyword in keywords:
-            if re.search(rf"\b{re.escape(keyword)}\b", title, re.IGNORECASE):
+            match = re.search(rf"\b{re.escape(keyword)}\b", title, re.IGNORECASE)
+            if match is None:
+                continue
+            if not _is_near_event(title, match, (asset_symbol or "", asset_name or "")):
                 return HeuristicResult(
                     category=category,
-                    severity=severity,
-                    reason=f"heuristic match: '{keyword}'",
+                    severity=None,
+                    reason=(
+                        f"heuristic: '{keyword}' matched but asset is not its "
+                        "subject (word gap exceeds proximity window)"
+                    ),
                 )
+            return HeuristicResult(
+                category=category,
+                severity=severity,
+                reason=f"heuristic match: '{keyword}'",
+            )
     return HeuristicResult(
         category=_OTHER_CATEGORY,
         severity=None,
@@ -217,6 +284,8 @@ class _PendingArticle:
     asset_id: uuid.UUID
     title: str
     published_at: datetime
+    asset_symbol: str = ""
+    asset_name: str = ""
 
 
 async def _fetch_unanalyzed(session: AsyncSession) -> list[_PendingArticle]:
@@ -231,17 +300,25 @@ async def _fetch_unanalyzed(session: AsyncSession) -> list[_PendingArticle]:
     rows = await session.execute(
         sa.text(
             """
-            SELECT id, asset_id, title, published_at
-            FROM asset_news
-            WHERE analyzed_at IS NULL
-            ORDER BY published_at DESC
+            SELECT an.id, an.asset_id, an.title, an.published_at, a.symbol, a.name
+            FROM asset_news an
+            JOIN asset a ON a.id = an.asset_id
+            WHERE an.analyzed_at IS NULL
+            ORDER BY an.published_at DESC
             LIMIT :limit
             """
         ),
         {"limit": _BATCH_LIMIT},
     )
     return [
-        _PendingArticle(id=row[0], asset_id=row[1], title=row[2], published_at=row[3])
+        _PendingArticle(
+            id=row[0],
+            asset_id=row[1],
+            title=row[2],
+            published_at=row[3],
+            asset_symbol=row[4],
+            asset_name=row[5],
+        )
         for row in rows.fetchall()
     ]
 
@@ -360,7 +437,9 @@ async def handle_news_analyze(session: AsyncSession, run_id: uuid.UUID) -> None:
     story_keys = await _recent_story_keys(session)
 
     for article in articles:
-        result = classify_heuristic(article.title)
+        result = classify_heuristic(
+            article.title, asset_symbol=article.asset_symbol, asset_name=article.asset_name
+        )
         if result.severity is not None:
             if _is_stale(article.published_at, now=now):
                 stale += 1

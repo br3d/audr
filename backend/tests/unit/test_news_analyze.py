@@ -67,6 +67,72 @@ class TestClassifyHeuristic:
         assert "exploited" in result.reason
 
 
+class TestAttributionGate:
+    """AUD-735: a symbol/name match alone is not enough — the asset must be
+    the event's subject, not merely an instrument or beneficiary it names.
+    Fixtures are the four real `asset_news` titles from the issue."""
+
+    def test_eth_named_only_as_the_stolen_funds_currency_is_not_alerted(self) -> None:
+        """Drift was exploited; Ethereum is only the unit the stolen funds
+        moved in. ETH must not alert on this headline."""
+        result = classify_heuristic(
+            "Wallet Linked to Drift Exploit Sends $61 Million in Ethereum to Tornado Cash",
+            asset_symbol="ETH",
+            asset_name="Ethereum",
+        )
+        assert result.severity is None
+
+    def test_cbbtc_named_only_as_delisting_beneficiary_is_not_alerted(self) -> None:
+        """wBTC is being delisted; cbBTC is named only as the rival it
+        benefits. cbBTC must not alert on this headline."""
+        result = classify_heuristic(
+            "BiT Global Accuses Coinbase of Delisting wBTC to Propel Rival cbBTC",
+            asset_symbol="cbBTC",
+            asset_name="Coinbase Wrapped BTC",
+        )
+        assert result.severity is None
+
+    def test_mir_is_the_subject_and_still_alerts(self) -> None:
+        """MIR *is* Mirror Protocol — the true positive this gate must not
+        break."""
+        result = classify_heuristic(
+            "Mirror Protocol Exploited, Avoids Worst Case",
+            asset_symbol="MIR",
+            asset_name="Mirror Protocol",
+        )
+        assert result.category == "hack_exploit"
+        assert result.severity == "critical"
+
+    def test_cake_is_the_subject_and_still_alerts(self) -> None:
+        """CAKE *is* PancakeSwap — the true positive this gate must not
+        break, even though the asset name sits a few words past the matched
+        keyword."""
+        result = classify_heuristic(
+            "$820K stolen from NEM token's PancakeSwap pool due to contract flaw on BNB Chain",
+            asset_symbol="CAKE",
+            asset_name="PancakeSwap",
+        )
+        assert result.category == "hack_exploit"
+        assert result.severity == "critical"
+
+    def test_no_asset_info_skips_the_gate(self) -> None:
+        """Existing callers that do not pass asset identity keep the old,
+        ungated behaviour."""
+        result = classify_heuristic("Protocol hacked for $10M in flash loan exploit")
+        assert result.severity == "critical"
+
+    def test_asset_term_absent_from_title_fails_open(self) -> None:
+        """If the asset's symbol/name cannot be located in the title at all
+        (a lookup gap, not a grammar question), the gate must not be the
+        reason a match is suppressed."""
+        result = classify_heuristic(
+            "Protocol hacked for $10M in flash loan exploit",
+            asset_symbol="ZZZ",
+            asset_name="Unrelated Token",
+        )
+        assert result.severity == "critical"
+
+
 class TestStoryKey:
     """Story-level dedup (AUD-683): one wire story reaches us spelled several
     ways — per-asset copies and per-publisher suffixes — and must collapse to
@@ -134,7 +200,7 @@ class TestFetchUnanalyzedOrdering:
         await mod._fetch_unanalyzed(session)
 
         query = session.execute.call_args.args[0]
-        assert "ORDER BY published_at DESC" in str(query)
+        assert "ORDER BY an.published_at DESC" in str(query)
 
 
 class TestHandleNewsAnalyzeRecencyGate:
