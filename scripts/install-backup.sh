@@ -109,6 +109,9 @@ if [ "$mode" = check ]; then
 fi
 
 # Absolute install path, resolved on the host so ~ belongs to the remote user.
+# shellcheck disable=SC2016  # $HOME must reach the REMOTE shell unexpanded —
+# that is the entire point of the line. Double quotes would resolve it here, on
+# the agent host, and install under the wrong user's home.
 remote_home="$("${SSH[@]}" 'echo "$HOME"')"
 abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
 

@@ -30,7 +30,7 @@ dependency pins in a release, with licence attribution.
 | [news-sources.md](news-sources.md) | How news can be collected with no paid API: public feeds, protocol/governance sources, search aggregators, self-hosted bridges, keyless APIs — pros, cons and the staged recommendation (AUD-503) |
 | [releases.md](releases.md) | Semantic versioning: what each bump means here, cutting a release, image tags, verifying what is deployed |
 | [deploy-runbook.md](deploy-runbook.md) | The guarded Gitea deploy pipeline, its invariants, manual recovery, registry retention |
-| [github-actions.md](github-actions.md) | The public GitHub workflows: the test gate, the manual image release, GHCR and the README badges |
+| [github-actions.md](github-actions.md) | The public GitHub workflows: the test gate, the manual image release, GHCR and the README badges, the supply-chain linters and advisory scan, and the Dependabot carve-out |
 | [brand.md](brand.md) | Where the logo files live, how the derived assets are generated, how to use the mark |
 
 ### Verification record

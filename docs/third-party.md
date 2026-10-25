@@ -26,25 +26,63 @@ maintained by hand.
 
 ### 1.1 Base images
 
-`Dockerfile` references its bases by tag (`node:22-alpine`, `python:3.14-slim`)
-so that a reader can see which runtimes the image is built on, rather than by
-`@sha256:` digest. Tags float: the digests below are the
-ones those tags resolved to on 2026-10-04, recorded here so a past build can be
-reproduced with `docker build --build-context` or by temporarily re-pinning the
-`FROM` lines to a digest. Re-check them after any base-image bump with:
+Every base image is pinned by `@sha256:` digest, with the tag kept in front of
+the `@` so a reader still sees which runtimes the image is built on (AUD-697).
+The tag is decoration once a digest is present — docker resolves the digest —
+which is what makes two builds of one commit land on the same base revision.
+
+Before AUD-697 these were tag references and this table was the *only* record of
+what they resolved to. The table was then stale in three rows at once, because
+nothing failed when it drifted: the recorded `python` digest was four weeks
+behind the one `Dockerfile.test` pinned, which was itself behind the tag. That
+is the failure mode of a hand-maintained digest table — it gets cited after it
+stops being true. It is now a transcription of the `FROM`/`image:` lines rather
+than a substitute for them, so **the tree is the source of truth and this table
+is checked against it**, not the other way round.
+
+| Stage / service | Image | Digest | Upstream licensing |
+| --- | --- | --- | --- |
+| `Dockerfile` `frontend-builder`; `compose.test.yaml` `frontend-tests` | `node:22-alpine` | `sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage and test runner only — not shipped. |
+| `Dockerfile` `backend-builder` + `runtime`; `Dockerfile.test` | `python:3.14-slim` | `sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
+| `compose.yaml` `db`; `compose.test.yaml` `db-test` | `postgres:16-alpine` | `sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36` | PostgreSQL: PostgreSQL Licence (BSD-style). Alpine base as above. Not redistributed — pulled from Docker Hub by the deploy host. |
+
+**Three groups, not five rows, and the grouping is load-bearing.** Each row's
+members are pinned to *one* digest on purpose, and splitting them is a silent
+bug rather than a cosmetic one:
+
+- `backend-builder` == `runtime` — the venv `runtime` copies out of
+  `backend-builder` is built against that stage's interpreter.
+- `runtime` == `Dockerfile.test` — the suite gates the image it tests, so they
+  must run the same CPython build or a green suite proves less than it claims.
+- `frontend-builder` == `frontend-tests` — Vitest and the shipped bundle are
+  built by one Node.
+- `db` == `db-test` — the suite runs against the engine production runs.
+
+Pin the **multi-arch manifest-list** digest, not a per-architecture one, or the
+build stops working on one of the two arches. To bump by hand, resolve the tag
+and paste the result, then update the row here:
 
 ```bash
-docker buildx imagetools inspect node:22-alpine --format '{{.Manifest.Digest}}'
-docker buildx imagetools inspect python:3.14-slim --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect node:22-alpine     --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect python:3.14-slim   --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect postgres:16-alpine --format '{{.Manifest.Digest}}'
 ```
 
-| Stage | Image | Digest (as of 2026-10-04) | Upstream licensing |
-| --- | --- | --- | --- |
-| `frontend-builder` | `node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage only — not shipped. |
-| `backend-builder`, `runtime` | `python:3.14-slim` | `sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
+For the two **Dockerfiles**, normally nobody does: Dependabot's `docker`
+ecosystem ([github-actions.md](github-actions.md)) opens a weekly pull request
+when a pinned tag moves, which is what keeps pinning from decaying into a frozen
+base nobody notices. That entry was added by AUD-697 alongside the pins — before
+it, this table had drifted two revisions and four weeks behind the tree.
 
-These two stages are all there is. nginx is not redistributed in any form — the
-API serves the SPA itself — so no web-server licence applies to this image.
+Dependabot reads `FROM` lines only, so the **compose** pins (`postgres` for
+`db`/`db-test`, `node` for `frontend-tests`) are hand-maintained. They are not
+independent bumps: move each one together with the Dockerfile pin it shares a
+digest with, per the grouping above. A Dependabot pull request that bumps
+`Dockerfile`'s `python` is therefore complete on its own, but one that bumps
+`node` leaves `compose.test.yaml` behind and needs a follow-up commit.
+
+nginx is not redistributed in any form — the API serves the SPA itself — so no
+web-server licence applies to the image we ship.
 
 ### 1.2 Published images
 
@@ -72,10 +110,22 @@ curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
 
 ### 1.3 Not pinned
 
-Nothing, in the sense of unattributed licences. The base images are referenced
-by tag rather than digest (see 1.1), so two builds of the same commit can sit on
-different base revisions; the pinned Python and npm lockfiles, and everything
-audr itself ships, do not move.
+Nothing, in the sense of unattributed licences — and as of AUD-697, nothing in
+the sense of floating versions either. The base images are digest-pinned (see
+1.1), so two builds of one commit cannot sit on different base revisions; the
+Python and npm lockfiles are pinned; `uv` itself is pinned (`uv==0.13.5` in both
+`Dockerfile` and `Dockerfile.test` — `uv sync --frozen` is deterministic given
+`uv.lock`, but *which uv reads that lock* was not, so the resolver version used
+to float with the build date); and everything audr itself ships does not move.
+
+The one deliberate exception is `Dockerfile.test`'s `apt-get install curl git`,
+which carries a `hadolint ignore=DL3008` with its reasoning next to the line.
+Pinning a Debian package version is the rare hardening step that makes a build
+*less* reproducible: the `slim` archive keeps only the current revision of each
+package, so `curl=8.x.y-z` stops existing the next time Debian rebuilds it and
+every build of every past commit starts failing. The base-image digest is what
+freezes those two packages, because it freezes the whole filesystem they come
+from. That file builds the test runner and is never shipped.
 
 The `runtime` stage installs no OS packages at all, which is what keeps that
 true. In particular it ships no `curl`: the container health check in

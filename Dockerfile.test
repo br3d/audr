@@ -1,14 +1,30 @@
 # Test runner image: installs all main + dev dependencies.
 # The backend source is bind-mounted at /workspace/backend at runtime.
-FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
+# Same digest as the `runtime` stage in Dockerfile, so the suite and the image
+# it gates share one interpreter build. Bump the two together (AUD-697).
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
 
 # git is here for tests of the release machinery: scripts/promote-image.py asks
 # git how far behind `main` the release being promoted is, and
 # tests/unit/test_promote_image_drift.py builds throwaway repositories in
 # tmp_path to check the answers. Without it those cases skip, which reads as
 # coverage while providing none.
+#
+# DL3008 is suppressed below, deliberately: pinning these to a Debian package
+# version is the one hardening step that makes the build *less* reproducible
+# rather than more (so `--failure-threshold` is not what carves it out — the
+# reason is specific to this line, and belongs next to this line). The
+# `slim` archive keeps only the current revision of each package, so a pinned
+# `curl=8.x.y-z` stops existing the next time Debian rebuilds it and every build
+# of every past commit starts failing. The base image digest above is what
+# actually freezes these two — it freezes the whole filesystem they come from.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv
+# Pinned, like everything else here (AUD-697). `uv sync --frozen` is
+# deterministic given uv.lock, but which *uv* reads that lock was not: an
+# unpinned installer meant the resolver version floated with the build date.
+# Keep in step with the same pin in Dockerfile's `backend-builder` stage.
+RUN pip install --no-cache-dir uv==0.13.5
 
 WORKDIR /deps
 

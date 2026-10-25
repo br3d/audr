@@ -29,7 +29,12 @@ x-backend-image: &backend_image ghcr.io/br3d/audr-backend:0.2.1
 
 services:
   db:
-    image: postgres:16-alpine
+    # Digest-pinned like the Dockerfile's bases (AUD-697): a floating
+    # `postgres:16-alpine` means `docker compose pull` can move the database
+    # engine under a live volume without anything in the repo changing. The tag
+    # stays in front of the `@` for readability; the digest is what resolves.
+    # Bump with Dependabot, or by hand — see the recipe in Dockerfile's header.
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
     restart: unless-stopped
     environment:
       POSTGRES_DB: audr

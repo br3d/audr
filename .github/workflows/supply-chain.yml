@@ -1,0 +1,236 @@
+name: supply-chain
+
+# Linters and a vulnerability scan for the things `tests.yml` does not look at:
+# the shell scripts that operate the deploy host, the Dockerfiles that build the
+# shipped image, and the contents of that image (AUD-697).
+#
+# WHY THIS IS A SEPARATE FILE and not three more jobs in `tests.yml`.
+# `tests.yml` is *the gate* — the thing whose verdict decides whether a change
+# lands, and whose badge is on the README. One of the jobs below is deliberately
+# **advisory** and must never fail a run (see `trivy` for why). Putting a job
+# that cannot fail inside the file whose entire purpose is to fail is how an
+# advisory job quietly becomes load-bearing, or how a blocking one quietly stops
+# blocking. Keeping the two concerns in two files means the gate's job list is
+# exactly the set of things that gate.
+#
+# THE SEVERITY POLICY, decided on AUD-697 and stated here because the reasoning
+# is what makes it reviewable rather than arbitrary:
+#
+#   shellcheck  BLOCKS.  Deterministic given a pinned linter, so a red run names
+#                        a commit and a line, and the fix is an edit to that
+#                        commit. Nothing about the outside world can turn it red.
+#   hadolint    BLOCKS.  Same argument.
+#   trivy       ADVISORY. Its vulnerability feed moves daily, so the same commit
+#                        can be green today and red tomorrow with no change to
+#                        the tree. Worse, almost every finding lives in the
+#                        Debian base or a transitive dependency, where the only
+#                        available fix is a Dependabot bump — not an edit to the
+#                        commit being blocked. A blocking trivy would therefore
+#                        red `main` for a reason `main` cannot fix, which is the
+#                        failure mode that gets a gate switched off entirely.
+#
+# Advisory here does NOT mean silent. The trivy job writes a severity table to
+# the run summary, emits a `::warning` annotation when it finds anything at
+# HIGH or above, and uploads the full report as a 7-day artifact. What it does
+# not do is change the run's conclusion.
+#
+# Triggers follow the same two rules as every other file in this directory, for
+# the same Gitea-mirror reasons spelled out at the top of `tests.yml`:
+#
+#   * `push` is filtered to `main`. The mirror replays every branch verbatim,
+#     and Gitea falls back to `.github/workflows` on a branch carrying no
+#     `.gitea/workflows`, so a bare `on: push` would replay this for every stale
+#     branch the mirror syncs, on a single self-hosted runner (AUD-333).
+#   * **no `tags:`**. The mirror pushes tags verbatim and a tagged commit has no
+#     `.gitea/workflows`, so Gitea would run this through the fallback path
+#     alongside its own tag-triggered deploy.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    # 25 tracked scripts, ~4,800 lines, operating the deploy host, the backups,
+    # the watchdog and the release — and until now, no job ran the linter they
+    # were written against. Several carried `# shellcheck disable=` pragmas
+    # addressed to nobody.
+    #
+    # **No `-S` severity floor**, deliberately. The tree is clean all the way
+    # down to `-S style`, so there is nothing to buy by excluding a severity and
+    # a real class of defect to lose. A floor is the kind of thing that gets
+    # added to make a gate pass and then outlives the reason, so the absence of
+    # one is the point: when this goes red, something is actually wrong.
+    #
+    # Getting there took five inline pragmas, each carrying its reason, and all
+    # five are false positives of exactly two kinds:
+    #   * SC2016 ("expressions don't expand in single quotes") x4 — on strings
+    #     shipped over ssh to expand on the *deploy host*. `"${SSH[@]}" 'echo
+    #     "$HOME"'` means the remote `$HOME`; double quotes would resolve it
+    #     locally and install under the wrong user's home.
+    #   * SC2329 ("function is never invoked") x1 — scripts/test.sh's
+    #     `teardown`, invoked by `trap teardown EXIT`.
+    # If a sixth is ever needed, write the reason next to it rather than
+    # lowering the floor here.
+    #
+    # `git ls-files` rather than a glob: it is the definition of "a shell script
+    # in this repository", so a script added in a new directory is covered the
+    # day it is committed, and nothing untracked is ever linted.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck — every tracked shell script
+        run: |
+          mapfile -t scripts < <(git ls-files -- '*.sh')
+          echo "linting ${#scripts[@]} scripts"
+          docker run --rm -v "$PWD:/w" -w /w koalaman/shellcheck:v0.11.0 \
+            -f gcc "${scripts[@]}"
+
+  hadolint:
+    # The Dockerfiles are the only place a base image, a package install or a
+    # layer ordering decision is made, and they build the image that actually
+    # ships.
+    #
+    # Fed on stdin rather than by path because the hadolint image's entrypoint
+    # takes a Dockerfile argument and `-` is its documented stdin form; the
+    # consequence is that findings are reported against `-` rather than the
+    # filename, so each file gets its own step and the step name carries the
+    # filename. One suppression exists in the tree, `DL3008` in Dockerfile.test,
+    # with its reasoning written next to the line it suppresses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: hadolint — Dockerfile
+        run: docker run --rm -i ghcr.io/hadolint/hadolint:v2.14.0 hadolint --no-color - < Dockerfile
+      - name: hadolint — Dockerfile.test
+        run: docker run --rm -i ghcr.io/hadolint/hadolint:v2.14.0 hadolint --no-color - < Dockerfile.test
+
+  trivy:
+    # ADVISORY — see the severity policy in this file's header. Nothing in this
+    # job may change the run's conclusion, which is why every trivy invocation
+    # passes `--exit-code 0` and the reporting step cannot fail.
+    #
+    # Two scans, because they see different things and the gap between them is
+    # where the first real finding lived:
+    #
+    #   `trivy fs`    reads backend/uv.lock and frontend/package-lock.json — the
+    #                 dependencies as *declared*. Fast, no build.
+    #   `trivy image` reads the built runtime image — the same Python packages
+    #                 as *installed*, plus the Debian base's OS packages, which
+    #                 no lockfile mentions at all and which `fs` cannot see.
+    #
+    # The image is built here rather than pulled from GHCR on purpose: GHCR
+    # publishing is `workflow_dispatch`-only and needs a human click
+    # (docs/github-actions.md), so the newest published image can be many
+    # commits behind `main`. Scanning it would report the security posture of a
+    # past release rather than of this commit. Building costs a few minutes in a
+    # job that gates nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the runtime image
+        # Both build args default to empty in the Dockerfile and only affect the
+        # version string the SPA displays, so they are left unset: a scan does
+        # not care what the bundle calls itself.
+        run: docker build -t audr-backend:scan .
+
+      # The trivy database is downloaded from GHCR and is the one part of this
+      # job that can fail for a reason outside the repository. `--exit-code 0`
+      # covers findings, not a feed outage, so the download gets its own retry
+      # rather than being allowed to turn an advisory job red.
+      - name: Scan the built image (OS packages + installed Python packages)
+        continue-on-error: true
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/w" -w /w \
+            ghcr.io/aquasecurity/trivy:0.76.1 image \
+              --exit-code 0 --no-progress --scanners vuln \
+              --severity CRITICAL,HIGH,MEDIUM \
+              --format table --output trivy-image.txt \
+              audr-backend:scan
+
+      - name: Scan the lockfiles (declared dependencies)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w \
+            ghcr.io/aquasecurity/trivy:0.76.1 fs \
+              --exit-code 0 --no-progress --scanners vuln \
+              --severity CRITICAL,HIGH,MEDIUM \
+              --format table --output trivy-fs.txt \
+              .
+
+      # Why this step exists at all: an advisory job whose findings live only
+      # inside a log nobody opens is indistinguishable from no job. **No agent
+      # on this project can read an artifact's contents or a job log** — the
+      # download endpoint needs authentication, `/actions/jobs/<id>/logs` is 403
+      # without repository admin, and `gh` is not installed on the agent host
+      # (AUD-714). The run summary and the step *name* are readable channels, so
+      # the counts go there.
+      #
+      # `|| true` on the whole body, and `if: always()`: a reporting step that
+      # can fail would hand this advisory job a way to red a run after all,
+      # which is the one thing the severity policy forbids.
+      - name: Report counts to the run summary
+        if: always()
+        run: |
+          # Annotations are a workflow command on **stdout**; the summary is a
+          # file. Writing `::warning` into $GITHUB_STEP_SUMMARY produces the
+          # literal text in the summary and no annotation at all, so the two
+          # sinks are written separately below.
+          report() {
+            local f crit high med
+            echo "## trivy (advisory — never fails this run)"
+            echo
+            for f in trivy-image.txt trivy-fs.txt; do
+              echo "### \`$f\`"
+              if [ -s "$f" ]; then
+                crit=$(grep -c 'CRITICAL' "$f" || true)
+                high=$(grep -c 'HIGH' "$f" || true)
+                med=$(grep -c 'MEDIUM' "$f" || true)
+                echo "CRITICAL lines: $crit · HIGH lines: $high · MEDIUM lines: $med"
+                echo
+                echo '```'
+                head -120 "$f"
+                echo '```'
+              else
+                echo "_no report produced — the scan step above failed; see its log._"
+              fi
+              echo
+            done
+            echo "Fixes for these are Dependabot bumps, not edits to this commit —"
+            echo "which is why this job is advisory. See docs/github-actions.md."
+          }
+          report >> "$GITHUB_STEP_SUMMARY" || true
+
+          for f in trivy-image.txt trivy-fs.txt; do
+            [ -s "$f" ] || continue
+            crit=$(grep -c 'CRITICAL' "$f" || true)
+            high=$(grep -c 'HIGH' "$f" || true)
+            if [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then
+              echo "::warning title=trivy::${f}: ${crit} CRITICAL / ${high} HIGH lines — see the supply-chain artifact or this job's summary"
+            fi
+          done
+          exit 0
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: supply-chain-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            trivy-image.txt
+            trivy-fs.txt
+          if-no-files-found: warn
+          retention-days: 7

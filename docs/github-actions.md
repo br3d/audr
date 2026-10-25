@@ -161,6 +161,84 @@ apply, and for the same mirror reason.
 Permissions are `security-events: write` (the SARIF upload — the only write it
 performs), plus `contents: read` and `actions: read`.
 
+## `supply-chain.yml` — shellcheck, hadolint, and an advisory trivy scan
+
+Added on AUD-697, covering three things `tests.yml` never looked at: the shell
+scripts that operate the deploy host, the Dockerfiles that build the shipped
+image, and the contents of that image.
+
+| Job | Verdict | Tool, pinned |
+|---|---|---|
+| `shellcheck` | **blocks** | `koalaman/shellcheck:v0.11.0`, over every tracked `*.sh` (25 files, ~4,800 lines), no `-S` severity floor |
+| `hadolint` | **blocks** | `ghcr.io/hadolint/hadolint:v2.14.0`, over `Dockerfile` and `Dockerfile.test` |
+| `trivy` | **advisory** | `ghcr.io/aquasecurity/trivy:0.76.1`, scanning both the built runtime image and the lockfiles |
+
+### Why it is a separate file from `tests.yml`
+
+`tests.yml` is *the gate* — the thing whose verdict decides whether a change
+lands and whose badge is on the README. One of the jobs above is deliberately
+advisory and must never fail a run. Putting a job that cannot fail inside the
+file whose entire purpose is to fail is how an advisory job quietly becomes
+load-bearing, or a blocking one quietly stops blocking. Two concerns, two files;
+`tests.yml`'s job list then *is* the set of things that gate.
+
+### Why shellcheck and hadolint block but trivy does not
+
+This is the decision the ticket actually turned on, so the reasoning rather than
+just the verdict:
+
+- **shellcheck and hadolint are deterministic given a pinned linter.** Nothing
+  about the outside world can turn them red. A red run therefore names a commit
+  and a line, and the fix is an edit to that commit — which is the property that
+  makes blocking fair.
+- **trivy's vulnerability feed moves daily.** The same commit can be green today
+  and red tomorrow with no change to the tree. Worse, almost every finding lives
+  in the Debian base or a transitive dependency, where the only available fix is
+  a Dependabot bump — *not* an edit to the commit being blocked. A blocking
+  trivy would red `main` for a reason `main` cannot fix, which is precisely how
+  a gate ends up switched off for good.
+
+Advisory does not mean silent. The trivy job writes a severity table to the run
+summary, emits a `::warning` annotation on any CRITICAL or HIGH, and uploads the
+full reports as a 7-day artifact. What it does not do is change the run's
+conclusion. Every trivy invocation passes `--exit-code 0`, and the reporting
+step ends in `exit 0`, so there is no path by which it can red a run.
+
+It scans twice because the two scans see different things: `trivy fs` reads
+`backend/uv.lock` and `frontend/package-lock.json` — the dependencies as
+*declared* — while `trivy image` reads the built image: the same Python packages
+as *installed*, plus the Debian base's OS packages, which no lockfile mentions
+and `fs` cannot see. The image is built in the job rather than pulled from GHCR
+because GHCR publishing is `workflow_dispatch`-only and needs a human click (see
+`release.yml` above), so the newest published image can be many commits behind
+`main` — scanning it would report a past release's posture, not this commit's.
+
+The first scan on this branch found 1 CRITICAL + 4 HIGH in the image (certifi,
+msgpack, setuptools, urllib3 ×2) and 1 CRITICAL in `backend/uv.lock`, all with
+fixed versions available. That is exactly the shape the argument above predicts:
+Dependabot work, raised as its own issue, not a reason to block the commit that
+made the finding visible.
+
+### Why not cosign signing or an SBOM
+
+Skipped, and the reasoning belongs next to the Dependabot argument below
+because it is the same argument.
+
+An SBOM and a signature are both *attestations for a consumer* — they let
+somebody who did not build the image verify what is in it and who built it. This
+project has exactly one consumer of its images: the deploy host, which pulls
+from a private registry on our own network, over a path a Gitea job controls
+end to end. There is no third party to convince. `release.yml` already sets
+`sbom: false` and `provenance: false` for the same reason, and the digest it
+publishes to the run summary is the identity an operator actually checks.
+
+What an SBOM would buy — "which versions are in the shipped image" — is bought
+instead by the digest pins in [third-party.md](third-party.md) §1.1, the two
+lockfiles, and the `trivy image` scan above, which reads the real image rather
+than a document describing it. Revisit if audr ever publishes an image anyone
+else is expected to run; until then the attestations would publish extra
+manifests and blobs per build to be verified by nobody.
+
 ## `dependabot.yml` — dependency updates, and the one pull request we allow
 
 `.github/dependabot.yml` is not a workflow; GitHub runs it as a service. It is
@@ -215,13 +293,22 @@ only, so no dependency bump can spend GHCR storage or publish an image.
 
 ### What the config does
 
-Three ecosystems, weekly on Monday, `open-pull-requests-limit: 3` each:
+Four ecosystems, weekly on Monday, `open-pull-requests-limit: 3` each:
 
 | Ecosystem | Directory | Note |
 |---|---|---|
 | `uv` | `/backend` | **Not `pip`.** Versions live in `backend/pyproject.toml` but the Dockerfile installs with `uv sync --frozen`, so a bump that does not also refresh `backend/uv.lock` yields an image that will not build. `uv` updates both; `pip` would update only the manifest. |
 | `npm` | `/frontend` | `package.json` + `package-lock.json`. |
+| `docker` | `/` | Base-image digests in `Dockerfile` and `Dockerfile.test` (added on AUD-697). Reads `FROM` lines **only** — the `image:` keys in `compose.yaml` / `compose.test.yaml` are invisible to it and stay a manual bump, and they are not independent: each is pinned to the same digest as a Dockerfile partner on purpose. Check [third-party.md](third-party.md) §1.1 before merging one of these. |
 | `github-actions` | `/` | Reads `.github/workflows` **only**. The Gitea overlay's actions (`ci/gitea-overlay/workflows/*.yaml`) are outside the mirrored tree and stay a manual bump — see [../ci/gitea-overlay/README.md](../ci/gitea-overlay/README.md). |
+
+The `docker` entry is what makes the AUD-697 digest pinning sustainable instead
+of a slow leak. That ticket's own scope note asserted "Dependabot can bump
+them"; it could not — there was no `docker` ecosystem configured at all, and the
+digest recorded in §1.1 was four weeks and two revisions stale by the time
+anyone looked. **A digest pin with no bump mechanism is worse than a floating
+tag**, because it freezes a base image together with its unfixed CVEs and
+nothing ever says so out loud.
 
 Minor and patch updates are **grouped** into one pull request per ecosystem: one
 review, one test run. Majors fall out of the group and arrive individually,

@@ -8,7 +8,9 @@ name: audr-test
 
 services:
   db-test:
-    image: postgres:16-alpine
+    # Same digest as compose.yaml's `db`, so the suite runs against the engine
+    # production runs. Keep the two in step when either is bumped.
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
     environment:
       POSTGRES_DB: audr_test
       POSTGRES_USER: audr_test
@@ -150,6 +152,21 @@ services:
       # It also pins the `tests` job to AUDR_SKIP_STATIC=1, so the ruff and mypy
       # phases test.sh now runs locally are not duplicated on CI's critical path.
       - ./.github/workflows/tests.yml:/workspace/.github/workflows/tests.yml:ro
+      # AUD-697: tests/unit/test_base_image_pins.py asserts that every base
+      # image is digest-pinned, that the pins which must share a digest still
+      # do (backend-builder == runtime == Dockerfile.test, frontend-builder ==
+      # frontend-tests, db == db-test), and that docs/third-party.md 1.1 records
+      # the digests the tree actually pins. All four files live outside
+      # ./backend, so without these mounts that guard could only skip.
+      #
+      # It is not a theoretical guard: AUD-697 also added a `docker` Dependabot
+      # ecosystem, which reads Dockerfile `FROM` lines only — so the first bump
+      # it opens for node moves Dockerfile and leaves this file behind, and the
+      # suite would keep passing against a different Node than built the bundle.
+      - ./Dockerfile:/workspace/Dockerfile:ro
+      - ./Dockerfile.test:/workspace/Dockerfile.test:ro
+      - ./compose.test.yaml:/workspace/compose.test.yaml:ro
+      - ./docs/third-party.md:/workspace/docs/third-party.md:ro
       # AUD-706: tests/unit/test_mirror_deploy_state.py executes the real
       # mirror script against scratch git repositories standing in for GitHub
       # and Gitea. Mounting it is what makes the retry bound, the single alert
@@ -218,7 +235,9 @@ services:
       - benchmark
 
   frontend-tests:
-    image: node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8
+    # Same digest as `frontend-builder` in Dockerfile, so Vitest and the shipped
+    # bundle are built by one Node (AUD-697).
+    image: node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
     working_dir: /workspace
     # frontend_node_modules starts empty, so dependencies must be installed in
     # the container before vitest exists on PATH. Without this the stage exits

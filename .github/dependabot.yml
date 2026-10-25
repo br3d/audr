@@ -77,6 +77,41 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # Base-image digests in Dockerfile and Dockerfile.test (AUD-697).
+  #
+  # This entry is what makes digest pinning sustainable rather than a slow leak.
+  # AUD-697 pinned every base image by `@sha256:`, and the ticket asserted
+  # "Dependabot can bump them" — it could not: there was no `docker` ecosystem
+  # here at all. A digest pin with no bump mechanism is strictly worse than a
+  # floating tag, because it freezes a base image and its unfixed CVEs in place
+  # and nothing ever says so. The evidence was in the tree: the recorded
+  # `python:3.14-slim` digest was four weeks stale and two revisions behind.
+  #
+  # What it covers: `FROM` lines in Dockerfiles under the given directories.
+  # What it does NOT cover: `image:` keys in compose.yaml and compose.test.yaml.
+  # Those pins (postgres for `db`/`db-test`, node for `frontend-tests`) stay a
+  # manual bump, and they are not free-standing — each must be moved in step
+  # with its Dockerfile partner, because the pairs are pinned to one digest on
+  # purpose. docs/third-party.md §1.1 lists which pins share a digest and why.
+  # So: when this ecosystem opens a Dockerfile bump, check that table before
+  # merging it.
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      base-images:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
   # Action versions used by .github/workflows/*.yml.
   #
   # This ecosystem reads `.github/workflows` only. The Gitea overlay's actions

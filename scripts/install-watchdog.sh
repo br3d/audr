@@ -178,6 +178,9 @@ case "${1:-}" in
 esac
 
 if [ "$mode" = check ]; then
+  # shellcheck disable=SC2016  # this whole single-quoted block is a script
+  # shipped to the remote shell to run THERE; every expansion in it is the
+  # deploy host's, not ours, and must survive this file unexpanded.
   "${SSH[@]}" '
     echo "== units =="
     systemctl list-unit-files "audr-watchdog.*" "audr-alert-dispatch.*" --no-pager 2>/dev/null | head -8 || true
@@ -205,6 +208,9 @@ fi
 # Absolute install path, resolved on the host so ~ belongs to the remote user.
 # Needed by --check too since AUD-594: the board probe runs the installed copy
 # of notify-board.py, so it has to know where that is.
+# shellcheck disable=SC2016  # $HOME must reach the REMOTE shell unexpanded —
+# that is the entire point of the line. Double quotes would resolve it here, on
+# the agent host, and install under the wrong user's home.
 remote_home="$("${SSH[@]}" 'echo "$HOME"')"
 abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
 
