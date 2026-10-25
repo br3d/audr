@@ -3,6 +3,7 @@
 GET  /api/v1/integrations               → IntegrationsResponse
 PUT  /api/v1/integrations/rpc           → IntegrationEntry
 PUT  /api/v1/integrations/quotes        → IntegrationEntry
+PUT  /api/v1/integrations/llm           → IntegrationEntry (AUD-658, Anthropic key)
 POST /api/v1/integrations/{kind}/validate → JobRef
 """
 
@@ -26,6 +27,7 @@ from audr.jobs.store import JobKind, enqueue_job
 from audr.providers.rpc_defaults import DEFAULT_PUBLIC_RPC_URLS
 from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url_async
 from audr.settings.integrations import RevisionConflictError, get_integration, upsert_integration
+from audr.settings.llm import get_anthropic_api_key, save_anthropic_credentials
 from audr.settings.quotes import get_coingecko_api_key, save_coingecko_credentials
 
 router = APIRouter(prefix="/api/v1")
@@ -37,6 +39,7 @@ router = APIRouter(prefix="/api/v1")
 _FE_TO_DB: dict[str, str] = {
     "rpc": "rpc",
     "quotes": "coingecko",
+    "llm": "anthropic",
 }
 
 _DB_TO_FE: dict[str, str] = {v: k for k, v in _FE_TO_DB.items()}
@@ -106,6 +109,11 @@ class UpdateQuotesInput(BaseModel):
     revision: str
     provider: str
     api_key: str | None = None
+
+
+class UpdateLlmInput(BaseModel):
+    revision: str
+    api_key: str
 
 
 class JobRef(BaseModel):
@@ -258,6 +266,28 @@ async def _build_quotes_entry(db: AsyncSession) -> IntegrationEntry:
     )
 
 
+async def _build_llm_entry(db: AsyncSession) -> IntegrationEntry:
+    """Describe the Anthropic key used by the news-analysis gate (AUD-658).
+
+    Configuring a key does not turn the gate on by itself — that is the
+    separate global flag at GET/PATCH /settings/news-analysis. This entry
+    only reports whether a key is stored.
+    """
+    row = await get_integration(db, kind="anthropic", decrypt_fields=False)
+    health = await _get_health(db, "llm")
+    api_key = await get_anthropic_api_key(db)
+    return IntegrationEntry(
+        kind="llm",
+        configured=bool(api_key),
+        enabled=True,
+        provider="anthropic",
+        revision=str(row.revision) if row is not None else "0",
+        health=health,
+        effective_source="Anthropic" if api_key else None,
+        using_default=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -271,6 +301,7 @@ async def get_integrations(
     items = [
         await _build_rpc_entry(db),
         await _build_quotes_entry(db),
+        await _build_llm_entry(db),
     ]
     now = datetime.now(tz=UTC)
     return IntegrationsResponse(
@@ -360,6 +391,40 @@ async def put_integration_quotes(
 
     await db.commit()
     return await _build_quotes_entry(db)
+
+
+@router.put("/integrations/llm", response_model=IntegrationEntry)
+async def put_integration_llm(
+    body: UpdateLlmInput,
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: AsyncSession = Depends(get_db),
+) -> IntegrationEntry:
+    api_key = body.api_key.strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="api_key must not be empty",
+        )
+
+    try:
+        expected_rev = int(body.revision) if body.revision else None
+    except ValueError:
+        expected_rev = None
+
+    try:
+        await save_anthropic_credentials(
+            db,
+            api_key=api_key,
+            expected_revision=expected_rev,
+        )
+    except RevisionConflictError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="revision conflict",
+        ) from exc
+
+    await db.commit()
+    return await _build_llm_entry(db)
 
 
 @router.post(

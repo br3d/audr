@@ -99,7 +99,7 @@ async def test_get_integrations_returns_both_kinds(http_client: httpx.AsyncClien
     assert "request_id" in data
     assert "generated_at" in data
     kinds = {item["kind"] for item in data["items"]}
-    assert kinds == {"rpc", "quotes"}
+    assert kinds == {"rpc", "quotes", "llm"}
 
 
 @pytest.mark.integration

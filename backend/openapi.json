@@ -2087,6 +2087,68 @@
         "title": "NetworkOut",
         "type": "object"
       },
+      "NewsAnalysisSettingPatch": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "importance_threshold": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance Threshold"
+          }
+        },
+        "title": "NewsAnalysisSettingPatch",
+        "type": "object"
+      },
+      "NewsAnalysisSettingRead": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "importance_threshold": {
+            "title": "Importance Threshold",
+            "type": "integer"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "importance_threshold",
+          "revision"
+        ],
+        "title": "NewsAnalysisSettingRead",
+        "type": "object"
+      },
       "OnchainEventResponse": {
         "properties": {
           "amount": {
@@ -3498,6 +3560,24 @@
           "kind"
         ],
         "title": "TriggerJobInput",
+        "type": "object"
+      },
+      "UpdateLlmInput": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "api_key"
+        ],
+        "title": "UpdateLlmInput",
         "type": "object"
       },
       "UpdateQuotesInput": {
@@ -5507,6 +5587,78 @@
         "summary": "Get Integrations"
       }
     },
+    "/api/v1/integrations/llm": {
+      "put": {
+        "operationId": "put_integration_llm_api_v1_integrations_llm_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLlmInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Integration Llm"
+      }
+    },
     "/api/v1/integrations/quotes": {
       "put": {
         "operationId": "put_integration_quotes_api_v1_integrations_quotes_put",
@@ -6461,6 +6613,124 @@
           }
         },
         "summary": "Patch Settings"
+      }
+    },
+    "/api/v1/settings/news-analysis": {
+      "get": {
+        "description": "Return the global \"smart analysis\" gate flag and importance threshold.",
+        "operationId": "get_news_analysis_setting_route_api_v1_settings_news_analysis_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewsAnalysisSettingRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get News Analysis Setting Route"
+      },
+      "patch": {
+        "description": "Update the gate flag and/or importance threshold (revision-checked).\n\nTurning this on with no Anthropic key configured (PUT\n/integrations/llm) is accepted \u2014 `NewsAnalysisGate` fails open for every\narticle in that state (AUD-658), it does not reject the setting.",
+        "operationId": "patch_news_analysis_setting_route_api_v1_settings_news_analysis_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewsAnalysisSettingPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewsAnalysisSettingRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch News Analysis Setting Route"
       }
     },
     "/api/v1/settings/schedules/{kind}": {
