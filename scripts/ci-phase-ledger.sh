@@ -48,10 +48,16 @@ LEDGER="${1:-.test-phases.tsv}"
 
 # Order matters: this is the order the steps appear in, and so the order a
 # reader sees. Keep it in execution order.
+# `ruff` and `backend_mypy` are the static gates (AUD-744). Both report `skip`
+# in the GitHub `tests` job, which sets AUDR_SKIP_STATIC=1 because the dedicated
+# `lint` and `backend-mypy` jobs cover them in parallel; they carry a real
+# verdict for anyone running test.sh locally, which is where they exist to bite.
 PHASES=(
+  ruff
   db_up
   backend_build
   backend_suite
+  backend_mypy
   frontend_install
   frontend_suite
   api_types

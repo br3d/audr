@@ -26,7 +26,7 @@ or an SSH key, and they act on infrastructure outside your installation.
 
 | Script | What it does |
 |---|---|
-| `test.sh` | The test gate: backend pytest and frontend Vitest in Docker Compose. `--backend-only` / `--frontend-only` |
+| `test.sh` | The merge gate: ruff, backend pytest, mypy-vs-baseline and frontend Vitest in Docker Compose. `--backend-only` / `--frontend-only`. The static gates were CI-only jobs until AUD-744, so a locally-green merge could land ruff- or mypy-red on `main` — and twice did; `AUDR_SKIP_STATIC=1` skips them, and the GitHub `tests` job sets it because `lint` and `backend-mypy` run there as their own jobs |
 | `build.sh` | Builds the application image and pushes it to the private registry, tagged `<version>-g<short sha>` |
 | `deploy.sh` | Deploys a tag to the remote host over SSH: pulls the image, runs migrations, restarts services |
 | `smoke-test.sh` | Post-deploy health probe against a live instance; non-zero exit on any failed check |

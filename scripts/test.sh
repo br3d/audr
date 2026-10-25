@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Run the full test suite: backend (pytest) and frontend (Vitest) in Docker Compose.
+# Run the full merge gate: ruff, backend (pytest), mypy and frontend (Vitest),
+# in Docker Compose.
 # Usage: ./scripts/test.sh [--backend-only|--frontend-only]
-# Exits non-zero if any suite fails.
+# Env:   AUDR_SKIP_STATIC=1  skip the ruff and mypy phases (AUD-744); set by the
+#                            GitHub `tests` job, which has dedicated jobs for both
+#        AUDR_TEST_PROJECT   reuse a pinned compose project instead of a fresh one
+# Exits non-zero if any suite or static gate fails.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -132,6 +136,7 @@ for arg in "$@"; do
   esac
 done
 
+# shellcheck disable=SC2329  # invoked indirectly by `trap teardown EXIT` below
 teardown() {
   echo "==> Tearing down test environment"
   # `--rmi local` also removes the images Compose built for this project
@@ -300,6 +305,51 @@ reap_stale_projects || true
 
 snapshot_env
 
+# ── Static gates: ruff and mypy ───────────────────────────────────────────────
+#
+# These live here because this script is what the team merges on. Agents
+# self-merge on a green `./scripts/test.sh` (docs/engineering-workflow.md), but
+# ruff and mypy were only ever enforced by the separate `lint` and
+# `backend-mypy` GitHub jobs — which speak *after* the merge has landed. On
+# 2026-10-25 that cost two red commits on `main`: AUD-658 added a `news_gate.py`
+# error outside the AUD-690 baseline, `7d2b9f2` and `10ab22b` both merged
+# mypy-red on a green suite, and `main` stayed red for ~50 minutes until AUD-743
+# regenerated the baseline. A gate the implementer cannot run is not a gate.
+#
+# AUDR_SKIP_STATIC=1 opts out, and the GitHub `tests` job sets it: `lint` and
+# `backend-mypy` already run there, in parallel, on their own runners. Repeating
+# them inside `tests` would lengthen the critical path to re-prove what another
+# job has already proven. The Gitea overlay never calls this script — it drives
+# compose directly under a per-job COMPOSE_PROJECT — so none of this touches the
+# concurrency fix in AUD-720.
+#
+# Both phases are non-fatal: they set EXIT like every other phase and let the
+# run continue, so a ruff nit cannot hide a pytest failure behind it.
+if [[ "${AUDR_SKIP_STATIC:-0}" != "1" ]]; then
+  # Pinned to the same tag as the `lint` job and backend/pyproject.toml's dev
+  # extra (AUD-392): an unpinned ruff makes the verdict depend on the day it
+  # ran. The image is distroless and has no shell, so each check is its own
+  # `docker run` rather than a loop inside one container.
+  # Each check runs even when an earlier one fails, so one `ruff FAILED` names
+  # every violation in the tree rather than only the first file. The quoting is
+  # deliberate: `$1` must reach the inner shell unexpanded and arrive as "${ROOT}"
+  # on its argv, so a path with a space in it stays one argument.
+  # shellcheck disable=SC2016  # $1/$? are for the inner bash, not this one
+  if ! run_phase ruff "Static lint (ruff check + format --check: backend/, scripts/)" \
+      bash -c '
+        set -o pipefail
+        rc=0
+        docker run --rm -v "$1:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 check --no-cache . || rc=$?
+        docker run --rm -v "$1:/w" -w /w/backend ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache . || rc=$?
+        docker run --rm -v "$1:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 check --no-cache scripts/ || rc=$?
+        docker run --rm -v "$1:/w" -w /w ghcr.io/astral-sh/ruff:0.16.10 format --check --no-cache scripts/ || rc=$?
+        exit $rc
+      ' _ "${ROOT}"; then
+    echo "==> ruff FAILED (exit ${PHASE_RC}) — fix before merging" | tee -a "${ENV_LOG}"
+    EXIT="${PHASE_RC}"
+  fi
+fi
+
 # `--wait-timeout` matters as much as the dump below. A healthcheck that fails
 # outright makes `--wait` return in seconds, but one that hangs in `starting`
 # never returns at all — and an unbounded wait would burn the workflow's whole
@@ -336,6 +386,22 @@ if [[ "${RUN_BACKEND}" -eq 1 ]]; then
     "Backend suite (pytest)"
   echo "==> Backend suite exit=${BACKEND_EXIT}"
   if [[ "${BACKEND_EXIT}" -ne 0 ]]; then EXIT="${BACKEND_EXIT}"; fi
+
+  # mypy --strict against backend/mypy-baseline.txt — the same `backend-mypy`
+  # service the dedicated CI job runs, so the two cannot disagree. After the
+  # suite, not before: a type regression and a test failure are different fixes,
+  # and pytest's verdict is the one an implementer is usually waiting on.
+  # Static analysis only, so it needs neither db-test nor the provider mock, but
+  # it shares Dockerfile.test with backend-tests and the build above has already
+  # warmed every layer it needs.
+  if [[ "${AUDR_SKIP_STATIC:-0}" != "1" ]]; then
+    if ! run_phase backend_mypy "mypy (strict) — backend/src, gated against the baseline" \
+        "${COMPOSE[@]}" --profile backend run --rm --no-TTY --build backend-mypy; then
+      echo "==> mypy FAILED (exit ${PHASE_RC}) — a new error outside backend/mypy-baseline.txt" \
+        | tee -a "${ENV_LOG}"
+      EXIT="${PHASE_RC}"
+    fi
+  fi
 fi
 
 if [[ "${RUN_FRONTEND}" -eq 1 ]]; then

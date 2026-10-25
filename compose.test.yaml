@@ -143,6 +143,13 @@ services:
       # unreported in CI.
       - ./scripts/ci-phase-ledger.sh:/workspace/scripts/ci-phase-ledger.sh:ro
       - ./scripts/test.sh:/workspace/scripts/test.sh:ro
+      # AUD-744 made the workflow the third copy of that same phase list: each
+      # slug needs a `steps.phases.outputs.<slug>` verdict step or its result is
+      # replayed into an output nobody reads. Same reasoning as the mount above
+      # — the guard pairing the list to the workflow can only skip without it.
+      # It also pins the `tests` job to AUDR_SKIP_STATIC=1, so the ruff and mypy
+      # phases test.sh now runs locally are not duplicated on CI's critical path.
+      - ./.github/workflows/tests.yml:/workspace/.github/workflows/tests.yml:ro
       # AUD-706: tests/unit/test_mirror_deploy_state.py executes the real
       # mirror script against scratch git repositories standing in for GitHub
       # and Gitea. Mounting it is what makes the retry bound, the single alert

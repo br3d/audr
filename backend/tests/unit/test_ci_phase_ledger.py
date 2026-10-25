@@ -38,13 +38,18 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LEDGER_SCRIPT = REPO_ROOT / "scripts" / "ci-phase-ledger.sh"
+TESTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "tests.yml"
 TEST_SH = REPO_ROOT / "scripts" / "test.sh"
 
 # Every phase the script must report on, in the order a reader sees them.
+# `ruff` and `backend_mypy` are the static gates added in AUD-744; they report
+# `skip` in the GitHub `tests` job, which sets AUDR_SKIP_STATIC=1.
 PHASES = (
+    "ruff",
     "db_up",
     "backend_build",
     "backend_suite",
+    "backend_mypy",
     "frontend_install",
     "frontend_suite",
     "api_types",
@@ -184,3 +189,43 @@ def test_phase_slugs_match_the_ones_test_sh_records() -> None:
         f"only in test.sh: {sorted(recorded - set(PHASES))}, "
         f"only in the replay: {sorted(set(PHASES) - recorded)}"
     )
+
+
+def test_every_phase_has_a_verdict_step_in_the_tests_workflow() -> None:
+    """The phase list is written a third time, in .github/workflows/tests.yml.
+
+    A phase with no verdict step is recorded, replayed into a step output, and
+    then read by nobody — the exact invisibility AUD-715 exists to remove, with
+    none of the warnings the ledger raises for a slug it does not know. The
+    `steps.phases.outputs.<slug>` reference is what pairs them.
+    """
+    workflow = TESTS_WORKFLOW.read_text()
+    missing = [p for p in PHASES if f"steps.phases.outputs.{p} " not in workflow]
+
+    assert not missing, (
+        f".github/workflows/tests.yml has no verdict step for: {missing}; "
+        "every phase in PHASES needs one or its result is unreadable in CI"
+    )
+
+
+def test_tests_job_skips_the_static_gates_it_runs_as_separate_jobs() -> None:
+    """AUD-744: the static gates are for the local run, not for duplication here.
+
+    `lint` and `backend-mypy` are their own jobs in this workflow, on their own
+    runners, in parallel with `tests`. If the gate step ever stops setting
+    AUDR_SKIP_STATIC the suite job silently grows a redundant ruff and mypy run
+    on the critical path — green, slower, and proving nothing new.
+    """
+    workflow = TESTS_WORKFLOW.read_text()
+
+    assert "AUDR_SKIP_STATIC: '1'" in workflow, (
+        "the `tests` job no longer sets AUDR_SKIP_STATIC=1, so scripts/test.sh "
+        "will re-run ruff and mypy inside it; the `lint` and `backend-mypy` "
+        "jobs already cover both"
+    )
+    for job in ("  lint:", "  backend-mypy:"):
+        assert job in workflow, (
+            f"{job.strip()} is gone from tests.yml, but the `tests` job still "
+            "sets AUDR_SKIP_STATIC=1 — that combination enforces neither gate "
+            "anywhere in CI"
+        )

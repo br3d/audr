@@ -139,6 +139,16 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       - name: Backend + frontend suites
+        # AUDR_SKIP_STATIC turns off the ruff and mypy phases test.sh gained in
+        # AUD-744. They exist for the local run — the gate this team actually
+        # merges on — and the `lint` and `backend-mypy` jobs above already
+        # enforce both here, on their own runners, in parallel with this job.
+        # Running them inside this one too would add minutes to the critical
+        # path to re-prove a verdict another job has already given. Their phase
+        # steps below therefore report `skip` on CI, which is the ledger's
+        # explicit "never reached" and not a silent pass.
+        env:
+          AUDR_SKIP_STATIC: '1'
         run: ./scripts/test.sh
 
       # ---- Per-phase verdicts (AUD-715) -------------------------------------
@@ -174,6 +184,20 @@ jobs:
       # interpolating `${{ }}` into the shell. These outputs are our own, but
       # inlining a step output into `run:` is the shape that turns any future
       # untrusted one into shell injection.
+      # ruff and backend_mypy (AUD-744) report `skip` in this job by design —
+      # see AUDR_SKIP_STATIC on the gate step. They are listed anyway so the
+      # ledger's "one step per phase" contract holds for every slug in
+      # ci-phase-ledger.sh's PHASES, and so that a future run which *does*
+      # execute them here has somewhere to say so.
+      - name: 'phase: static lint (ruff)'
+        if: always() && steps.phases.outputs.ruff != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.ruff }}
+          DETAIL: ${{ steps.phases.outputs.ruff_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
       - name: 'phase: db-test up + healthcheck'
         if: always() && steps.phases.outputs.db_up != 'skip'
         env:
@@ -197,6 +221,15 @@ jobs:
         env:
           STATE: ${{ steps.phases.outputs.backend_suite }}
           DETAIL: ${{ steps.phases.outputs.backend_suite_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
+      - name: 'phase: mypy (strict) vs baseline'
+        if: always() && steps.phases.outputs.backend_mypy != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.backend_mypy }}
+          DETAIL: ${{ steps.phases.outputs.backend_mypy_detail }}
         run: |
           echo "$DETAIL"
           [ "$STATE" = pass ]
