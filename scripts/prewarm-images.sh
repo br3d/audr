@@ -44,9 +44,12 @@
 # it is neither the failure mode nor at risk of becoming it. Its pin lives in
 # test.sh's ruff phase; copying it here would create a second place to bump.
 #
-# This is the cheap half of AUD-747. The structural fix is a pull-through mirror
-# (or an authenticated daemon) so the first pull of a new digest is local too;
-# both need host configuration or a credential, and neither is in this script.
+# This is the cheap half of AUD-747. The structural fix is the LAN pull-through
+# cache in ci/registry-mirror/, which makes the first pull of a new digest local
+# for every host at once; it is host configuration, so it is not in this script
+# and not in this repository's runtime. This phase stays because the cache is
+# not everywhere yet (the Gitea runner is still unwired) and because a cache
+# that is down falls back to the upstream, i.e. back to the rate limit.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -179,7 +182,8 @@ if [[ "${#FAILED[@]}" -gt 0 ]]; then
   echo "    anonymous per-IP rate limit (HTTP 429), shared with every other agent and with"
   echo "    the Gitea runner — a digest bump is the usual trigger, because a new digest"
   echo "    cannot be served from the local store. The tree under test is not implicated."
-  echo "    See AUD-747 for the structural fix (pull-through mirror / authenticated daemon)."
+  echo "    Check this host points at the LAN pull-through cache (AUD-747), which exists"
+  echo "    to stop exactly this: ./ci/registry-mirror/install.sh --check"
   exit 1
 fi
 

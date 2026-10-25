@@ -69,3 +69,7 @@ test-results/
 .specify/
 .agents/
 specs/
+
+# Optional Docker Hub credentials for the pull-through cache (AUD-747); see
+# ci/registry-mirror/README.md.
+ci/registry-mirror/.env

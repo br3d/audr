@@ -1,0 +1,51 @@
+# Docker Hub pull-through cache (AUD-747).
+#
+# A *proxy* registry: it serves `docker.io` content from local disk and fetches
+# upstream only on a miss. The daemons on the build and deploy hosts point at it
+# via `registry-mirrors`, so a digest bump — which by construction names an
+# image no host has yet, see AUD-747 — costs one upstream pull for the whole
+# LAN instead of one per host, per agent, per CI job.
+#
+# This is a cache, not a registry of record: `audr-backend`/`audr-frontend`
+# still live in the registry at 192.168.1.90:8085. A proxy registry rejects
+# pushes, which is exactly why it cannot be folded into that one.
+version: 0.1
+
+log:
+  level: info
+  formatter: text
+
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  cache:
+    blobdescriptor: inmemory
+  # `delete` must be on for the proxy scheduler to expire cached content; with
+  # it off the cache grows without bound on a box that has run out of disk
+  # before (see the docker-gc timer).
+  delete:
+    enabled: true
+
+http:
+  addr: :5000
+  headers:
+    X-Content-Type-Options: [nosniff]
+
+health:
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3
+
+proxy:
+  remoteurl: https://registry-1.docker.io
+  # Credentials are deliberately absent and read from the environment instead
+  # (REGISTRY_PROXY_USERNAME / REGISTRY_PROXY_PASSWORD, see .env.example).
+  # Anonymous is enough for the cache to work; adding a Docker Hub account
+  # later raises the *upstream* allowance this one cache spends, and needs no
+  # change to this file or to any host's daemon.json.
+  #
+  # How long cached content survives without being touched. Keeps the cache
+  # bounded on its own: a digest that stopped being pulled — every superseded
+  # Dependabot pin — ages out instead of being GC'd by hand.
+  ttl: 336h

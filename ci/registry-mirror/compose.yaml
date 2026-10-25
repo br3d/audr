@@ -1,0 +1,43 @@
+# Docker Hub pull-through cache for the LAN (AUD-747). Run on the build host:
+#
+#   ./ci/registry-mirror/install.sh            # on the host that serves the cache
+#   ./ci/registry-mirror/install.sh --client-only   # on every host that uses it
+#
+# Deliberately a standalone compose project (`docker-mirror`), not a service in
+# compose.test.yaml: the cache must outlive any one suite run, and `test.sh`
+# tears its own project down with `down -v`.
+name: docker-mirror
+
+services:
+  mirror:
+    # Pinned by digest like every other base image (AUD-697). This is the one
+    # image that cannot come *through* the cache — it is the cache.
+    image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    container_name: docker-hub-mirror
+    restart: unless-stopped
+    # Bound to the LAN, not to localhost: the deploy host and the Gitea runner
+    # are separate machines that need the same cache. ufw restricts the port to
+    # 192.168.1.0/24 (install.sh adds the rule).
+    ports:
+      - "${MIRROR_BIND:-0.0.0.0}:${MIRROR_PORT:-5001}:5000"
+    environment:
+      # Optional Docker Hub account for the upstream leg; see config.yml. The
+      # valueless form matters: an empty `REGISTRY_PROXY_USERNAME=""` would make
+      # the proxy attempt an anonymous-but-authenticated login and fail, so the
+      # variables must be *absent* when no account is configured. Compose omits
+      # a valueless entry whose variable is unset — set them in a (gitignored)
+      # ci/registry-mirror/.env to turn upstream auth on.
+      - REGISTRY_PROXY_USERNAME
+      - REGISTRY_PROXY_PASSWORD
+    volumes:
+      - ./config.yml:/etc/docker/registry/config.yml:ro
+      - mirror-data:/var/lib/registry
+    healthcheck:
+      # The registry image carries no curl/wget; its own binary can speak to it.
+      test: ["CMD", "/bin/registry", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mirror-data:
