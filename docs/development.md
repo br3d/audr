@@ -267,12 +267,25 @@ npx playwright install chromium          # once
 APP_URL=http://localhost OWNER_PASSWORD='Rand0mP@ssw0rd' npm run e2e
 ```
 
-Two things to know. First, **e2e is not containerised and does not run in CI** —
-the `e2e` profile referenced a `Dockerfile.e2e` that never existed and was
-removed in AUD-329. Second, the specs run against a **live, seeded stack**, so
+Three things to know. First, **e2e is not containerised and does not run in CI,
+deliberately** — AUD-699 settled that: the suite is local-only on a pre-release
+cadence (a checklist item in [`releases.md`](releases.md)), because the specs
+are order-dependent and host-sensitive in ways a required check cannot absorb.
+The reasoning in full, and what would have to change to revisit it, is in
+[`verification.md` § E2E tests](verification.md). The specs *are* typechecked on
+every CI run, via `tests/e2e/tsconfig.json` which `npm run typecheck` includes —
+so a stale import or a renamed export reds the gate even though no browser
+starts. Keep them compiling.
+
+Second, the specs run against a **live, seeded stack**, so
 bring one up and run `scripts/seed_dev.sh` first; `baseURL` defaults to
 `http://localhost:5173` (the Vite dev server), so set `APP_URL` when targeting
 the compose stack on `:80`. Runs are serial with no retries.
+
+Third, cases within a file **share state on purpose** — `auth.spec.ts`'s "setup
+page is unavailable once an owner exists" depends on an earlier case having
+created the owner — so do not reorder them, and do not run one case from
+mid-file against a fresh database and expect it to pass.
 
 `docs/release-1-coverage.md` records that there is no green e2e run against
 `main`. Treat a failure as possibly pre-existing, and check before assuming your

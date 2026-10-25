@@ -139,7 +139,18 @@ Tests       23 passed (23) in 8.78s
 
 ### E2E tests (Playwright)
 
-Not run in CI — there is no containerised profile. The Playwright config exists at `frontend/playwright.config.ts` and the spec files at `tests/e2e/`; run them locally with `cd frontend && npm run e2e` against a dev stack.
+**Local-only by decision, on a pre-release cadence — see the E2E status note above (AUD-699).** The Playwright config is `frontend/playwright.config.ts` and the specs are in `tests/e2e/`; run them with `cd frontend && npm run e2e` against a dev stack.
+
+Two properties of the suite are worth knowing before anyone reconsiders wiring it into a gate, because they are why the answer was "no" rather than "not yet":
+
+- The specs **share state within a file on purpose**. `auth.spec.ts`'s "setup page is unavailable once an owner exists" passes only because an earlier case in the same file created the owner; `playwright.config.ts` sets `fullyParallel: false` and `retries: 0` to accommodate that. A CI gate needs a per-spec database reset the suite does not express, so a profile built on it as-is would assert test ordering rather than the product.
+- The suite is **host-sensitive**. The 2026-10-02 operations run below lost 3 of 54 cases to `signIn()`/navigation timeouts purely from load on a shared host, while every case after the first 90 seconds passed in 7–13s. Our pipeline is one self-hosted runner that also builds images and deploys; a required browser check there would be flaky by construction, and a flaky required check trains everyone to re-run it rather than read it.
+
+Prerequisites for revisiting, in order: make the specs independent and self-seeding, *then* a real `Dockerfile.e2e` and a correctly wired app service, *then* a nightly — not per-push — profile.
+
+What is gated today in exchange: `tests/e2e/tsconfig.json` typechecks the specs under the same `strict` options as `src`, and `npm run typecheck` runs it, so a stale import or a renamed export reds CI even though no browser starts. Wiring that up immediately surfaced two real defects that had been sitting in the tree — a `total_usd: null` mock that was not assignable to its own helper's parameter type, and an unused locator in `valuation.spec.ts`.
+
+The one *contract* regression this suite uniquely guarded — the frontend sending `?period=` and not `?range=` to `/api/v1/history` — was additionally ported into Vitest (`frontend/src/test/client.test.ts`, `describe('fetchHistory')`), because the generated API types cover the response body and not the `URLSearchParams` the client builds. That assertion now runs on every push instead of waiting for a release.
 
 **Run 2026-10-02** against `tests/e2e/operations.spec.ts` (54 cases covering the US4 SchedulesPage, StatusPage, and AccountDataPage journeys at 390px and 1440px viewports), with a local dev stack up (backend on `:8000`, Vite dev server on `:5173`):
 

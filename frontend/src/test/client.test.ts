@@ -6,6 +6,7 @@ import {
   setup,
   login,
   fetchSession,
+  fetchHistory,
   logout,
   getCSRFToken,
   clearCSRFToken,
@@ -202,6 +203,41 @@ describe('ApiError', () => {
   it('falls back to HTTP status in message when body is absent', () => {
     const err = new ApiError(503)
     expect(err.message).toBe('HTTP 503')
+  })
+})
+
+// The `?period=` vs `?range=` query-parameter contract (AUD-699).
+//
+// `tests/e2e/history.spec.ts` already asserts this, but that suite is formally
+// local-only (docs/verification.md § E2E tests) and so gates nothing between
+// releases. Nothing else catches a rename: `src/api/schema.gen.ts` types the
+// response body, not the URLSearchParams this function builds, so swapping the
+// key back to `range` would typecheck, pass every other test, and 422 at
+// runtime. These two cases move that one regression into a gate that runs.
+describe('fetchHistory', () => {
+  it('sends the period as ?period= (not ?range=)', async () => {
+    const fetchMock = mockFetch(200, { period: '30d', items: [], next_cursor: null })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchHistory('30d')
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/history?period=30d')
+    expect(url).not.toContain('range=')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('appends the cursor alongside the period when paging', async () => {
+    const fetchMock = mockFetch(200, { period: 'all', items: [], next_cursor: null })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchHistory('all', 'cursor-abc')
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/history?period=all&cursor=cursor-abc')
+
+    vi.unstubAllGlobals()
   })
 })
 

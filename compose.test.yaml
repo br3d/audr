@@ -291,8 +291,20 @@ services:
 #     could not start. The API also serves no SPA assets, so APP_URL pointed at
 #     a host that returns no frontend. Playwright specs live in tests/e2e and
 #     are run locally against a dev stack: `cd frontend && npm run e2e`
-#     (config: frontend/playwright.config.ts). Re-add a containerised profile
-#     only alongside a real Dockerfile.e2e and a correctly wired app service.
+#     (config: frontend/playwright.config.ts).
+#
+#     AUD-699 closed the question rather than leaving it open: the suite is
+#     formally local-only, on the pre-release checklist in docs/releases.md,
+#     and CI *typechecks* it (tests/e2e/tsconfig.json, included by
+#     `npm run typecheck` — which is why the mounts above reproduce the repo
+#     layout). Do not re-add a containerised profile against the suite in its
+#     current shape: cases share state within a file on purpose, and
+#     playwright.config.ts sets fullyParallel:false / retries:0 to match, so a
+#     gate built on them would assert test ordering rather than the product.
+#     Prerequisites, in order: make the specs independent and self-seeding,
+#     then a real Dockerfile.e2e and a correctly wired app service, then a
+#     nightly — not per-push — profile. Reasoning in full:
+#     docs/verification.md § E2E tests.
 #   benchmark — passed --benchmark-only, but pytest-benchmark is not a dev
 #     dependency and no test carries a `benchmark` marker, so the profile
 #     always failed at collection. Re-added above in AUD-108 as a real
