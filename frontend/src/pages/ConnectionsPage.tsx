@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { fetchIntegrations, updateRpc, updateQuotes, validateIntegration, ApiError } from '../api/client'
+import {
+  fetchIntegrations,
+  updateRpc,
+  updateQuotes,
+  updateLlm,
+  validateIntegration,
+  ApiError,
+} from '../api/client'
 import type { IntegrationEntry, ProviderOption } from '../api/client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
@@ -411,6 +418,123 @@ function QuotesForm({
   )
 }
 
+function LlmForm({
+  current,
+  onSaved,
+}: {
+  current: IntegrationEntry | null
+  onSaved: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateLlm({
+        revision: current?.revision ?? '0',
+        api_key: apiKey.trim(),
+      }),
+    onSuccess: () => {
+      setEditing(false)
+      setApiKey('')
+      onSaved()
+    },
+  })
+
+  function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setValidationError(null)
+    if (!apiKey.trim()) {
+      setValidationError('An Anthropic API key is required.')
+      return
+    }
+    saveMutation.mutate()
+  }
+
+  const submitting = saveMutation.isPending
+  const error =
+    validationError ??
+    (saveMutation.error ? errorMessage(saveMutation.error, 'An unexpected error occurred.') : null)
+
+  return (
+    <section aria-labelledby="llm-heading" className="card">
+      <h2 id="llm-heading" className="section-heading mb-8">
+        AI News Analysis (Anthropic)
+      </h2>
+      <p className="muted-text mb-16">
+        Optional. Powers the "Smart news analysis" gate on the Schedules page, which scores
+        each incoming news article's significance before it is cached. Storing a key here does
+        not turn the gate on by itself — switch it on under Schedules.
+      </p>
+
+      <p className="muted-text mb-16">
+        <strong className="text-secondary">Disclosure:</strong> When the gate is on, Anthropic
+        receives each article's headline and full text for scoring. It does not receive your
+        wallet addresses, password, or session credentials, and the article text itself is
+        never stored — only the resulting summary and score are.
+      </p>
+
+      <SourceSummary
+        entry={current}
+        fallback="not configured — articles are ingested unanalyzed"
+      />
+
+      {!editing && (
+        <div className="btn-group">
+          <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>
+            {current?.configured ? 'Change Anthropic key' : 'Add Anthropic key'}
+          </button>
+        </div>
+      )}
+
+      {editing && (
+        <form onSubmit={handleSave} noValidate className="form-grid">
+          <div className="form-group">
+            <label htmlFor="llm-api-key" className="form-label">
+              Anthropic API key
+            </label>
+            <input
+              id="llm-api-key"
+              type="password"
+              className="input-folio"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              required
+              disabled={submitting}
+              autoComplete="new-password"
+            />
+            <p className="form-hint">Stored encrypted and never shown again.</p>
+          </div>
+
+          {error !== null && (
+            <p role="alert" className="alert alert-danger">
+              {error}
+            </p>
+          )}
+
+          <div className="btn-group">
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Save Anthropic key'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setEditing(false)
+                setValidationError(null)
+              }}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  )
+}
+
 export default function ConnectionsPage() {
   const queryClient = useQueryClient()
   const { data, error, isLoading } = useQuery({
@@ -424,12 +548,17 @@ export default function ConnectionsPage() {
 
   const rpc = data?.items.find((i) => i.kind === 'rpc') ?? null
   const quotes = data?.items.find((i) => i.kind === 'quotes') ?? null
+  const llm = data?.items.find((i) => i.kind === 'llm') ?? null
 
   function handleRpcSaved() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.integrations() })
   }
 
   function handleQuotesSaved() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.integrations() })
+  }
+
+  function handleLlmSaved() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.integrations() })
   }
 
@@ -454,6 +583,7 @@ export default function ConnectionsPage() {
       </p>
       <RpcForm current={rpc} onSaved={handleRpcSaved} onValidated={handleRpcSaved} />
       <QuotesForm current={quotes} onSaved={handleQuotesSaved} onValidated={handleQuotesSaved} />
+      <LlmForm current={llm} onSaved={handleLlmSaved} />
     </div>
   )
 }

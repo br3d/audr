@@ -1,8 +1,14 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchSettings, patchSettings } from '../api/client'
-import type { SettingsResponse } from '../api/client'
+import {
+  fetchSettings,
+  patchSettings,
+  fetchNewsAnalysisSetting,
+  patchNewsAnalysisSetting,
+  fetchIntegrations,
+} from '../api/client'
+import type { SettingsResponse, NewsAnalysisSetting } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { errorMessage } from '../api/errorMessage'
 
@@ -136,6 +142,168 @@ function usageProjection(settings: SettingsResponse): string {
   return parts.length ? parts.join(' · ') : 'No schedules enabled.'
 }
 
+interface NewsAnalysisDraft {
+  enabled: boolean
+  importance_threshold: number
+}
+
+function NewsAnalysisCard() {
+  const queryClient = useQueryClient()
+
+  const { data, error, isLoading } = useQuery({
+    queryKey: queryKeys.newsAnalysisSetting(),
+    queryFn: fetchNewsAnalysisSetting,
+  })
+
+  // Only used to render the "enabled but no key configured" warning — the
+  // Anthropic key itself is managed on the Connections page.
+  const { data: integrations } = useQuery({
+    queryKey: queryKeys.integrations(),
+    queryFn: fetchIntegrations,
+  })
+  const llmConfigured = integrations?.items.some((i) => i.kind === 'llm' && i.configured) ?? false
+
+  const [draft, setDraft] = useState<NewsAnalysisDraft | null>(null)
+  const current: NewsAnalysisDraft | null =
+    draft ?? (data ? { enabled: data.enabled, importance_threshold: data.importance_threshold } : null)
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      patchNewsAnalysisSetting({
+        enabled: current!.enabled,
+        importance_threshold: current!.importance_threshold,
+        expected_revision: (data as NewsAnalysisSetting).revision,
+      }),
+    onSuccess: () => {
+      setDraft(null)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.newsAnalysisSetting() })
+    },
+  })
+
+  function update(next: Partial<NewsAnalysisDraft>) {
+    if (!current) return
+    setDraft({ ...current, ...next })
+    saveMutation.reset()
+  }
+
+  if (isLoading) return <p aria-busy="true">Loading smart analysis settings…</p>
+
+  if (error) {
+    return (
+      <p role="alert" className="alert alert-danger">
+        Failed to load smart analysis settings. {errorMessage(error, 'Please try again.')}
+      </p>
+    )
+  }
+
+  if (!current) return null
+
+  const saving = saveMutation.isPending
+  const saveError = saveMutation.error
+    ? errorMessage(saveMutation.error, 'Failed to save smart analysis settings.')
+    : null
+  const saveMsg = saveMutation.isSuccess ? 'Smart analysis settings saved.' : null
+
+  return (
+    <form
+      className="card mb-20"
+      aria-label="Smart news analysis"
+      onSubmit={(e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault()
+        saveMutation.mutate()
+      }}
+    >
+      <div className="schedule-card-header">
+        <span className="schedule-name">Smart news analysis</span>
+        <label className="toggle-row" style={{ cursor: 'pointer' }}>
+          <input
+            id="news-analysis-enabled"
+            type="checkbox"
+            className="checkbox-folio"
+            checked={current.enabled}
+            disabled={saving}
+            onChange={(e) => update({ enabled: e.target.checked })}
+            aria-label="Enable smart news analysis"
+          />
+          <span className="toggle-label">{current.enabled ? 'Enabled' : 'Disabled'}</span>
+        </label>
+      </div>
+
+      <p className="muted-text mt-8">
+        When on, each incoming news article is scored for significance by Anthropic (an
+        external, third-party provider) before it is cached. Articles scoring below the
+        threshold are not saved. Off by default, and off behaves exactly like today — nothing
+        changes in how news is ingested or shown.
+      </p>
+
+      {current.enabled && (
+        <div className="schedule-fields">
+          <div className="form-group">
+            <label htmlFor="news-analysis-threshold" className="form-label">
+              Importance threshold — currently <strong>{current.importance_threshold}</strong>
+              /100
+            </label>
+            <input
+              id="news-analysis-threshold"
+              type="range"
+              className="input-folio"
+              min={0}
+              max={100}
+              step={5}
+              value={current.importance_threshold}
+              disabled={saving}
+              style={{ maxWidth: 300 }}
+              onChange={(e) => update({ importance_threshold: parseInt(e.target.value, 10) })}
+            />
+            <p className="form-hint">
+              Articles scored below this are not saved. Higher means fewer, more significant
+              articles.
+            </p>
+          </div>
+
+          {!llmConfigured && (
+            <p role="alert" className="alert alert-warning">
+              Smart analysis is on, but no Anthropic key is configured yet — every article
+              will be ingested unanalyzed (same as off) until you add one on the Connections
+              page.
+            </p>
+          )}
+        </div>
+      )}
+
+      {saveError !== null && (
+        <p role="alert" className="alert alert-danger mt-12">
+          {saveError}
+        </p>
+      )}
+      {saveMsg !== null && (
+        <p role="status" className="alert alert-success mt-12">
+          {saveMsg}
+        </p>
+      )}
+
+      <div className="btn-group mt-12">
+        <button type="submit" className="btn btn-primary" disabled={saving || draft === null}>
+          {saving ? 'Saving…' : 'Save smart analysis settings'}
+        </button>
+        {draft !== null && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              setDraft(null)
+              saveMutation.reset()
+            }}
+            disabled={saving}
+          >
+            Discard changes
+          </button>
+        )}
+      </div>
+    </form>
+  )
+}
+
 export default function SchedulesPage() {
   const queryClient = useQueryClient()
 
@@ -228,6 +396,8 @@ export default function SchedulesPage() {
         Configure how often audr fetches balances, discovers tokens, and retrieves price quotes. Changes take
         effect after the current run completes.
       </p>
+
+      <NewsAnalysisCard />
 
       <div className="card mb-20">
         <div className="metric-label mb-8">Projected usage</div>

@@ -122,6 +122,58 @@ describe('NewsFeed', () => {
     await unmount(container, root)
   })
 
+  it('renders articles with no analysis exactly as before — no summary or badge placeholder', async () => {
+    mockFetchAssetNews.mockResolvedValue(
+      makeResponse({
+        total: 1,
+        news: [
+          {
+            id: 'n1',
+            source: 'coingecko',
+            title: 'ETH breaks new ground',
+            url: 'https://example.com/eth-news',
+            news_site: 'Example Daily',
+            thumbnail_url: null,
+            published_at: '2026-06-01T00:00:00Z',
+            fetched_at: '2026-09-30T00:00:00Z',
+          },
+        ],
+      }),
+    )
+    const { container, root } = mount(React.createElement(NewsFeed, { items: [ETH_ITEM] }))
+    await flush()
+    expect(container.querySelector('.news-item-summary')).toBeNull()
+    expect(container.textContent).not.toContain('Significance')
+    await unmount(container, root)
+  })
+
+  it('shows the LLM summary and significance badge when the article was analyzed', async () => {
+    mockFetchAssetNews.mockResolvedValue(
+      makeResponse({
+        total: 1,
+        news: [
+          {
+            id: 'n1',
+            source: 'coingecko',
+            title: 'ETH breaks new ground',
+            url: 'https://example.com/eth-news',
+            news_site: 'Example Daily',
+            thumbnail_url: null,
+            published_at: '2026-06-01T00:00:00Z',
+            fetched_at: '2026-09-30T00:00:00Z',
+            summary: 'A major protocol upgrade shipped successfully.',
+            importance: 85,
+          } as AssetNewsResponse['news'][number],
+        ],
+      }),
+    )
+    const { container, root } = mount(React.createElement(NewsFeed, { items: [ETH_ITEM] }))
+    await flush()
+    expect(container.textContent).toContain('A major protocol upgrade shipped successfully.')
+    expect(container.textContent).toContain('Significance 85')
+    await unmount(container, root)
+  })
+
   it('shows a per-asset error using the contract envelope message, without failing other assets', async () => {
     mockFetchAssetNews.mockImplementation((assetId: string) => {
       if (assetId === 'asset-eth') {

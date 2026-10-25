@@ -28,6 +28,7 @@ export const queryKeys = {
 
   integrations: () => ['integrations'] as const,
   settings: () => ['settings'] as const,
+  newsAnalysisSetting: () => ['news-analysis-setting'] as const,
   systemStatus: () => ['system-status'] as const,
 
   jobs: () => ['jobs'] as const,

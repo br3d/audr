@@ -402,6 +402,15 @@ export function updateQuotes(input: UpdateQuotesInput): Promise<IntegrationEntry
   return put<IntegrationEntry>('/integrations/quotes', input)
 }
 
+export interface UpdateLlmInput {
+  revision: string
+  api_key: string
+}
+
+export function updateLlm(input: UpdateLlmInput): Promise<IntegrationEntry> {
+  return put<IntegrationEntry>('/integrations/llm', input)
+}
+
 export function validateIntegration(kind: 'rpc' | 'quotes'): Promise<JobRef> {
   return post<JobRef>(`/integrations/${kind}/validate`)
 }
@@ -589,6 +598,32 @@ export function fetchSettings(): Promise<SettingsResponse> {
 
 export function patchSettings(input: PatchSettingsInput): Promise<SettingsResponse> {
   return request<SettingsResponse>('PATCH', '/settings', input)
+}
+
+// --- News analysis gate settings types (AUD-658/AUD-659) ---
+
+export interface NewsAnalysisSetting {
+  enabled: boolean
+  importance_threshold: number
+  revision: number
+}
+
+export interface NewsAnalysisSettingPatch {
+  enabled?: boolean
+  importance_threshold?: number
+  expected_revision?: number
+}
+
+// --- News analysis gate settings API ---
+
+export function fetchNewsAnalysisSetting(): Promise<NewsAnalysisSetting> {
+  return get<NewsAnalysisSetting>('/settings/news-analysis')
+}
+
+export function patchNewsAnalysisSetting(
+  input: NewsAnalysisSettingPatch,
+): Promise<NewsAnalysisSetting> {
+  return patch<NewsAnalysisSetting>('/settings/news-analysis', input)
 }
 
 // --- Status API ---

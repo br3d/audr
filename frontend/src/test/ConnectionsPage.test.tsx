@@ -11,17 +11,19 @@ vi.mock('../api/client', async () => {
     fetchIntegrations: vi.fn(),
     updateRpc: vi.fn(),
     updateQuotes: vi.fn(),
+    updateLlm: vi.fn(),
     validateIntegration: vi.fn(),
     ApiError: MockApiError,
   }
 })
 
 import ConnectionsPage from '../pages/ConnectionsPage'
-import { fetchIntegrations, updateQuotes } from '../api/client'
+import { fetchIntegrations, updateQuotes, updateLlm } from '../api/client'
 import type { IntegrationEntry, IntegrationsResponse, ProviderOption } from '../api/client'
 
 const mockFetchIntegrations = vi.mocked(fetchIntegrations)
 const mockUpdateQuotes = vi.mocked(updateQuotes)
+const mockUpdateLlm = vi.mocked(updateLlm)
 
 const QUOTE_OPTIONS: ProviderOption[] = [
   {
@@ -65,6 +67,18 @@ function defaultEntries(): IntegrationEntry[] {
       effective_source: 'CoinMarketCap (public endpoints)',
       using_default: true,
       options: QUOTE_OPTIONS,
+    },
+    {
+      kind: 'llm',
+      configured: false,
+      enabled: true,
+      provider: 'anthropic',
+      host_label: null,
+      revision: '0',
+      health,
+      effective_source: null,
+      using_default: false,
+      options: [],
     },
   ]
 }
@@ -202,5 +216,66 @@ describe('ConnectionsPage — the page must describe the source actually in use 
       provider: 'coinmarketcap',
       api_key: undefined,
     })
+  })
+
+  it('offers an Anthropic key field for the llm integration, masked like the others', async () => {
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
+
+    expect(container.querySelector('#llm-api-key')).toBeNull()
+
+    await act(async () => {
+      buttonByText(container, 'Add Anthropic key').click()
+    })
+
+    const input = container.querySelector('#llm-api-key') as HTMLInputElement
+    expect(input).toBeTruthy()
+    expect(input.type).toBe('password')
+    expect(container.textContent).toContain('Stored encrypted and never shown again.')
+    // No validate button — the backend has no validation job for this kind yet.
+    expect(
+      Array.from(container.querySelectorAll('button')).some((b) =>
+        /test connection|test.*anthropic/i.test(b.textContent ?? ''),
+      ),
+    ).toBe(false)
+  })
+
+  it('requires a non-empty key before saving the llm integration', async () => {
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
+
+    await act(async () => {
+      buttonByText(container, 'Add Anthropic key').click()
+    })
+    await act(async () => {
+      buttonByText(container, 'Save Anthropic key').click()
+    })
+
+    expect(mockUpdateLlm).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('An Anthropic API key is required.')
+  })
+
+  it('saves the Anthropic key and never echoes it back into the DOM', async () => {
+    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true, effective_source: 'Anthropic' })
+    ;({ container, root } = mountPage())
+    await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
+
+    await act(async () => {
+      buttonByText(container, 'Add Anthropic key').click()
+    })
+
+    const input = container.querySelector('#llm-api-key') as HTMLInputElement
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, 'sk-ant-secret-value')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await act(async () => {
+      buttonByText(container, 'Save Anthropic key').click()
+    })
+
+    expect(mockUpdateLlm).toHaveBeenCalledWith({ revision: '0', api_key: 'sk-ant-secret-value' })
+    expect(container.innerHTML).not.toContain('sk-ant-secret-value')
   })
 })

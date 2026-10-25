@@ -1,9 +1,19 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { fetchAssetNews } from '../api/client'
+import type { AssetNewsItem } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { errorMessage } from '../api/errorMessage'
 
 const PAGE_SIZE = 5
+
+// `summary`/`importance` are written to `asset_news` by the LLM significance
+// gate (AUD-658) but not yet exposed on AssetNewsItem by the backend — kept
+// optional here so this renders exactly as before for every article until
+// that lands, and picks the fields up automatically once it does.
+type AnalyzedNewsItem = AssetNewsItem & {
+  summary?: string | null
+  importance?: number | null
+}
 
 export interface NewsFeedAsset {
   asset_id: string
@@ -32,7 +42,7 @@ function AssetNewsCard({ asset }: AssetNewsCardProps) {
     },
   })
 
-  const items = data?.pages.flatMap((p) => p.news) ?? []
+  const items = (data?.pages.flatMap((p) => p.news) ?? []) as AnalyzedNewsItem[]
   const total = data?.pages[0]?.total ?? null
 
   return (
@@ -67,7 +77,17 @@ function AssetNewsCard({ asset }: AssetNewsCardProps) {
               </a>
               <div className="news-item-meta text-secondary">
                 {n.news_site} · {formatPublishedAt(n.published_at)}
+                {typeof n.importance === 'number' && (
+                  <span
+                    className="badge badge-neutral"
+                    style={{ marginLeft: 8 }}
+                    title="LLM-scored significance, 0–100"
+                  >
+                    Significance {n.importance}
+                  </span>
+                )}
               </div>
+              {n.summary && <p className="news-item-summary text-secondary mt-4">{n.summary}</p>}
             </li>
           ))}
         </ul>
