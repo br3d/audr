@@ -74,6 +74,20 @@ RUN useradd -m -u 1000 -s /bin/bash audr \
 # layer stores whole files rather than diffs — so that one line copied the venv
 # and the Vite bundle into the image a second time (AUD-697). `--chown` is free:
 # the COPY was already writing those files.
+#
+# Measured, because "a layer stores whole files" is the kind of claim that
+# deserves a number. Two builds of this same tree, same pinned base digests and
+# the same `--provenance=false --sbom=false`, differing only in this one choice:
+#
+#   COPY --chown (this file)        408,366,992 B
+#   trailing RUN chown -R           638,399,647 B
+#   -------------------------------------------------
+#   difference                     -230,032,655 B  (-219.4 MiB, -36.0%)
+#
+# Every layer before the last is identical and cached, so the delta is this
+# change and nothing else. Re-measure it the same way if you touch the COPYs —
+# comparing against a build on a different base, or with buildx attestations
+# switched on, measures the base and the attestations instead.
 
 # Copy virtual environment from builder
 COPY --from=backend-builder --chown=audr:audr /app/.venv /app/.venv

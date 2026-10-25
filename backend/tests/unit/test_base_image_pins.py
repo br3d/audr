@@ -74,7 +74,18 @@ SERVICE_RE = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):\s*$")
 # `worker` in compose.yaml share an anchor pointing at our own GHCR tag, which
 # scripts/promote-image.py rewrites per release and test_version.py already
 # guards.
-LOCALLY_BUILT_PREFIXES = ("ghcr.io/br3d/", "audr-", "${")
+#
+# `*` is the YAML alias form and is load-bearing here, not defensive padding.
+# These checks read the literal text of the line, deliberately — a YAML parse
+# would resolve the anchor and hide which line carries the pin. The consequence
+# is that `migrate`/`api`/`worker` appear as the literal `*backend_image`, never
+# as the `ghcr.io/br3d/...` the anchor expands to. Matching only the expanded
+# prefixes therefore excluded nothing at all and reported those three services
+# as unpinned: this list was the first version's bug, found by running these
+# regexes over the tree rather than by reading them. An alias is excluded
+# because of what it is — a reference to an image pinned at its anchor — not
+# because of a prefix of the value it happens to expand to.
+LOCALLY_BUILT_PREFIXES = ("ghcr.io/br3d/", "audr-", "${", "*")
 
 
 def _skip_if_unmounted(path: Path) -> None:

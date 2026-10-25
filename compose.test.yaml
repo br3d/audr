@@ -35,7 +35,17 @@ services:
   # run ended with "unlinkat .../tests/fixtures/wiremock/mappings: permission
   # denied" and leaked an undeletable checkout under ~/.cache/act. See AUD-333.
   provider-mock:
-    image: wiremock/wiremock:3.13.0
+    # Digest-pinned like every other external image (AUD-697). This one was
+    # missed when the rest were pinned, and the guard in
+    # backend/tests/unit/test_base_image_pins.py is what found it — which is the
+    # argument for that guard existing, since the pins it checks were written in
+    # the same change that left this line floating.
+    #
+    # Unpaired, unlike the other pins: nothing else in the tree has to move with
+    # it, because the suite talks to this container over HTTP on the admin API
+    # and shares no artifact with it. Bump it on its own. Not reached by
+    # Dependabot's `docker` ecosystem either — that reads `FROM` lines only.
+    image: wiremock/wiremock:3.13.0@sha256:8d9a0330e4de2f9e2035fc290df0a370ac7c2a92072a6c8752a42597310edb09
     command: ["--port", "8080", "--verbose"]
     networks:
       - test-net

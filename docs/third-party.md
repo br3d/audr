@@ -45,10 +45,11 @@ is checked against it**, not the other way round.
 | `Dockerfile` `frontend-builder`; `compose.test.yaml` `frontend-tests` | `node:22-alpine` | `sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage and test runner only — not shipped. |
 | `Dockerfile` `backend-builder` + `runtime`; `Dockerfile.test` | `python:3.14-slim` | `sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
 | `compose.yaml` `db`; `compose.test.yaml` `db-test` | `postgres:16-alpine` | `sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36` | PostgreSQL: PostgreSQL Licence (BSD-style). Alpine base as above. Not redistributed — pulled from Docker Hub by the deploy host. |
+| `compose.test.yaml` `provider-mock` | `wiremock/wiremock:3.13.0` | `sha256:8d9a0330e4de2f9e2035fc290df0a370ac7c2a92072a6c8752a42597310edb09` | WireMock: Apache-2.0. Test runner only — never shipped and never pulled by the deploy host. |
 
-**Three groups, not five rows, and the grouping is load-bearing.** Each row's
-members are pinned to *one* digest on purpose, and splitting them is a silent
-bug rather than a cosmetic one:
+**Three paired groups and one unpaired row, and the grouping is load-bearing.**
+Each of the first three rows has members pinned to *one* digest on purpose, and
+splitting them is a silent bug rather than a cosmetic one:
 
 - `backend-builder` == `runtime` — the venv `runtime` copies out of
   `backend-builder` is built against that stage's interpreter.
@@ -58,14 +59,32 @@ bug rather than a cosmetic one:
   built by one Node.
 - `db` == `db-test` — the suite runs against the engine production runs.
 
+`provider-mock` is the exception and is pinned alone: the suite reaches it over
+HTTP and registers its stubs through WireMock's admin API at runtime, so it
+shares no artifact with anything the tree builds and nothing has to move with
+it. It is in this table because it was the one external image the first pass of
+AUD-697 left floating — and because the guard described below is what found
+that, on its first run, in the same change that introduced it.
+
 Pin the **multi-arch manifest-list** digest, not a per-architecture one, or the
 build stops working on one of the two arches. To bump by hand, resolve the tag
 and paste the result, then update the row here:
 
 ```bash
-docker buildx imagetools inspect node:22-alpine     --format '{{.Manifest.Digest}}'
-docker buildx imagetools inspect python:3.14-slim   --format '{{.Manifest.Digest}}'
-docker buildx imagetools inspect postgres:16-alpine --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect node:22-alpine         --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect python:3.14-slim       --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect postgres:16-alpine     --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect wiremock/wiremock:3.13.0 --format '{{.Manifest.Digest}}'
+```
+
+Docker Hub rate-limits unauthenticated manifest reads, and that limit is per
+host rather than per command — on a box that has been building all day the
+command above can fail with `429 Too Many Requests` while the tag is perfectly
+resolvable. The local daemon already knows the answer for any image it has
+pulled, and asking it costs no pull at all:
+
+```bash
+docker image inspect wiremock/wiremock:3.13.0 --format '{{json .RepoDigests}}'
 ```
 
 For the two **Dockerfiles**, normally nobody does: Dependabot's `docker`
@@ -75,7 +94,8 @@ base nobody notices. That entry was added by AUD-697 alongside the pins — befo
 it, this table had drifted two revisions and four weeks behind the tree.
 
 Dependabot reads `FROM` lines only, so the **compose** pins (`postgres` for
-`db`/`db-test`, `node` for `frontend-tests`) are hand-maintained. They are not
+`db`/`db-test`, `node` for `frontend-tests`, `wiremock` for `provider-mock`) are
+hand-maintained. Except for `wiremock` they are not
 independent bumps: move each one together with the Dockerfile pin it shares a
 digest with, per the grouping above. A Dependabot pull request that bumps
 `Dockerfile`'s `python` is therefore complete on its own, but one that bumps
@@ -111,7 +131,16 @@ curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
 ### 1.3 Not pinned
 
 Nothing, in the sense of unattributed licences — and as of AUD-697, nothing in
-the sense of floating versions either. The base images are digest-pinned (see
+the sense of floating versions either. That second claim is checked rather than
+asserted: `backend/tests/unit/test_base_image_pins.py` fails the suite if any
+externally-pulled image in `Dockerfile`, `Dockerfile.test`, `compose.yaml` or
+`compose.test.yaml` carries a tag with no `@sha256:` digest. It is checked
+because the first version of this sentence was false when it was written —
+`compose.test.yaml`'s `provider-mock` was still floating on `wiremock:3.13.0`,
+and the guard caught it on its first run. A claim like this one is exactly the
+kind that stops being true quietly.
+
+The base images are digest-pinned (see
 1.1), so two builds of one commit cannot sit on different base revisions; the
 Python and npm lockfiles are pinned; `uv` itself is pinned (`uv==0.13.5` in both
 `Dockerfile` and `Dockerfile.test` — `uv sync --frozen` is deterministic given
