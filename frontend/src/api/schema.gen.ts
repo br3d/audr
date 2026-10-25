@@ -1326,12 +1326,16 @@ export interface components {
             fetched_at: string;
             /** Id */
             id: string;
+            /** Importance */
+            importance?: number | null;
             /** News Site */
             news_site: string;
             /** Published At */
             published_at: string;
             /** Source */
             source: string;
+            /** Summary */
+            summary?: string | null;
             /** Thumbnail Url */
             thumbnail_url: string | null;
             /** Title */

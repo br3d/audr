@@ -72,6 +72,7 @@ class JobKind(StrEnum):
     VALUATION = "valuation"
     VALIDATE_RPC = "validate_rpc"
     VALIDATE_QUOTES = "validate_quotes"
+    VALIDATE_LLM = "validate_llm"
     EVENT_INDEXER = "event_indexer"
     NEWS_REFRESH = "news_refresh"
     ASSET_ICON_REFRESH = "asset_icon_refresh"

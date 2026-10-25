@@ -9,6 +9,7 @@ Covers:
   - PUT /api/v1/integrations/rpc: 409 on revision conflict
   - PUT /api/v1/integrations/quotes: saves credentials
   - POST /api/v1/integrations/rpc/validate: queues a validate_rpc job
+  - POST /api/v1/integrations/llm/validate: queues a validate_llm job (AUD-743)
   - POST /api/v1/integrations/unknown/validate: 404
   - Auth fix: GET /wallets returns 200 without CSRF token (session-only)
   - Auth fix: GET /settings returns 200 without CSRF token (session-only)
@@ -367,6 +368,20 @@ async def test_validate_rpc_queues_job(http_client: httpx.AsyncClient) -> None:
     csrf = await _setup_and_get_csrf(http_client)
     r = await http_client.post(
         f"{_INTEGRATIONS_URL}/rpc/validate",
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 202
+    data = r.json()
+    assert "run_id" in data
+    assert data["coalesced"] is False
+
+
+@pytest.mark.integration
+async def test_validate_llm_queues_job(http_client: httpx.AsyncClient) -> None:
+    """The llm kind validates like rpc/quotes rather than 404ing (AUD-743)."""
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await http_client.post(
+        f"{_INTEGRATIONS_URL}/llm/validate",
         headers={"x-csrf-token": csrf},
     )
     assert r.status_code == 202

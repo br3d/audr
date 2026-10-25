@@ -1,6 +1,6 @@
 """Worker process entrypoint — DISCOVERY, BALANCE_SCAN, QUOTE_REFRESH, EVENT_INDEXER,
-NEWS_REFRESH, ASSET_ICON_REFRESH, and on-demand VALIDATE_RPC / VALIDATE_QUOTES job
-handlers (AUD-244/AUD-67/AUD-307/AUD-313/AUD-308/AUD-385)."""
+NEWS_REFRESH, ASSET_ICON_REFRESH, and on-demand VALIDATE_RPC / VALIDATE_QUOTES /
+VALIDATE_LLM job handlers (AUD-244/AUD-67/AUD-307/AUD-313/AUD-308/AUD-385/AUD-743)."""
 
 from __future__ import annotations
 
@@ -33,7 +33,11 @@ from audr.jobs.store import (
     set_checkpoint,
     upsert_worker_status,
 )
-from audr.jobs.validation import handle_validate_quotes, handle_validate_rpc
+from audr.jobs.validation import (
+    handle_validate_llm,
+    handle_validate_quotes,
+    handle_validate_rpc,
+)
 from audr.jobs.worker import Worker
 from audr.operations.cleanup import cleanup_expired_auth_rows
 from audr.operations.healthcheck import WORKER_BEAT_INTERVAL_S, WORKER_HEARTBEAT_PATH
@@ -504,6 +508,12 @@ async def _main() -> None:
         handler=handle_validate_quotes,
         on_demand=True,
     )
+    validate_llm_worker = Worker(
+        factory,
+        kind=JobKind.VALIDATE_LLM,
+        handler=handle_validate_llm,
+        on_demand=True,
+    )
 
     logger.info("worker started")
     while not stop.is_set():
@@ -518,6 +528,7 @@ async def _main() -> None:
             did_work |= await valuation_worker.run_once()
             did_work |= await validate_rpc_worker.run_once()
             did_work |= await validate_quotes_worker.run_once()
+            did_work |= await validate_llm_worker.run_once()
             # Lightweight canonicality sweep — catches any observations
             # invalidated since the last snapshot was published.
             async with factory() as session:

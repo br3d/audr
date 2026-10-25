@@ -6,14 +6,10 @@ import { errorMessage } from '../api/errorMessage'
 
 const PAGE_SIZE = 5
 
-// `summary`/`importance` are written to `asset_news` by the LLM significance
-// gate (AUD-658) but not yet exposed on AssetNewsItem by the backend — kept
-// optional here so this renders exactly as before for every article until
-// that lands, and picks the fields up automatically once it does.
-type AnalyzedNewsItem = AssetNewsItem & {
-  summary?: string | null
-  importance?: number | null
-}
+// `summary`/`importance` are written to `asset_news` only by the LLM
+// significance gate (AUD-658) and exposed on AssetNewsItem by AUD-743 — null
+// for every article ingested with the gate off, so each is rendered only
+// when present.
 
 export interface NewsFeedAsset {
   asset_id: string
@@ -42,7 +38,7 @@ function AssetNewsCard({ asset }: AssetNewsCardProps) {
     },
   })
 
-  const items = (data?.pages.flatMap((p) => p.news) ?? []) as AnalyzedNewsItem[]
+  const items: AssetNewsItem[] = data?.pages.flatMap((p) => p.news) ?? []
   const total = data?.pages[0]?.total ?? null
 
   return (

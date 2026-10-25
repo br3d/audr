@@ -21,6 +21,7 @@ import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 import httpx
 
@@ -114,7 +115,7 @@ def _build_prompt(*, title: str, text: str, asset_symbol: str, asset_name: str) 
     return f"Held asset: {asset_name} ({asset_symbol})\nHeadline: {title}\n\nArticle text:\n{body}"
 
 
-def _parse_response(payload: dict, *, model: str) -> ClassificationResult:
+def _parse_response(payload: dict[str, Any], *, model: str) -> ClassificationResult:
     try:
         content = payload["content"][0]["text"]
         usage = payload["usage"]
@@ -193,19 +194,45 @@ class AnthropicClient:
         docstring: this method never degrades silently, the caller decides
         what fail-open means.
         """
-        body = {
-            "model": self._model,
-            "max_tokens": self._max_output_tokens,
-            "system": _SYSTEM_PROMPT,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _build_prompt(
-                        title=title, text=text, asset_symbol=asset_symbol, asset_name=asset_name
-                    ),
-                }
-            ],
-        }
+        payload = await self._post_messages(
+            {
+                "model": self._model,
+                "max_tokens": self._max_output_tokens,
+                "system": _SYSTEM_PROMPT,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _build_prompt(
+                            title=title, text=text, asset_symbol=asset_symbol, asset_name=asset_name
+                        ),
+                    }
+                ],
+            }
+        )
+        return _parse_response(payload, model=self._model)
+
+    async def check_connectivity(self) -> None:
+        """Probe the stored key with the smallest possible Messages call.
+
+        The cheapest check that proves what the owner actually wants to know —
+        that *this* key reaches *this* model (AUD-743). A key with no credit,
+        a revoked key, and a model the account cannot call all fail here the
+        same way they would fail mid-ingest, where the gate swallows them to
+        stay fail-open (AUD-658) and the owner never sees why.
+
+        Returns None on success; raises an `LlmUnavailable` subclass otherwise,
+        which is what the VALIDATE_LLM job turns into the health badge.
+        """
+        await self._post_messages(
+            {
+                "model": self._model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+        )
+
+    async def _post_messages(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST to /v1/messages with this client's retry and error mapping."""
         headers = {
             "x-api-key": self._api_key,
             "anthropic-version": _API_VERSION,
@@ -237,7 +264,13 @@ class AnthropicClient:
             if not response.is_success:
                 raise LlmResponseError(f"HTTP {response.status_code}")
 
-            return _parse_response(response.json(), model=self._model)
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise LlmResponseError(f"non-JSON response body: {exc}") from exc
+            if not isinstance(payload, dict):
+                raise LlmResponseError("response body was not a JSON object")
+            return payload
 
         # Unreachable: the loop above always returns or raises.
         raise LlmTimeout("exhausted retries") from last_exc

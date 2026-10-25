@@ -185,3 +185,81 @@ async def test_requires_session(
     unauth.cookies.clear()
     r = await unauth.get(f"/api/v1/assets/{asset_id}/news")
     assert r.status_code == 401
+
+
+# --- LLM significance gate fields (AUD-658 writes them, AUD-743 exposes them) ---
+
+
+async def _seed_analyzed_news(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    asset_id: str,
+    external_id: str,
+    summary: str,
+    importance: int,
+) -> None:
+    async with db_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO asset_news
+                      (asset_id, source, external_id, title, url, news_site,
+                       published_at, summary, importance)
+                    VALUES
+                      (:asset_id, 'gdelt', :external_id, 'Analyzed article',
+                       'https://example.com/' || :external_id, 'Example',
+                       '2026-05-01T00:00:00Z', :summary, :importance)
+                    """
+                ),
+                {
+                    "asset_id": asset_id,
+                    "external_id": external_id,
+                    "summary": summary,
+                    "importance": importance,
+                },
+            )
+
+
+async def test_returns_summary_and_importance_when_set(
+    seeded_client,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _csrf = seeded_client
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_analyzed_news(
+        db_session_factory,
+        asset_id=asset_id,
+        external_id="analyzed",
+        summary="The protocol was exploited for $10M.",
+        importance=85,
+    )
+
+    r = await client.get(f"/api/v1/assets/{asset_id}/news")
+    assert r.status_code == 200
+    item = r.json()["news"][0]
+    assert item["summary"] == "The protocol was exploited for $10M."
+    assert item["importance"] == 85
+
+
+async def test_summary_and_importance_are_null_for_unanalyzed_news(
+    seeded_client,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Gate off (or failed open) means no summary — the fields must still be
+    present and null rather than missing, so the UI renders neither."""
+    client, _csrf = seeded_client
+    asset_id = await _seed_asset(db_session_factory)
+    await _seed_news(
+        db_session_factory,
+        asset_id=asset_id,
+        external_id="plain",
+        title="Plain article",
+        published_at="2026-01-01T00:00:00Z",
+    )
+
+    r = await client.get(f"/api/v1/assets/{asset_id}/news")
+    assert r.status_code == 200
+    item = r.json()["news"][0]
+    assert item["summary"] is None
+    assert item["importance"] is None

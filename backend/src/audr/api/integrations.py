@@ -4,7 +4,7 @@ GET  /api/v1/integrations               → IntegrationsResponse
 PUT  /api/v1/integrations/rpc           → IntegrationEntry
 PUT  /api/v1/integrations/quotes        → IntegrationEntry
 PUT  /api/v1/integrations/llm           → IntegrationEntry (AUD-658, Anthropic key)
-POST /api/v1/integrations/{kind}/validate → JobRef
+POST /api/v1/integrations/{kind}/validate → JobRef (rpc | quotes | llm)
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ _DB_TO_FE: dict[str, str] = {v: k for k, v in _FE_TO_DB.items()}
 _KIND_TO_JOB: dict[str, JobKind] = {
     "rpc": JobKind.VALIDATE_RPC,
     "quotes": JobKind.VALIDATE_QUOTES,
+    "llm": JobKind.VALIDATE_LLM,
 }
 
 # The quote providers the backend can actually drive, in the order the owner

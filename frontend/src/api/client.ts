@@ -411,7 +411,7 @@ export function updateLlm(input: UpdateLlmInput): Promise<IntegrationEntry> {
   return put<IntegrationEntry>('/integrations/llm', input)
 }
 
-export function validateIntegration(kind: 'rpc' | 'quotes'): Promise<JobRef> {
+export function validateIntegration(kind: 'rpc' | 'quotes' | 'llm'): Promise<JobRef> {
   return post<JobRef>(`/integrations/${kind}/validate`)
 }
 

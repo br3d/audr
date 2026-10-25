@@ -734,6 +734,17 @@
             "title": "Id",
             "type": "string"
           },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance"
+          },
           "news_site": {
             "title": "News Site",
             "type": "string"
@@ -745,6 +756,17 @@
           "source": {
             "title": "Source",
             "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
           },
           "thumbnail_url": {
             "anyOf": [

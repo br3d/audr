@@ -183,3 +183,85 @@ async def test_classify_article_raises_response_error_on_server_error() -> None:
                 )
         finally:
             await client.close()
+
+
+# --- check_connectivity: the VALIDATE_LLM probe (AUD-743) ---------------------
+#
+# The probe shares classify_article's request/retry/error mapping, so these
+# only pin what is specific to it: the minimal request body it sends, and that
+# it reports success/failure rather than parsing a decision.
+
+
+@pytest.mark.contract
+async def test_check_connectivity_sends_a_one_token_request() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(_URL).mock(
+            return_value=Response(
+                200,
+                json={
+                    "content": [{"type": "text", "text": "p"}],
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+        )
+        client = AnthropicClient(api_key="sk-test", model="claude-haiku-4-5")
+        try:
+            await client.check_connectivity()
+        finally:
+            await client.close()
+
+    import json
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["max_tokens"] == 1
+    assert body["model"] == "claude-haiku-4-5"
+    # No system prompt and no article text — this proves reachability only.
+    assert "system" not in body
+
+
+@pytest.mark.contract
+async def test_check_connectivity_does_not_parse_a_decision() -> None:
+    """A 200 that is not a classification still counts as reachable."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(_URL).mock(return_value=Response(200, json={"content": [], "usage": {}}))
+        client = AnthropicClient(api_key="sk-test")
+        try:
+            await client.check_connectivity()
+        finally:
+            await client.close()
+
+
+@pytest.mark.contract
+async def test_check_connectivity_raises_no_api_key_on_401() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(_URL).mock(return_value=Response(401))
+        client = AnthropicClient(api_key="sk-bad")
+        try:
+            with pytest.raises(NoApiKey):
+                await client.check_connectivity()
+        finally:
+            await client.close()
+
+
+@pytest.mark.contract
+async def test_check_connectivity_raises_response_error_on_server_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(_URL).mock(return_value=Response(500))
+        client = AnthropicClient(api_key="sk-test")
+        try:
+            with pytest.raises(LlmResponseError):
+                await client.check_connectivity()
+        finally:
+            await client.close()
+
+
+@pytest.mark.contract
+async def test_check_connectivity_raises_rate_limited_on_persistent_429() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(_URL).mock(return_value=Response(429))
+        client = AnthropicClient(api_key="sk-test", retries=0)
+        try:
+            with pytest.raises(LlmRateLimited):
+                await client.check_connectivity()
+        finally:
+            await client.close()

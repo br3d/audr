@@ -35,6 +35,11 @@ class AssetNewsItem(BaseModel):
     thumbnail_url: str | None
     published_at: str
     fetched_at: str
+    # Written only by the LLM significance gate (AUD-658) and only for
+    # articles it actually classified: null for everything ingested with the
+    # gate off, or failed open past it (AUD-743).
+    summary: str | None = None
+    importance: int | None = None
 
 
 class AssetNewsResponse(BaseModel):
@@ -88,7 +93,7 @@ async def get_asset_news(
         sa.text(
             """
             SELECT id, source, title, url, news_site, thumbnail_url,
-                   published_at, fetched_at
+                   published_at, fetched_at, summary, importance
             FROM asset_news
             WHERE asset_id = :id
             ORDER BY published_at DESC
@@ -108,6 +113,8 @@ async def get_asset_news(
             thumbnail_url=row[5],
             published_at=row[6].isoformat(),
             fetched_at=row[7].isoformat(),
+            summary=row[8],
+            importance=row[9],
         )
         for row in rows.fetchall()
     ]

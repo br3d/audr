@@ -64,6 +64,7 @@ src/audr/api/assets.py:212: error: Missing type arguments for generic type "dict
 src/audr/api/assets.py:259: error: Missing type arguments for generic type "dict"  [type-arg]
 src/audr/api/assets.py:404: error: Missing type arguments for generic type "dict"  [type-arg]
 src/audr/jobs/news_analyze.py:313: error: "Result[Any]" has no attribute "rowcount"  [attr-defined]
+src/audr/jobs/news_gate.py:111: error: "Result[Any]" has no attribute "rowcount"  [attr-defined]
 src/audr/api/llm.py:356: error: Missing type arguments for generic type "dict"  [type-arg]
 src/audr/api/llm.py:373: error: Missing type arguments for generic type "dict"  [type-arg]
 src/audr/api/llm.py:450: error: Missing type arguments for generic type "dict"  [type-arg]

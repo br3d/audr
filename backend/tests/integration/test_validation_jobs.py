@@ -114,3 +114,67 @@ async def test_worker_fails_validation_with_error(
         assert run.error == "No CoinGecko API key configured."
     finally:
         await _delete_run(db_session_factory, run_id)
+
+
+# ---------------------------------------------------------------------------
+# VALIDATE_LLM handler (AUD-743)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_validate_llm_raises_when_no_key_configured(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """No stored key is a validation *failure*, not a silent pass — the whole
+    point of the button is to say so (AUD-743)."""
+    from audr.jobs.validation import handle_validate_llm
+
+    # No commit: the db_session fixture owns the surrounding transaction and
+    # committing it closes the context manager out from under the test.
+    await db_session.execute(sa.text("DELETE FROM integration WHERE kind = 'anthropic'"))
+
+    with pytest.raises(ValueError, match="No Anthropic API key configured"):
+        await handle_validate_llm(db_session, uuid.uuid4())
+
+
+@pytest.mark.integration
+async def test_validate_llm_probes_anthropic_with_the_stored_key(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """The handler decrypts the stored key and reaches Anthropic with it."""
+    import respx
+    from httpx import Response
+
+    from audr.jobs.validation import handle_validate_llm
+    from audr.settings.llm import save_anthropic_credentials
+
+    await save_anthropic_credentials(db_session, api_key="sk-stored-test")
+
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=Response(200, json={"content": [], "usage": {}})
+        )
+        await handle_validate_llm(db_session, uuid.uuid4())
+
+    assert route.calls[0].request.headers["x-api-key"] == "sk-stored-test"
+
+
+@pytest.mark.integration
+async def test_validate_llm_propagates_rejected_key(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """A key Anthropic rejects must surface as a failed run, not fail open the
+    way the ingest gate does (AUD-658)."""
+    import respx
+    from httpx import Response
+
+    from audr.jobs.validation import handle_validate_llm
+    from audr.providers.llm import NoApiKey
+    from audr.settings.llm import save_anthropic_credentials
+
+    await save_anthropic_credentials(db_session, api_key="sk-revoked")
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post("https://api.anthropic.com/v1/messages").mock(return_value=Response(401))
+        with pytest.raises(NoApiKey):
+            await handle_validate_llm(db_session, uuid.uuid4())

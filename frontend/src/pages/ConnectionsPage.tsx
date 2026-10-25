@@ -418,7 +418,15 @@ function QuotesForm({
   )
 }
 
-function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSaved: () => void }) {
+function LlmForm({
+  current,
+  onSaved,
+  onValidated,
+}: {
+  current: IntegrationEntry | null
+  onSaved: () => void
+  onValidated: () => void
+}) {
   const [editing, setEditing] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -436,6 +444,11 @@ function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSav
     },
   })
 
+  const validateMutation = useMutation({
+    mutationFn: () => validateIntegration('llm'),
+    onSuccess: onValidated,
+  })
+
   function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setValidationError(null)
@@ -450,6 +463,12 @@ function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSav
   const error =
     validationError ??
     (saveMutation.error ? errorMessage(saveMutation.error, 'An unexpected error occurred.') : null)
+  const validating = validateMutation.isPending
+  const validateMsg = validateMutation.isSuccess
+    ? 'Validation job queued.'
+    : validateMutation.error
+      ? validationFailureMessage(validateMutation.error)
+      : null
 
   return (
     <section aria-labelledby="llm-heading" className="card">
@@ -476,6 +495,18 @@ function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSav
           <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>
             {current?.configured ? 'Change Anthropic key' : 'Add Anthropic key'}
           </button>
+
+          {current?.configured && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => validateMutation.mutate()}
+              disabled={validating}
+              aria-label="Test the stored Anthropic key through the server"
+            >
+              {validating ? 'Testing…' : 'Test connection'}
+            </button>
+          )}
         </div>
       )}
 
@@ -521,6 +552,12 @@ function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSav
             </button>
           </div>
         </form>
+      )}
+
+      {validateMsg !== null && (
+        <p role="status" className="alert alert-info mt-12">
+          {validateMsg}
+        </p>
       )}
     </section>
   )
@@ -574,7 +611,7 @@ export default function ConnectionsPage() {
       </p>
       <RpcForm current={rpc} onSaved={handleRpcSaved} onValidated={handleRpcSaved} />
       <QuotesForm current={quotes} onSaved={handleQuotesSaved} onValidated={handleQuotesSaved} />
-      <LlmForm current={llm} onSaved={handleLlmSaved} />
+      <LlmForm current={llm} onSaved={handleLlmSaved} onValidated={handleLlmSaved} />
     </div>
   )
 }
