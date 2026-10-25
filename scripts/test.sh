@@ -5,6 +5,8 @@
 # Env:   AUDR_SKIP_STATIC=1  skip the ruff and mypy phases (AUD-744); set by the
 #                            GitHub `tests` job, which has dedicated jobs for both
 #        AUDR_TEST_PROJECT   reuse a pinned compose project instead of a fresh one
+#        AUDR_SKIP_PREWARM=1 skip the image_pull phase and let the suite pull
+#                            lazily again (AUD-747)
 # Exits non-zero if any suite or static gate fails.
 set -euo pipefail
 
@@ -305,6 +307,28 @@ reap_stale_projects || true
 
 snapshot_env
 
+# Pull every external base image up front, as a phase of its own (AUD-747).
+#
+# The suite used to pull lazily, as a side effect of whichever phase first
+# needed an image, so a `429 Too Many Requests` from Docker Hub's shared per-IP
+# allowance was reported as *that* phase failing. It surfaced once as
+# `frontend dependency install (npm ci)` and was read — reasonably, since the
+# phase ledger is the only channel an agent here can read (AUD-714) — as a
+# broken lockfile. Pulling first means a refused pull reds a phase that is about
+# pulling and nothing else. Images already in the local store are skipped, so
+# this adds no pull traffic and no time to the common case.
+PREWARM_ARGS=()
+[[ "${RUN_BACKEND}" -eq 1 ]] && PREWARM_ARGS+=(--backend)
+[[ "${RUN_FRONTEND}" -eq 1 ]] && PREWARM_ARGS+=(--frontend)
+if ! run_phase image_pull "Pre-warming external base images (docker pull)" \
+    "${ROOT}/scripts/prewarm-images.sh" "${PREWARM_ARGS[@]}"; then
+  # prewarm-images.sh prints the diagnosis itself and run_phase has already
+  # streamed it to both sinks; `ps`/`logs` would say nothing about a registry
+  # refusal. Fatal, unlike the static gates: every phase below needs the images.
+  echo "==> PRE-SUITE FAILURE: base image pre-warm exited ${PHASE_RC}" | tee -a "${ENV_LOG}"
+  exit "${PHASE_RC}"
+fi
+
 # ── Static gates: ruff and mypy ───────────────────────────────────────────────
 #
 # These live here because this script is what the team merges on. Agents
@@ -359,7 +383,7 @@ fi
 # in ~5s here, and the healthcheck's own budget is 15 retries x 3s).
 if ! run_phase db_up "Starting test environment (db-test, waiting for healthcheck)" \
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${AUDR_TEST_WAIT_TIMEOUT:-180}" db-test; then
-  dump_compose_state "\`up -d --wait db-test\` exited ${PHASE_RC} (image pull, or healthcheck never went healthy)"
+  dump_compose_state "\`up -d --wait db-test\` exited ${PHASE_RC} (healthcheck never went healthy — the pull is the image_pull phase's job now, unless AUDR_SKIP_PREWARM was set)"
   exit "${PHASE_RC}"
 fi
 

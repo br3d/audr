@@ -177,6 +177,15 @@ services:
       - ./Dockerfile.test:/workspace/Dockerfile.test:ro
       - ./compose.test.yaml:/workspace/compose.test.yaml:ro
       - ./docs/third-party.md:/workspace/docs/third-party.md:ro
+      # AUD-747: tests/unit/test_prewarm_images.py runs the real pre-warm script
+      # against a stub `docker` — the only way to reach its cases, since a Docker
+      # Hub 429 cannot be summoned on demand and a test that really pulled would
+      # spend the allowance the script exists to protect. Without this mount the
+      # guard could only skip, and the two properties that matter could regress
+      # unnoticed: never re-pulling an image already local (what makes the
+      # pre-warm free), and naming the registry refusal itself instead of
+      # letting a later suite phase take the blame.
+      - ./scripts/prewarm-images.sh:/workspace/scripts/prewarm-images.sh:ro
       # AUD-706: tests/unit/test_mirror_deploy_state.py executes the real
       # mirror script against scratch git repositories standing in for GitHub
       # and Gitea. Mounting it is what makes the retry bound, the single alert

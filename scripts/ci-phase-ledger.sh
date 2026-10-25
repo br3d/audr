@@ -52,7 +52,12 @@ LEDGER="${1:-.test-phases.tsv}"
 # in the GitHub `tests` job, which sets AUDR_SKIP_STATIC=1 because the dedicated
 # `lint` and `backend-mypy` jobs cover them in parallel; they carry a real
 # verdict for anyone running test.sh locally, which is where they exist to bite.
+# `image_pull` is first on purpose (AUD-747): it is the one phase that can fail
+# for a reason wholly outside the tree — Docker Hub's anonymous allowance is per
+# source IP and this host shares it with every other agent and with the Gitea
+# runner. Red there means re-run or warm the image, never read the diff.
 PHASES=(
+  image_pull
   ruff
   db_up
   backend_build

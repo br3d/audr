@@ -44,7 +44,11 @@ TEST_SH = REPO_ROOT / "scripts" / "test.sh"
 # Every phase the script must report on, in the order a reader sees them.
 # `ruff` and `backend_mypy` are the static gates added in AUD-744; they report
 # `skip` in the GitHub `tests` job, which sets AUDR_SKIP_STATIC=1.
+# `image_pull` (AUD-747) is first: the outbound pulls were moved out of the
+# phases that merely needed an image, so a rate-limited registry stops reading
+# as a failure of the tree.
 PHASES = (
+    "image_pull",
     "ruff",
     "db_up",
     "backend_build",

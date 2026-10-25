@@ -189,6 +189,20 @@ jobs:
       # ledger's "one step per phase" contract holds for every slug in
       # ci-phase-ledger.sh's PHASES, and so that a future run which *does*
       # execute them here has somewhere to say so.
+      # Red here is a registry refusal, not a code failure (AUD-747): Docker
+      # Hub's anonymous pull allowance is per source IP, and a GitHub runner's
+      # IP is shared far more widely than this project. The suite's pulls were
+      # moved into this one phase so that stops being misread as whichever leg
+      # happened to need the image first.
+      - name: 'phase: external base image pre-warm (docker pull)'
+        if: always() && steps.phases.outputs.image_pull != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.image_pull }}
+          DETAIL: ${{ steps.phases.outputs.image_pull_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
       - name: 'phase: static lint (ruff)'
         if: always() && steps.phases.outputs.ruff != 'skip'
         env:
