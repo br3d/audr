@@ -67,9 +67,7 @@ function mountPage() {
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
-    root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(SchedulesPage)),
-    )
+    root.render(React.createElement(QueryClientProvider, { client: qc }, React.createElement(SchedulesPage)))
   })
   return { container, root }
 }
@@ -109,7 +107,9 @@ describe('SchedulesPage — smart news analysis card (AUD-659)', () => {
 
   it('reveals the importance threshold slider once enabled', async () => {
     mockFetchSettings.mockResolvedValue(baseSettings())
-    mockFetchNewsAnalysisSetting.mockResolvedValue(baseNewsAnalysis({ enabled: true, importance_threshold: 60 }))
+    mockFetchNewsAnalysisSetting.mockResolvedValue(
+      baseNewsAnalysis({ enabled: true, importance_threshold: 60 }),
+    )
     mockFetchIntegrations.mockResolvedValue(baseIntegrations(true))
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.querySelector('#news-analysis-enabled')).toBeTruthy())

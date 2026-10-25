@@ -620,9 +620,7 @@ export function fetchNewsAnalysisSetting(): Promise<NewsAnalysisSetting> {
   return get<NewsAnalysisSetting>('/settings/news-analysis')
 }
 
-export function patchNewsAnalysisSetting(
-  input: NewsAnalysisSettingPatch,
-): Promise<NewsAnalysisSetting> {
+export function patchNewsAnalysisSetting(input: NewsAnalysisSettingPatch): Promise<NewsAnalysisSetting> {
   return patch<NewsAnalysisSetting>('/settings/news-analysis', input)
 }
 

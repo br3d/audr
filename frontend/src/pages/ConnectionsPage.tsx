@@ -418,13 +418,7 @@ function QuotesForm({
   )
 }
 
-function LlmForm({
-  current,
-  onSaved,
-}: {
-  current: IntegrationEntry | null
-  onSaved: () => void
-}) {
+function LlmForm({ current, onSaved }: { current: IntegrationEntry | null; onSaved: () => void }) {
   const [editing, setEditing] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -463,22 +457,19 @@ function LlmForm({
         AI News Analysis (Anthropic)
       </h2>
       <p className="muted-text mb-16">
-        Optional. Powers the "Smart news analysis" gate on the Schedules page, which scores
-        each incoming news article's significance before it is cached. Storing a key here does
-        not turn the gate on by itself — switch it on under Schedules.
+        Optional. Powers the "Smart news analysis" gate on the Schedules page, which scores each incoming news
+        article's significance before it is cached. Storing a key here does not turn the gate on by itself —
+        switch it on under Schedules.
       </p>
 
       <p className="muted-text mb-16">
-        <strong className="text-secondary">Disclosure:</strong> When the gate is on, Anthropic
-        receives each article's headline and full text for scoring. It does not receive your
-        wallet addresses, password, or session credentials, and the article text itself is
-        never stored — only the resulting summary and score are.
+        <strong className="text-secondary">Disclosure:</strong> When the gate is on, Anthropic receives each
+        article's headline and full text for scoring. It does not receive your wallet addresses, password, or
+        session credentials, and the article text itself is never stored — only the resulting summary and
+        score are.
       </p>
 
-      <SourceSummary
-        entry={current}
-        fallback="not configured — articles are ingested unanalyzed"
-      />
+      <SourceSummary entry={current} fallback="not configured — articles are ingested unanalyzed" />
 
       {!editing && (
         <div className="btn-group">

@@ -256,7 +256,11 @@ describe('ConnectionsPage — the page must describe the source actually in use 
   })
 
   it('saves the Anthropic key and never echoes it back into the DOM', async () => {
-    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true, effective_source: 'Anthropic' })
+    mockUpdateLlm.mockResolvedValue({
+      ...defaultEntries()[2],
+      configured: true,
+      effective_source: 'Anthropic',
+    })
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
 

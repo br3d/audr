@@ -230,10 +230,9 @@ function NewsAnalysisCard() {
       </div>
 
       <p className="muted-text mt-8">
-        When on, each incoming news article is scored for significance by Anthropic (an
-        external, third-party provider) before it is cached. Articles scoring below the
-        threshold are not saved. Off by default, and off behaves exactly like today — nothing
-        changes in how news is ingested or shown.
+        When on, each incoming news article is scored for significance by Anthropic (an external, third-party
+        provider) before it is cached. Articles scoring below the threshold are not saved. Off by default, and
+        off behaves exactly like today — nothing changes in how news is ingested or shown.
       </p>
 
       {current.enabled && (
@@ -256,16 +255,14 @@ function NewsAnalysisCard() {
               onChange={(e) => update({ importance_threshold: parseInt(e.target.value, 10) })}
             />
             <p className="form-hint">
-              Articles scored below this are not saved. Higher means fewer, more significant
-              articles.
+              Articles scored below this are not saved. Higher means fewer, more significant articles.
             </p>
           </div>
 
           {!llmConfigured && (
             <p role="alert" className="alert alert-warning">
-              Smart analysis is on, but no Anthropic key is configured yet — every article
-              will be ingested unanalyzed (same as off) until you add one on the Connections
-              page.
+              Smart analysis is on, but no Anthropic key is configured yet — every article will be ingested
+              unanalyzed (same as off) until you add one on the Connections page.
             </p>
           )}
         </div>
