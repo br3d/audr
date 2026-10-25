@@ -236,10 +236,26 @@ def release_commit(root: pathlib.Path, version: str) -> str:
 
 # The healthy flow leaves `main` 0-3 commits ahead of the tag at promotion time
 # (release.sh commits the tag itself; anything merged while the dispatch waits
-# adds to the count). 20 is roughly ten times that and still far below the 106
-# that prompted this, which is the point: fire on "the release has been
-# overtaken", stay quiet on "a couple of things landed during the dispatch".
-MAX_DRIFT = 20
+# adds to the count). The point is to fire on "the release has been overtaken"
+# and stay quiet on "a couple of things landed during the dispatch".
+#
+# Raised 20 -> 50 by CEO decision on 2026-10-25 (AUD-745), because 20 was
+# calibrated against the zero-lag ideal rather than against how long the click
+# actually takes. `main` merges at ~14 commits/day here, so 20 was a **34-hour**
+# window on a gate whose observed response time is 3-4 days — and the guard then
+# fires on every release as a matter of course. It did: v0.4.0 crossed 20 while
+# its publish card sat pending, which is what prompted this. That is a
+# miscalibrated threshold, not an overtaken release.
+#
+# 50 is ~3.5 days at the current merge rate, sized to the real window. It is
+# still far below the 106 that prompted the guard, so the case it was built for
+# is unchanged. The ancestor check is untouched and does the heavier lifting:
+# off-`main` code cannot be promoted at any drift. `--allow-stale` remains an
+# emergency override for a deliberately older pin, not the normal path.
+#
+# If this needs raising a third time, raise the dispatch latency instead — a
+# standing publish authorisation removes the race rather than widening it.
+MAX_DRIFT = 50
 
 # `origin/main` first: it is what a fresh clone gets, which is whose install
 # this pin decides. Local `main` is the fallback for a clone with no remote ref

@@ -138,7 +138,7 @@ real registry:
 
 Then, once it knows a rewrite is actually due, one question about the repository
 rather than the image: `vX.Y.Z` must be an ancestor of `origin/main` and no more
-than 20 commits behind it. Because step 2 is a human click, a tag can sit cut
+than 50 commits behind it. Because step 2 is a human click, a tag can sit cut
 but unpublished for days — and promoting it afterwards is what decides the
 backend every `git clone && docker compose up -d` installs from then on. v0.1.2
 spent a week in that state and ended up 106 commits back; publishing and
@@ -146,6 +146,15 @@ promoting it would have passed every check above and still pinned fresh clones
 to a backend missing the AUD-597 and AUD-595 fixes. The guard's advice in that
 case is to cut a fresh release from `main` instead of promoting the overtaken
 one; `--allow-stale` overrides it when pinning the older release is deliberate.
+
+The limit was 20 until 2026-10-25, when the CEO raised it to 50 (AUD-745). At
+this project's ~14 commits/day, 20 was a 34-hour window on a gate whose observed
+response time is 3-4 days, so it had started firing on healthy releases rather
+than overtaken ones — v0.4.0 crossed it while its publish card was still
+pending. 50 is ~3.5 days, sized to the real window and still far short of the
+106 the guard was built for. **If it ever needs raising again, shorten the
+dispatch latency instead of widening the limit** — a standing publish
+authorisation removes the race rather than accommodating it.
 
 Run it before step 2 and it refuses, printing the dispatch URL. Run it twice and
 the second run finds nothing to do — the staleness check deliberately sits after
