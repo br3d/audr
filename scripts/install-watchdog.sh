@@ -14,6 +14,12 @@
 #                                           no changes. EXITS NON-ZERO ON DRIFT
 #                                           (AUD-698) so a workflow can gate on
 #                                           it — see scripts/host-install-drift.sh.
+#   scripts/install-watchdog.sh --check-sinks  the sink probes alone, with an exit
+#                                 code in notify-board.py's vocabulary: 0 a sink
+#                                 answered, 1 a sink is configured and REFUSED,
+#                                 3 nothing is configured. No changes, nothing
+#                                 sent. This is what scripts/alert-sink-probe.sh
+#                                 runs every deploy (AUD-757).
 #
 # Env: AUDR_DEPLOY_HOST  ssh destination of the host, or `local` to inspect the
 #                        machine this runs on (read-only modes only — that is
@@ -158,27 +164,39 @@ esac
 REMOTE
 }
 
+# Sorts probe codes into SINKS_LIVE / SINKS_DEAD by the one rule the prose
+# report below and the --check-sinks exit code must agree on — they are two
+# renderings of the same verdict, and a second copy of this `case` is how they
+# would quietly stop being that (AUD-757).
+#
+# Anything that is neither 0 nor 3 counts as broken, not as unconfigured. The
+# codes are a contract, but a probe can still fail in a way outside it — an
+# installed copy too old to know --probe exits 2 — and defaulting an
+# unrecognised code to "no credentials here" would print the cheerful setup note
+# over a channel that exists and is failing. Unknown resolves towards the louder
+# reading on purpose.
+sink_classify() {
+  SINKS_LIVE=()
+  SINKS_DEAD=()
+  local pair name rc
+  for pair in "$@"; do
+    name="${pair%%:*}"
+    rc="${pair##*:}"
+    case "$rc" in
+      0) SINKS_LIVE+=("$name") ;;
+      3) ;;
+      *) SINKS_DEAD+=("$name") ;;
+    esac
+  done
+}
+
 # Renders the line this script is judged on, saying only what the probes
 # support. Returns 1 when nothing is configured at all, which is the one case
 # that needs the long setup note instead of a verdict.
 report_sinks() {
-  local board_rc="$1" tg_rc="$2"
-  local live=() broken=()
-  # Anything that is neither 0 nor 3 counts as broken, not as unconfigured.
-  # The codes are a contract, but a probe can still fail in a way outside it —
-  # an installed copy too old to know --probe exits 2 — and defaulting an
-  # unrecognised code to "no credentials here" would print the cheerful setup
-  # note over a channel that exists and is failing. Unknown resolves towards
-  # the louder reading on purpose.
-  classify() {
-    case "$2" in
-      0) live+=("$1") ;;
-      3) ;;
-      *) broken+=("$1") ;;
-    esac
-  }
-  classify board "$board_rc"
-  classify telegram "$tg_rc"
+  sink_classify "board:$1" "telegram:$2"
+  local live=("${SINKS_LIVE[@]+"${SINKS_LIVE[@]}"}")
+  local broken=("${SINKS_DEAD[@]+"${SINKS_DEAD[@]}"}")
 
   if [ "${#live[@]}" -gt 0 ]; then
     echo "==> Alerts will be delivered — probed sink(s): ${live[*]}"
@@ -215,12 +233,50 @@ EOF
   return 1
 }
 
+# --- the machine-readable half of the same verdict (AUD-757) -----------------
+# Prints ONE line a caller can grep and returns notify-board.py's code for it:
+#
+#   0  at least one sink answered and none refused
+#   1  a sink is configured and refused — the AUD-753 condition
+#   3  no sink is configured — the host's current, intended state
+#
+# Why a marker line and not just the exit code: this script exits 1 for reasons
+# that have nothing to do with a credential — `audr_require` fails with 1 when
+# AUDR_DEPLOY_HOST is unset, which on any machine that is not the deploy host is
+# the normal state. A caller that read a bare 1 as "the credential is dead"
+# would open a `critical` issue about a host nobody named, which is exactly what
+# the first run of scripts/host-install-drift.sh did. So the claim is carried by
+# a string only this function prints, and only after the probes have really
+# answered.
+#
+# "dead" is reported even when another sink is live, and the exit code follows
+# the dead one. A live Telegram does not make an expired board key less dead; it
+# makes it unnoticed, which is the whole of AUD-753. report_sinks says the same
+# thing in prose ("dead weight until its credential is replaced") — this just
+# gives it an exit code.
+sink_verdict() {
+  sink_classify "$@"
+  if [ "${#SINKS_DEAD[@]}" -gt 0 ]; then
+    local tail=""
+    [ "${#SINKS_LIVE[@]}" -gt 0 ] && tail="; still live: ${SINKS_LIVE[*]}"
+    echo "==> SINK VERDICT: dead — configured and refused: ${SINKS_DEAD[*]}$tail"
+    return 1
+  fi
+  if [ "${#SINKS_LIVE[@]}" -gt 0 ]; then
+    echo "==> SINK VERDICT: live — probed: ${SINKS_LIVE[*]}"
+    return 0
+  fi
+  echo "==> SINK VERDICT: unconfigured — no sink holds a credential on this host"
+  return 3
+}
+
 mode=apply
 case "${1:-}" in
   --check)       mode=check ;;
   --check-drift) mode=drift ;;
+  --check-sinks) mode=sinks ;;
   "")            ;;
-  *) echo "usage: $0 [--check|--check-drift]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--check|--check-drift|--check-sinks]" >&2; exit 2 ;;
 esac
 
 if [ "$mode" = check ]; then
@@ -271,6 +327,36 @@ abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
 if [ "$mode" = drift ]; then
   audr_drift_report "$REPO_DIR" "$abs_install" "$REMOTE_DIR" "${AUDR_WATCHDOG_FILES[@]}"
   exit $?
+fi
+
+# --check-sinks: the sink probes alone, with an exit code (AUD-757).
+#
+# --check already probes both sinks, but its exit code belongs to the drift
+# comparison and deliberately ignores them, and --check-drift skips the probes
+# altogether — for the good reason given above, that an expired Telegram token
+# must not red a step about drift. Both of those are right, and between them
+# they left the question "does this credential still deliver?" asked only by
+# install-watchdog.sh at INSTALL time.
+#
+# That gap is AUD-753: the host held a run-scoped agent JWT with a 48h TTL, it
+# died, and for nine days every alert bought a 401 and then spooled. Nothing was
+# lost — notify.sh spools and the drain routine replays — but the host looked
+# configured the whole time, and the slow path was the only path.
+#
+# So this is the third mode rather than a flag on either of the others: one
+# question, one exit code, no network beyond the two probes, nothing sent.
+# scripts/alert-sink-probe.sh is the scheduled caller.
+if [ "$mode" = sinks ]; then
+  echo "== sinks (probed, nothing sent) =="
+  sinks_board_rc=0; probe_board "$abs_install" || sinks_board_rc=$?
+  sinks_tg_rc=0;    probe_telegram || sinks_tg_rc=$?
+  # The prose first, for whoever is reading this in a run log; then the verdict
+  # line the caller parses. report_sinks returns 1 for "nothing configured",
+  # which sink_verdict reports as code 3 — not an error here.
+  report_sinks "$sinks_board_rc" "$sinks_tg_rc" || true
+  verdict_rc=0
+  sink_verdict "board:$sinks_board_rc" "telegram:$sinks_tg_rc" || verdict_rc=$?
+  exit "$verdict_rc"
 fi
 
 if [ "$mode" = check ]; then

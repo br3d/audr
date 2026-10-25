@@ -477,6 +477,8 @@ scripts/install-watchdog.sh              # install or update, then show status
 scripts/install-watchdog.sh --check      # what is installed, whether each sink answers,
                                          # and whether the pinned copies are current
 scripts/install-watchdog.sh --check-drift # drift alone: one SSH, no sink probes
+scripts/install-watchdog.sh --check-sinks # sink probes alone, with an exit code:
+                                          # 0 live, 1 configured and REFUSED, 3 unconfigured
 ```
 
 Both modes end by **probing** the sinks instead of listing their files
@@ -503,6 +505,39 @@ A 403 is reported as live on purpose: the credential this file should hold is a
 `task_bridge` key scoped to opening one agent's issues, and such a key can be
 refused on `/api/agents/me` while being perfectly able to POST the alert. An
 expired or wrong key answers 401.
+
+**The probe is now scheduled, not just run at install (AUD-757).** AUD-594 made
+the verdict checkable and left it checked exactly once — at install time, the one
+moment a freshly-pasted credential is certain to work. That is how AUD-753
+happened: the host held a run-scoped agent JWT with a 48-hour TTL (forbidden by
+[Alerts the host could not send](#alerts-the-host-could-not-send), for exactly
+this reason), it
+died on 2026-10-16, and nobody noticed until 2026-10-25 — **nine days** in which
+the host looked configured and every alert bought a 401 before falling back to
+the spool.
+
+So `--check-sinks` asks the same two probes on their own, with an exit code, and
+`scripts/alert-sink-probe.sh` runs it from the deploy workflow on every deploy:
+
+| `--check-sinks` exit | `SINK VERDICT:` line | what the probe caller does |
+|---|---|---|
+| 0 | `live` | `--resolve`s the `alert-sink-dead` alert |
+| 1 | `dead` | raises one keyed `critical` alert; repeats comment on it |
+| 3 | `unconfigured` | nothing, in either direction — this host's intended state |
+| 2 | *(no verdict line)* | nothing; the probe could not run, which is not a fact about the sinks |
+
+A dead sink is reported even when the other one is live: a working Telegram
+makes an expired board key *unnoticed*, which is the whole of AUD-753, not less
+dead. Exit 3 is deliberately quiet — only a human board user can mint the
+long-lived `task_bridge` key, so "no credential" is the state this host is
+*meant* to be in, and alerting on it would fire every deploy forever. It does
+not self-resolve either: a credential that was dead and has since been deleted
+has not recovered.
+
+This is a separate workflow step from the drift check on purpose.
+`--check-drift` skips the sink probes — an expired Telegram token must not red a
+step that is about content drift — and the two conditions have different fixes
+("re-run the installer" vs "mint a new credential") and different owners.
 
 The installer copies the four scripts to `~/.local/share/audr-watchdog/scripts/`
 and renders both units from `ci/host-units/audr-watchdog.service.in` and

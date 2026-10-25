@@ -890,6 +890,45 @@ jobs:
           }
           exit 0
 
+      # Alert-sink probe (AUD-757). Deliberately a SEPARATE step from the drift
+      # check above, not a flag on it: `--check-drift` skips the sink probes on
+      # purpose, because an expired Telegram token must not red a step that is
+      # about content drift. That reasoning stands. What it leaves uncovered is
+      # whether the credential still DELIVERS, and until this step the only thing
+      # that ever asked was install-watchdog.sh at install time — the one moment
+      # a freshly-pasted credential is certain to work.
+      #
+      # AUD-753 is the bill: the host held a run-scoped agent JWT with a 48-hour
+      # TTL, it expired, and for NINE DAYS every alert bought a 401 and fell back
+      # to the spool. Nothing was lost — notify.sh spools and the drain routine
+      # replays — but nothing was prompt either, and the host looked configured
+      # the whole time.
+      #
+      # Here rather than in a test job for the same reason as the drift check: it
+      # is a property of the HOST's secrets directory, which no amount of reading
+      # the diff can tell you about. Every deploy is the cadence; a credential
+      # nobody has touched does not need probing more often than the repo moves.
+      #
+      # AUDR_DEPLOY_HOST=local is load-bearing exactly as above: this job runs ON
+      # the deploy host with no ssh destination set and no key to hop with, so
+      # without it the probe would exit "could not check" every run — a step that
+      # reads as covered and measures nothing.
+      #
+      # Exits 0 unconditionally. A dead alert credential is a condition to raise,
+      # not a reason to fail a deploy that has already passed its health check.
+      # The alert is the output — keyed, so repeated deploys comment on one issue
+      # instead of opening one each, and self-resolving once a sink answers. Exit
+      # 3 (no credential at all) is this host's intended state and stays quiet.
+      - name: Probe alert sinks
+        if: always()
+        env:
+          AUDR_DEPLOY_HOST: local
+        run: |
+          AUDR_REMOTE_DIR="$DEPLOY_DIR" bash scripts/alert-sink-probe.sh || {
+            echo "[alert-sink-probe] exit $? — see the alert it raised; the deploy itself is unaffected"
+          }
+          exit 0
+
       - name: Enforce registry tag retention
         env:
           AUDR_REGISTRY: ${{ vars.AUDR_REGISTRY }}

@@ -291,6 +291,20 @@ services:
       - ./scripts/backup.sh:/workspace/scripts/backup.sh:ro
       - ./scripts/restore.sh:/workspace/scripts/restore.sh:ro
       - ./ci/host-units:/workspace/ci/host-units:ro
+      # AUD-757: tests/unit/test_alert_sink_probe.py executes the real
+      # `install-watchdog.sh --check-sinks` (mounted above) with a stub
+      # notify-board.py standing in for the installed copy, and the real
+      # alert-sink-probe.sh over a stub notify.sh. The exit-code mapping is the
+      # whole mechanism — 0 live / 1 configured-and-refused / 3 unconfigured —
+      # and every way it can regress is silent: a dead credential read as
+      # unconfigured goes unalerted (AUD-753 again), and an unconfigured host
+      # read as dead opens a critical issue every deploy until the key is muted.
+      #
+      # deploy-env.sh is a mount, not a copy, because install-watchdog.sh
+      # sources it on line one; without it --check-sinks cannot start and the
+      # guard could only skip.
+      - ./scripts/lib/deploy-env.sh:/workspace/scripts/lib/deploy-env.sh:ro
+      - ./scripts/alert-sink-probe.sh:/workspace/scripts/alert-sink-probe.sh:ro
     profiles:
       - backend
 

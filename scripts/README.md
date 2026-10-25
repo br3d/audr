@@ -44,7 +44,7 @@ These install or run on the deploy host only, and need the SSH key and
 
 | Script | What it does |
 |---|---|
-| `install-watchdog.sh` | Installs the watchdog and alert-dispatch timers/services on the deploy host, plus verbatim copies of the scripts they run. `--check` reports without changing anything |
+| `install-watchdog.sh` | Installs the watchdog and alert-dispatch timers/services on the deploy host, plus verbatim copies of the scripts they run. `--check` reports without changing anything; `--check-drift` compares the host's pinned copies against this checkout; `--check-sinks` probes the alert credentials alone and exits 0 live / 1 refused / 3 unconfigured |
 | `stand-watchdog.sh` | Probes `/health/ready` every minute from `audr-watchdog.timer`; alerts on a sustained outage, backup staleness, disk pressure, a mute alert dispatcher, or an undrained alert spool |
 | `alert-dispatch.sh` | Delivers pending critical news alerts from the stack, from `audr-alert-dispatch.timer`: reads what the worker has pending, sends it via `notify.sh`, then tells the worker to mark it delivered. `--dry-run` renders and reports without sending or marking |
 | `notify.sh` | Sends an operational alert to every configured channel — a `critical` Paperclip issue (via `notify-board.py`) and/or Telegram — and spools anything it cannot deliver for `drain-alert-spool.py` to replay later |
@@ -52,6 +52,7 @@ These install or run on the deploy host only, and need the SSH key and
 | `drain-alert-spool.py` | Replays alerts `notify.sh` could not deliver from the host, run from inside an agent so a board credential is available. `--dry-run` shows without changing anything |
 | `install-mirror-dropin.sh` | Installs the boot-DNS-race drop-in for `audr-mirror.service` on the deploy host. `--check` reports without changing anything; `--check-drift` compares the host's copy against this checkout and exits non-zero if it has fallen behind |
 | `host-install-drift.sh` | Asks every installer's `--check-drift` whether the deploy host still runs this checkout's pinned copies, and raises one keyed, self-resolving `notify.sh` alert when it does not. Run from the deploy workflow on every deploy (AUD-698) |
+| `alert-sink-probe.sh` | Asks `install-watchdog.sh --check-sinks` whether the deploy host's alert credentials still *deliver*, and raises one keyed, self-resolving `notify.sh` alert when one is configured and refused. Silent when nothing is configured. Run from the deploy workflow on every deploy (AUD-757, after a dead credential went unnoticed for nine days) |
 | `lib/host-install-manifest.sh` | Sourced, not run: the single source of truth for which files each installer pins to the host, and the content comparison `--check-drift` uses. Drives both the copy and the check so the two cannot disagree |
 | `migration-smoke.sh` | Asserts a single Alembic head and that the newest revisions really reverse (`upgrade` → `downgrade` → `upgrade`) against the ephemeral test database. Runs as the `migration-smoke` compose service and as its own `test.sh` phase, because the guarded deploy's rollback is built on `alembic downgrade` succeeding |
 
