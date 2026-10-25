@@ -199,7 +199,7 @@ REAP_AGE_H="${AUDR_TEST_REAP_AGE_H:-6}"
 
 # compose.test.yaml's service names, as a grep alternation. Keep in step with that
 # file; a service missing here is a service whose leftovers nothing reclaims.
-TEST_SERVICES='db-test|provider-mock|migrate-test|backend-tests|benchmark|frontend-tests'
+TEST_SERVICES='db-test|provider-mock|migrate-test|migration-smoke|backend-tests|benchmark|frontend-tests'
 # The images and volumes Compose builds carry the same two labels its containers
 # do, so they are matched the same way — a project-name prefix would not do here
 # either. The leaks found on the shared host at 86% disk were
@@ -390,13 +390,43 @@ fi
 if [[ "${RUN_BACKEND}" -eq 1 ]]; then
   # Rebuild both images: a stale migrate-test leaves the DB at an old migration
   # and backend tests then fail with "column does not exist".
-  if ! run_phase backend_build "Building backend test images (migrate-test, backend-tests)" \
-      "${COMPOSE[@]}" build migrate-test backend-tests; then
+  # migration-smoke shares Dockerfile's `runtime` target with migrate-test, so
+  # it is a cache hit here and not a third build. Named explicitly all the same:
+  # `compose run` would otherwise build it lazily inside the migration_smoke
+  # phase, and a build failure would be reported as that phase failing — the
+  # same misattribution AUD-747 fixed for the image pulls.
+  if ! run_phase backend_build "Building backend test images (migrate-test, migration-smoke, backend-tests)" \
+      "${COMPOSE[@]}" build migrate-test migration-smoke backend-tests; then
     # The builder's own output is the diagnosis here and run_phase has already
     # streamed it to both sinks; `ps`/`logs` would add nothing about a build.
-    echo "==> PRE-SUITE FAILURE: \`build migrate-test backend-tests\` exited ${PHASE_RC}" \
+    echo "==> PRE-SUITE FAILURE: \`build migrate-test migration-smoke backend-tests\` exited ${PHASE_RC}" \
       | tee -a "${ENV_LOG}"
     exit "${PHASE_RC}"
+  fi
+
+  # Migration reversibility, before the suite (AUD-698).
+  #
+  # `migration-smoke` runs upgrade -> downgrade -> upgrade over the newest
+  # revisions and asserts a single head, through the same `python -m alembic`
+  # entrypoint the deploy uses. It exists because the guarded deploy's rollback
+  # is built on `alembic downgrade` succeeding and has nothing to try when it
+  # does not: it reports 'downgrade failed' and leaves the stack on the new
+  # build. See scripts/migration-smoke.sh for the full argument.
+  #
+  # First, because it is the cheapest phase that can condemn the commit and
+  # because `backend-tests` reads this database as already-migrated — so the
+  # smoke's postcondition (back at head, which it asserts) has to hold before
+  # pytest starts rather than after.
+  #
+  # NOT fatal to the run, unlike the build above: a broken downgrade must not
+  # hide a pytest failure behind it, and an implementer usually needs both
+  # verdicts in one pass. It sets EXIT like every other suite phase, so the
+  # merge gate is still red.
+  if ! run_phase migration_smoke "Migration safety (single head, newest revisions reverse and re-apply)" \
+      "${COMPOSE[@]}" --profile backend run --rm --no-TTY migration-smoke; then
+    echo "==> MIGRATION SMOKE FAILED (exit ${PHASE_RC}) — the deploy could not roll this back" \
+      | tee -a "${ENV_LOG}"
+    EXIT="${PHASE_RC}"
   fi
 
   echo "==> Running backend tests (pytest)"

@@ -293,13 +293,21 @@ change caused it.
 
 ### Standalone
 
+Nothing is standalone-only any more. The five dependency-free test files that
+used to live in `scripts/` moved to `backend/tests/unit/` in AUD-698, because
+living there meant living outside every job: `backend/pyproject.toml` pins
+`testpaths = ["tests"]`, so nothing collected them and they ran only when
+somebody remembered to. They are part of the backend suite now.
+
+They are still runnable on their own, which is useful on a host with no Docker:
+
 ```bash
-python3 scripts/test_registry_prune.py    # no dependencies
-python3 scripts/test_promote_image.py     # no dependencies, no network
+python3 backend/tests/unit/test_registry_prune.py   # no dependencies
+python3 backend/tests/unit/test_promote_image.py    # no dependencies, no network
 ```
 
-These cannot live in the pytest suite because the backend test container mounts
-only `backend/`.
+Each needs its subject script bind-mounted when it runs in the container; see
+`compose.test.yaml`, which carries one mount per script with the reasoning.
 
 ---
 
@@ -367,14 +375,38 @@ docker compose exec api python -m alembic revision -m "add thing"
 docker compose run --rm -T migrate
 ```
 
-Rules that are not negotiable:
+Rules that are not negotiable — and, since AUD-698, enforced rather than
+remembered. Both were house rules that nothing checked, which is why the two
+guards below exist:
 
 - **Every migration must have a working `downgrade`.** The deploy pipeline's
   rollback path downgrades the schema using the *new* image before restoring the
   old one; a migration that cannot be reversed turns a failed deploy into a
-  manual recovery. See [deploy-runbook.md](deploy-runbook.md).
+  manual recovery. Worse than that, actually: when the downgrade *fails* the
+  workflow has nothing left to try, so it says so and leaves the stack on the
+  new build — the one outcome the rollback existed to prevent. See
+  [deploy-runbook.md](deploy-runbook.md).
+
+  `scripts/migration-smoke.sh` now runs `upgrade` → `downgrade -3` → `upgrade`
+  against the ephemeral test database, through the same `python -m alembic`
+  entrypoint the deploy uses, as the `migration_smoke` phase of
+  `./scripts/test.sh` and as a step in the Gitea `backend-tests` job. Raise
+  `AUDR_MIGRATION_SMOKE_DEPTH` if your branch adds more than three revisions.
+
+  If a change genuinely cannot be reversed — a destructive data repair cannot —
+  say so deliberately: add the revision to `IRREVERSIBLE` in
+  `backend/tests/unit/test_migration_chain.py` with the reason. An empty
+  `downgrade()` that is *not* on that list fails the suite, because an empty
+  downgrade is invisible in review (it is the absence of code) and its cost
+  lands on whoever is watching a failed deploy decline to roll back.
 - **Never branch the revision chain.** Rebase your revision onto the current
-  head instead of merging two heads.
+  head instead of merging two heads. `test_migration_chain.py` asserts a single
+  head and a linear chain: two heads make `alembic upgrade head` refuse to run
+  at all, so the next deploy cannot migrate — and the usual way to get there is
+  merging two branches that each added a migration, where both diffs look fine
+  and it is the *pair* that is wrong. Do not fix it with `alembic merge`; the
+  rollback walks the chain with `downgrade -1`, which has no defined meaning at
+  a merge point.
 - **Data migrations are separate from schema migrations** where practical —
   `0007`, `0009`, `0010` and `0013` are data-only, which makes them safe to read
   and reason about independently.

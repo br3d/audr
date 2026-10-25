@@ -39,6 +39,7 @@ from a mirror that is genuinely broken — a revoked deploy key, or Gitea down.
 instead, and reaches the host only via
 
     scripts/install-mirror-dropin.sh          # --check to report, no changes
+                                              # --check-drift: is the host's copy current?
 
 Run `--check` first if `audr-mirror.service` is `failed` shortly after a reboot:
 if it reports the drop-in absent, that failure is the boot race, not an incident.
@@ -472,8 +473,10 @@ proves.
 ### Installing and inspecting the watchdog
 
 ```bash
-scripts/install-watchdog.sh            # install or update, then show status
-scripts/install-watchdog.sh --check    # what is installed, and whether each sink answers
+scripts/install-watchdog.sh              # install or update, then show status
+scripts/install-watchdog.sh --check      # what is installed, whether each sink answers,
+                                         # and whether the pinned copies are current
+scripts/install-watchdog.sh --check-drift # drift alone: one SSH, no sink probes
 ```
 
 Both modes end by **probing** the sinks instead of listing their files
@@ -516,6 +519,15 @@ since AUD-443 — remember the difference. (The CI failure path runs from the
 runner's checkout, so it does get the new code with the commit; only the
 watchdog's copies need the installer.)
 
+You no longer have to remember on your own. `--check` compares the installed
+bytes against the checkout and exits non-zero on drift, and
+`scripts/host-install-drift.sh` — run from the deploy workflow on every deploy —
+raises a keyed `notify.sh` alert naming the drifted installer, which resolves
+itself once you have re-run it. See
+[operations.md#backups](operations.md#backups) for why this is alerted rather
+than logged: a stale `notify.sh` is not noticed by its own alert failing to
+arrive.
+
 ```bash
 systemctl list-timers audr-watchdog.timer      # next/last probe
 sudo systemctl start audr-watchdog.service     # probe right now
@@ -525,9 +537,11 @@ ls ~/.local/state/audr-notify/                 # issue-<key>: open alert issues
                                                # undelivered.jsonl: spooled alerts
 
 # Unit tests for the board sink's dedupe/lifecycle logic (no network):
-python3 scripts/test_notify_board.py
+python3 backend/tests/unit/test_notify_board.py
 # ...and for the spool drain's collapse logic (no SSH, no board):
-python3 scripts/test_drain_alert_spool.py
+python3 backend/tests/unit/test_drain_alert_spool.py
+# Both also run in the backend suite since AUD-698; they moved out of scripts/,
+# where `testpaths = ["tests"]` meant no job collected them.
 
 # Probe history and alert decisions. `sudo` is required: the unit runs as
 # codex but logs to the system journal, and plain `journalctl -u` as codex
@@ -807,8 +821,10 @@ The second timer on this host, installed the same way and for the same reason
 [`operations.md#backups`](operations.md#backups); this is the host-side view.
 
 ```bash
-scripts/install-backup.sh            # install or update, take a first dump, show status
-scripts/install-backup.sh --check    # units, timer, dumps on disk, engine, KEK presence
+scripts/install-backup.sh              # install or update, take a first dump, show status
+scripts/install-backup.sh --check      # units, timer, dumps on disk, engine, KEK presence,
+                                       # and whether the pinned copies are current
+scripts/install-backup.sh --check-drift # drift alone; non-zero if the host is behind
 ```
 
 ```bash
@@ -839,7 +855,10 @@ Two things worth knowing before you touch it:
   headroom, not an exemption from bounding a directory a timer writes to.
 
 As with the watchdog, editing `backup.sh`, `backup-run.sh` or `dump-prune.py`
-in this repo does not reach the host until `install-backup.sh` runs again.
+in this repo does not reach the host until `install-backup.sh` runs again — and
+as with the watchdog, `scripts/host-install-drift.sh` now notices when that has
+happened and alerts, rather than leaving it to be discovered by a backup that
+was quietly running last month's code.
 
 ## Recovering a schema/image mismatch by hand
 
@@ -1046,7 +1065,7 @@ Run it by hand for a dry run, a one-off `--keep`, or the orphaned
 python3 scripts/registry-prune.py                 # dry run; prints keep/prune per tag
 python3 scripts/registry-prune.py --apply         # delete
 python3 scripts/registry-prune.py --keep 12 --protect b57f2d107ecc
-python3 scripts/test_registry_prune.py            # retention-rule unit tests, no deps
+python3 backend/tests/unit/test_registry_prune.py # retention-rule unit tests, no deps
 ```
 
 A tag survives if it is `latest`/`rollback`, looks like a release tag (`v0.1.0`),

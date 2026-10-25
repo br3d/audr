@@ -174,7 +174,7 @@ authorisation removes the race rather than accommodating it.
 Run it before step 2 and it refuses, printing the dispatch URL. Run it twice and
 the second run finds nothing to do — the staleness check deliberately sits after
 that exit, so an already-promoted release does not start failing its own
-`--check` as `main` moves on. `python3 scripts/test_promote_image.py` covers the
+`--check` as `main` moves on. `python3 backend/tests/unit/test_promote_image.py` covers the
 rewrite offline; `backend/tests/unit/test_promote_image_drift.py` covers the
 staleness guard in CI.
 

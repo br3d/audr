@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/dump-prune.py.
 
-Dependency-free, like test_registry_prune.py: run it with
-`python3 scripts/test_dump_prune.py`. The backend pytest suite cannot see
-`scripts/` (its container only copies `backend/`).
-
 Every case here is a retention rule whose failure mode is a deleted backup, so
 the tests are written against the failure, not the happy path. The fixture is
 the real 2026-10-11 directory listing, which is the one run we can check an
 answer against: the hand-prune executed under AUD-500 deleted 97 files and kept
 68, and this script has to agree with it exactly.
+
+Moved here from `scripts/` by AUD-698, where it ran in NO job — see
+test_registry_prune.py for the full history. The short version: the claim that
+the suite "cannot see `scripts/`" stopped being true at AUD-580, and
+`testpaths = ["tests"]` meant nothing collected the file either way. For a file
+whose every case guards against deleting a backup, running nowhere was the
+wrong place to be.
 """
 
 from __future__ import annotations
@@ -20,7 +23,24 @@ import pathlib
 import sys
 import tempfile
 
-_SCRIPT = pathlib.Path(__file__).with_name("dump-prune.py")
+import pytest
+
+# Required: backend-tests runs `-m "unit or integration or contract"`, so an
+# unmarked file is collected and then deselected — moved and still not run.
+pytestmark = pytest.mark.unit
+
+# Through the repo root, since the subject is no longer a sibling; skipped
+# loudly when the mount is absent (a compose.test.yaml omission, not a defect
+# in dump-prune.py).
+_SCRIPT = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "dump-prune.py"
+
+if not _SCRIPT.exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "scripts/dump-prune.py is not mounted into the test container; add it to "
+        "compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+
 _spec = importlib.util.spec_from_file_location("dump_prune", _SCRIPT)
 dp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dp)

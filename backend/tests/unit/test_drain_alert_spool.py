@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/drain-alert-spool.py.
 
-Dependency-free, like scripts/test_notify_board.py: run it with
-`python3 scripts/test_drain_alert_spool.py`. No SSH and no board are touched —
-what is under test is the collapse, which is where the damage would be.
+No SSH and no board are touched — what is under test is the collapse, which is
+where the damage would be.
 
 The failure mode that matters is not a bad request. It is a spool drained a day
 after the outage putting a dozen comments on one issue, or — worse — replaying
 "🔴 audr stand DOWN" with nothing marking it as history, so somebody is sent to
 the host for an incident that ended yesterday.
+
+Moved here from `scripts/` by AUD-698, where it ran in NO job — see
+test_registry_prune.py for the history.
 """
 
 from __future__ import annotations
@@ -17,9 +19,25 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-_SPEC = importlib.util.spec_from_file_location(
-    "drain_alert_spool", Path(__file__).parent / "drain-alert-spool.py"
-)
+import pytest
+
+# Required: backend-tests runs `-m "unit or integration or contract"`, so an
+# unmarked file is collected and then deselected — moved and still not run.
+pytestmark = pytest.mark.unit
+
+# Through the repo root, since the subject is no longer a sibling; skipped
+# loudly when the mount is absent (a compose.test.yaml omission, not a defect in
+# drain-alert-spool.py).
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "drain-alert-spool.py"
+
+if not _SCRIPT.exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "scripts/drain-alert-spool.py is not mounted into the test container; add "
+        "it to compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+
+_SPEC = importlib.util.spec_from_file_location("drain_alert_spool", _SCRIPT)
 assert _SPEC and _SPEC.loader
 drain = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(drain)

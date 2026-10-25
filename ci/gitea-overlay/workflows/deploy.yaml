@@ -186,6 +186,16 @@ jobs:
       COMPOSE_PROJECT: audr-test-ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
+      # Before the suite, and a gate in its own right (AUD-698). This job is
+      # one of the four `build-deploy` needs, so a migration that will not
+      # downgrade stops the deploy here rather than being discovered by the
+      # rollback path that depends on it — which, when the downgrade fails,
+      # reports so and leaves the stack on the new build (see "Guarded deploy"
+      # below). Its own step so the job metadata distinguishes "cannot roll
+      # this back" from "a test failed": those are different fixes, and step
+      # names are the only channel a reader with no credentials has (AUD-714).
+      - name: Migration safety (single head, newest revisions reverse and re-apply)
+        run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build migration-smoke
       - name: Backend unit + integration tests (compose)
         run: docker compose -p "$COMPOSE_PROJECT" -f compose.test.yaml --profile backend run --rm --build backend-tests
       - name: Teardown
@@ -839,6 +849,47 @@ jobs:
       # NOTE this reclaims no bytes on its own. A /v2 manifest delete only unlinks
       # the tag; the blobs are freed solely by `registry garbage-collect` on the
       # registry host, which we have no shell for.
+      # Host-unit drift (AUD-698). The three installers put PINNED COPIES of the
+      # backup, the watchdog and the alert path on this host — deliberately, since
+      # the host's only git checkout is this runner's and is rewritten every
+      # deploy. The price is that a repo edit reaches the host only when the
+      # installer runs again, and nothing used to notice the gap: each `--check`
+      # reported presence and unit status, never content, and exited 0 either way.
+      #
+      # Here rather than in a test job because it is a property of the HOST, not
+      # of the tree: no amount of reading the diff can tell you what bytes are
+      # sitting in ~/.local/share/audr-watchdog. Every deploy is the right
+      # cadence — a deploy is when the repo moves, so it is exactly when the host
+      # can start being behind.
+      #
+      # AUDR_DEPLOY_HOST=local is load-bearing. This job is `runs-on: host` — it
+      # executes ON the deploy host, drives compose locally and ssh's nowhere, so
+      # no AUDR_DEPLOY_HOST is set here and no key is configured to hop with.
+      # Without `local` every run would exit "could not check" and this step
+      # would be a guard that measures nothing, which is worse than no step: it
+      # reads as covered. `local` swaps a local shell in for the ssh invocation;
+      # the installers accept it for the read-only modes and refuse a local
+      # install. backend/tests/unit/test_host_install_drift.py asserts this
+      # assignment is still here, because losing it fails open and silently.
+      #
+      # notify.sh finds the same secrets directory the watchdog uses, this being
+      # the same host.
+      #
+      # Exits 0 unconditionally, like the retention step below and for the same
+      # reason: drift is a condition to raise, not a reason to fail a deploy that
+      # has already passed its health check. The alert is the output here — keyed,
+      # so repeated deploys comment on one issue instead of opening one each, and
+      # self-resolving once the installer has been re-run.
+      - name: Check host-unit drift
+        if: always()
+        env:
+          AUDR_DEPLOY_HOST: local
+        run: |
+          bash scripts/host-install-drift.sh || {
+            echo "[host-install-drift] exit $? — see the alert it raised; the deploy itself is unaffected"
+          }
+          exit 0
+
       - name: Enforce registry tag retention
         env:
           AUDR_REGISTRY: ${{ vars.AUDR_REGISTRY }}

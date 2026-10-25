@@ -52,6 +52,7 @@ PHASES = (
     "ruff",
     "db_up",
     "backend_build",
+    "migration_smoke",
     "backend_suite",
     "backend_mypy",
     "frontend_install",

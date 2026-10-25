@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/registry-prune.py.
 
-Deliberately dependency-free: run it with `python3 scripts/test_registry_prune.py`.
-The backend pytest suite is not the right home for this — it runs inside a
-container that only copies `backend/`, so it cannot see `scripts/`.
-
 Every case here is a retention rule whose failure mode is a disarmed rollback,
 not a cosmetic mistake.
+
+Moved here from `scripts/` by AUD-698, where it ran in NO job. The reason it
+originally lived there — "the backend pytest suite runs inside a container that
+only copies `backend/`, so it cannot see `scripts/`" — stopped being true at
+AUD-580, which bind-mounts individual scripts into the test service for exactly
+this purpose. What remained was that `backend/pyproject.toml` pins
+`testpaths = ["tests"]`, so nothing ever collected this file: these cases ran
+only when somebody invoked it by hand, which in practice meant the day it was
+written. Still runnable that way, now also collected by the suite the team
+merges on.
 """
 
 from __future__ import annotations
@@ -17,7 +23,28 @@ import io
 import pathlib
 import sys
 
-_SCRIPT = pathlib.Path(__file__).with_name("registry-prune.py")
+import pytest
+
+# Required, not decorative: backend-tests runs `-m "unit or integration or
+# contract"` and conftest.py enforces exactly one suite marker per test, so an
+# unmarked file is collected and then silently deselected — moved and still not
+# run, which would have been the worst of both outcomes.
+pytestmark = pytest.mark.unit
+
+# Resolved through the repo root rather than as a sibling, since the subject is
+# no longer in this directory. Skipped — loudly, not silently — when the mount
+# is absent: that is a compose.test.yaml omission rather than a defect in the
+# script under test, and the two deserve different verdicts. Same convention as
+# test_notify_board_probe.py and test_prewarm_images.py.
+_SCRIPT = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "registry-prune.py"
+
+if not _SCRIPT.exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "scripts/registry-prune.py is not mounted into the test container; add it "
+        "to compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+
 _spec = importlib.util.spec_from_file_location("registry_prune", _SCRIPT)
 rp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rp)

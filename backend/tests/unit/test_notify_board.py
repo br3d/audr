@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/notify-board.py.
 
-Deliberately dependency-free: run it with `python3 scripts/test_notify_board.py`.
-
-NOTE (AUD-594): the reason recorded here for living outside the backend suite —
-"it runs inside a container that only copies `backend/`, so it cannot see
-`scripts/`" — stopped being true at AUD-580, which bind-mounts individual
-scripts into the test service for exactly this purpose. The live consequence is
-that no CI job runs this file: backend/pyproject.toml pins
-`testpaths = ["tests"]`, so these cases execute only when somebody invokes them
-by hand. New coverage for notify-board.py therefore goes to
-backend/tests/unit/test_notify_board_probe.py plus a mount in compose.test.yaml.
-Relocating what is already here is worth doing and is not AUD-594's scope.
-
 The HTTP layer is stubbed, so nothing here touches the real board. What is under
 test is the lifecycle: the failure mode that matters is not a bad request, it is
 one outage turning into a dozen `critical` issues (or, worse, an alert quietly
 appended to an issue somebody already closed).
+
+AUD-594 recorded the problem this file had and declined to fix it in scope:
+"the reason for living outside the backend suite — it runs inside a container
+that only copies `backend/`, so it cannot see `scripts/` — stopped being true at
+AUD-580 [...] The live consequence is that no CI job runs this file [...]
+Relocating what is already here is worth doing and is not AUD-594's scope."
+AUD-698 is where that relocation happened.
+
+Sibling file: test_notify_board_probe.py, which covers `--probe` and was written
+in backend/tests/unit from the start precisely because this one was unreachable.
+The two are complementary — lifecycle here, probe there — and now run together.
 """
 
 from __future__ import annotations
@@ -28,9 +27,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-_SPEC = importlib.util.spec_from_file_location(
-    "notify_board", Path(__file__).parent / "notify-board.py"
-)
+import pytest
+
+# Required: backend-tests runs `-m "unit or integration or contract"`, so an
+# unmarked file is collected and then deselected — moved and still not run.
+pytestmark = pytest.mark.unit
+
+# Through the repo root, since the subject is no longer a sibling; skipped
+# loudly when the mount is absent (a compose.test.yaml omission, not a defect in
+# notify-board.py).
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "notify-board.py"
+
+if not _SCRIPT.exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "scripts/notify-board.py is not mounted into the test container; add it to "
+        "compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+
+_SPEC = importlib.util.spec_from_file_location("notify_board", _SCRIPT)
 assert _SPEC and _SPEC.loader
 nb = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(nb)
@@ -359,8 +374,12 @@ class BoardSinkTest(unittest.TestCase):
         )
 
     def test_state_filename_is_sanitised(self):
-        path = nb.state_path("/tmp/s", "../../etc/passwd")
-        self.assertEqual(os.path.dirname(path), "/tmp/s")
+        # S108: nothing is created here. The string is a directory argument to
+        # a pure path-sanitising function, and the case under test is that a
+        # traversal in the SECOND argument cannot escape the first. A tmp_path
+        # fixture would make the assertion harder to read and prove no more.
+        path = nb.state_path("/tmp/s", "../../etc/passwd")  # noqa: S108
+        self.assertEqual(os.path.dirname(path), "/tmp/s")  # noqa: S108
         self.assertNotIn("/", os.path.basename(path)[len("issue-") :])
 
     def test_env_file_takes_only_known_keys_and_strips_quotes(self):

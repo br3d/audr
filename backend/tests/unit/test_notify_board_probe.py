@@ -10,10 +10,14 @@ these tests exist to keep it honest — each one pins a verdict that, if it
 regressed, would read as "alerting works" while it did not.
 
 They live in the backend suite rather than next to the script because
-`scripts/test_*.py` is run by no CI job (backend/pyproject.toml pins
+`scripts/test_*.py` was run by no CI job (backend/pyproject.toml pins
 `testpaths = ["tests"]`), and an unrun test is worth less than no test: it reads
 as coverage. compose.test.yaml mounts scripts/notify-board.py for this reason,
 the same way AUD-580 mounted the watchdog.
+
+AUD-698 finished the job and moved the stragglers here too, so the lifecycle
+half of this script's coverage — test_notify_board.py — now runs beside this
+file instead of nowhere.
 
 The HTTP layer is stubbed, so nothing here reaches a real board.
 """

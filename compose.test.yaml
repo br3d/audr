@@ -70,6 +70,61 @@ services:
     networks:
       - test-net
 
+  # upgrade -> downgrade -> upgrade over the newest revisions (AUD-698).
+  #
+  # Same image, same working_dir and same DATABASE_URL as `migrate-test` above,
+  # on purpose: what this proves has to be proven through the identical
+  # `python -m alembic` entrypoint the deploy's rollback uses, or it proves
+  # something else. The script carries the full argument; the short version is
+  # that the guarded deploy gives up when `alembic downgrade` fails and leaves
+  # the stack on the new build, so an irreversible migration is a one-way door
+  # that nothing used to open in CI.
+  #
+  # Does NOT depend on migrate-test: the script's first act is `upgrade head`
+  # itself, so sequencing it behind a second upgrade would only add a container.
+  # It leaves the database at head (asserted, not assumed), which is what makes
+  # it safe to run before `backend-tests` against this same ephemeral database.
+  migration-smoke:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["bash", "/workspace/scripts/migration-smoke.sh"]
+    working_dir: /app
+    # root, unlike the deploy's use of this same image, which runs as `audr`
+    # (uid 1000). The mounted script below is read from the host checkout with
+    # the host's ownership and mode, and an agent host with `umask 077` — this
+    # project's does — leaves every tracked script `rwx------` owned by a uid
+    # that is not 1000. The container then cannot read its own entrypoint and
+    # exits 126.
+    #
+    # That failure is worth avoiding for its diagnosis, not its rarity: a red
+    # `migration_smoke` phase means "this commit cannot be rolled back", and a
+    # permissions problem wearing that label sends the reader to audit a
+    # perfectly good downgrade. Same misattribution AUD-747 removed from the
+    # image pulls. `backend-tests` has always run as root for this reason and
+    # reads a dozen such mounts; this service just makes the dependency explicit
+    # instead of inheriting it by luck.
+    #
+    # Nothing here writes to the image, and the database credentials are
+    # compose.test.yaml's throwaway fixtures.
+    user: root
+    environment:
+      DATABASE_URL: postgresql+psycopg://audr_test:test_password_only_for_ci@db-test:5432/audr_test
+    depends_on:
+      db-test:
+        condition: service_healthy
+    networks:
+      - test-net
+    volumes:
+      # The runtime image carries the application and the migrations, not the
+      # repo's scripts. Mounting it rather than baking it in keeps the runtime
+      # image free of a test-only file, and means the guard runs on the shipped
+      # source of the script rather than on whatever was baked at build time.
+      - ./scripts/migration-smoke.sh:/workspace/scripts/migration-smoke.sh:ro
+    profiles:
+      - backend
+
   backend-tests:
     build:
       context: .
@@ -133,10 +188,10 @@ services:
       - ./scripts/alert-dispatch.sh:/workspace/scripts/alert-dispatch.sh:ro
       # AUD-594: tests/unit/test_notify_board_probe.py loads the real
       # notify-board.py and drives `--probe` over a stubbed HTTP layer. The
-      # script's own scripts/test_notify_board.py is run by no CI job
-      # (backend/pyproject.toml pins testpaths = ["tests"]), so without this
       # mount the check that stops the installer promising delivery it never
-      # verified would not run anywhere.
+      # verified would not run anywhere. Its sibling test_notify_board.py — the
+      # lifecycle half — ran in no job at all until AUD-698 moved it here from
+      # scripts/, and now shares this mount.
       - ./scripts/notify-board.py:/workspace/scripts/notify-board.py:ro
       # AUD-595: tests/unit/test_notify_road.py runs the real notify.sh and
       # asserts the `--road-file` contract — which word it writes on each exit
@@ -199,6 +254,43 @@ services:
       # on success, for main only. One step is all the mechanism has, and a
       # rebase can lose it without anything going red.
       - ./ci/gitea-overlay/workflows/deploy.yaml:/workspace/ci/gitea-overlay/workflows/deploy.yaml:ro
+      # AUD-698 moved five test files out of scripts/ and into this suite. They
+      # ran in NO job where they were: `testpaths = ["tests"]` meant nothing
+      # collected them, so ~1,400 lines of cases — every one of them guarding a
+      # retention rule whose failure mode is a deleted backup or a disarmed
+      # rollback — executed only when somebody ran the file by hand.
+      #
+      # Each needs its subject mounted. notify-board.py, promote-image.py and
+      # compose.yaml are already above (AUD-594/AUD-442/AUD-407 put them there
+      # for other guards); these three are the remainder. Without the mount the
+      # moved file skips with a message naming this list, rather than failing as
+      # though the script were broken.
+      - ./scripts/dump-prune.py:/workspace/scripts/dump-prune.py:ro
+      - ./scripts/registry-prune.py:/workspace/scripts/registry-prune.py:ro
+      - ./scripts/drain-alert-spool.py:/workspace/scripts/drain-alert-spool.py:ro
+      # AUD-698: tests/unit/test_host_install_drift.py drives the real drift
+      # comparison with a local shell standing in for ssh, and pins each
+      # installer to the manifest it must read. The host installers put PINNED
+      # COPIES of the backup, the watchdog and the alert path on the deploy
+      # host, so the repo version is NOT what executes there; these files are
+      # the only thing that notices when the two diverge, and the guard can
+      # only skip without them.
+      - ./scripts/lib/host-install-manifest.sh:/workspace/scripts/lib/host-install-manifest.sh:ro
+      - ./scripts/host-install-drift.sh:/workspace/scripts/host-install-drift.sh:ro
+      - ./scripts/install-backup.sh:/workspace/scripts/install-backup.sh:ro
+      - ./scripts/install-watchdog.sh:/workspace/scripts/install-watchdog.sh:ro
+      - ./scripts/install-mirror-dropin.sh:/workspace/scripts/install-mirror-dropin.sh:ro
+      # The manifest names these too, and one of its guards asserts every entry
+      # points at a file that really exists — a rename is the realistic way an
+      # entry starts checking nothing while still reporting success. That guard
+      # can only do its job if the whole manifested set is visible here.
+      # ci/host-units goes in as a directory: it holds nothing but these unit
+      # files, and enumerating eight mounts that must stay in step with the
+      # manifest would just be a second manifest.
+      - ./scripts/backup-run.sh:/workspace/scripts/backup-run.sh:ro
+      - ./scripts/backup.sh:/workspace/scripts/backup.sh:ro
+      - ./scripts/restore.sh:/workspace/scripts/restore.sh:ro
+      - ./ci/host-units:/workspace/ci/host-units:ro
     profiles:
       - backend
 

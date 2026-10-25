@@ -50,9 +50,10 @@ These install or run on the deploy host only, and need the SSH key and
 | `notify.sh` | Sends an operational alert to every configured channel — a `critical` Paperclip issue (via `notify-board.py`) and/or Telegram — and spools anything it cannot deliver for `drain-alert-spool.py` to replay later |
 | `notify-board.py` | Opens (and later closes) a Paperclip issue for an ongoing outage. Reached through `notify.sh`; nothing else calls it directly |
 | `drain-alert-spool.py` | Replays alerts `notify.sh` could not deliver from the host, run from inside an agent so a board credential is available. `--dry-run` shows without changing anything |
-| `install-mirror-dropin.sh` | Installs the boot-DNS-race drop-in for `audr-mirror.service` on the deploy host. `--check` reports without changing anything |
-| `test_notify_board.py` | Dependency-free unit tests for `notify-board.py`'s issue lifecycle: `python3 scripts/test_notify_board.py` |
-| `test_drain_alert_spool.py` | Dependency-free unit tests for the spool replay/collapse logic: `python3 scripts/test_drain_alert_spool.py` |
+| `install-mirror-dropin.sh` | Installs the boot-DNS-race drop-in for `audr-mirror.service` on the deploy host. `--check` reports without changing anything; `--check-drift` compares the host's copy against this checkout and exits non-zero if it has fallen behind |
+| `host-install-drift.sh` | Asks every installer's `--check-drift` whether the deploy host still runs this checkout's pinned copies, and raises one keyed, self-resolving `notify.sh` alert when it does not. Run from the deploy workflow on every deploy (AUD-698) |
+| `lib/host-install-manifest.sh` | Sourced, not run: the single source of truth for which files each installer pins to the host, and the content comparison `--check-drift` uses. Drives both the copy and the check so the two cannot disagree |
+| `migration-smoke.sh` | Asserts a single Alembic head and that the newest revisions really reverse (`upgrade` → `downgrade` → `upgrade`) against the ephemeral test database. Runs as the `migration-smoke` compose service and as its own `test.sh` phase, because the guarded deploy's rollback is built on `alembic downgrade` succeeding |
 
 ## Internal — maintenance and generated files
 
@@ -60,14 +61,29 @@ These install or run on the deploy host only, and need the SSH key and
 |---|---|
 | `host-gc.sh` | Bounds the deploy host's Docker disk usage. Every push to `main` builds a new image on the host runner and nothing else removes them. Retention is age-based *and* capped by count, and escalates to shorter windows on its own while the disk is above the warn threshold |
 | `registry-prune.py` | Enforces a tag-retention policy on the image registry over the `/v2` HTTP API, since the registry has no built-in retention and we have no shell on it |
-| `test_registry_prune.py` | Dependency-free unit tests for the pruner: `python3 scripts/test_registry_prune.py`. Not in the pytest suite, which runs in a container that cannot see `scripts/` |
 | `dump-prune.py` | Applies the authorised GFS retention (N days of dumps + newest per older ISO week, optionally capped by `--weeks`) to a dump directory. Dry-run by default. Serves both dump families we own via `--prefix`: the Paperclip archive on ai-stuff (AUD-435 — the durable fix is a board setting an agent token cannot write, so this is the stopgap) and audr's own stand backups (AUD-562) |
 | `backup-run.sh` | One scheduled backup: dump, **decrypt it back** to prove the archive is readable, prune to retention, and alert via `notify.sh` if any step failed — with a flag file so the next success stands the alert down. Invoked by `audr-backup.service`; safe to run by hand on the host for an off-schedule dump |
-| `test_promote_image.py` | Dependency-free, offline unit tests for the `compose.yaml` rewrite in `promote-image.py`: `python3 scripts/test_promote_image.py` |
-| `test_dump_prune.py` | Dependency-free unit tests for the dump pruner: `python3 scripts/test_dump_prune.py`. One case reproduces the 2026-10-11 hand-prune file-for-file; others assert the two dump families never become candidates for each other's prune, and that a `master_key-<ts>.hex` beside a dump is never deleted |
 | `benchmark.py` | Two reports: warm dashboard/history read latency against the reference scale fixture, and the catalog's logical RPC call count. Results are published in [`docs/benchmark.md`](../docs/benchmark.md) |
 | `gen_third_party.py` | Regenerates the dependency licence tables in [`docs/third-party.md`](../docs/third-party.md) from the locked runtime closure |
 | `gen_brand_assets.py` | Derives the transparent PNGs and icons the app loads from the source logo artwork in `assets/brand/` |
 
 `lib/` holds shared shell helpers (`deploy-env.sh`, `version.sh`) sourced by the
 scripts above; it is not run directly.
+
+## Tests for these scripts
+
+The unit tests for the scripts here live in `backend/tests/unit/`, not beside
+them. Five of them (`test_notify_board.py`, `test_drain_alert_spool.py`,
+`test_registry_prune.py`, `test_promote_image.py`, `test_dump_prune.py`) were
+moved there in AUD-698 after it turned out they ran in **no** job:
+`backend/pyproject.toml` pins `testpaths = ["tests"]`, so nothing collected
+them, and ~1,400 lines of cases — each guarding a retention rule whose failure
+mode is a deleted backup or a disarmed rollback — executed only when somebody
+invoked the file by hand. Four of them had in fact been failing against a
+`compose.yaml` that changed under them, unnoticed.
+
+Each resolves its subject through the repo root and needs that script
+bind-mounted into the test container; `compose.test.yaml` carries one mount per
+script with the reason. They remain runnable on their own
+(`python3 backend/tests/unit/test_dump_prune.py`), which is how they were
+designed and is still useful on a host with no Docker.

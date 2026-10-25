@@ -230,6 +230,18 @@ jobs:
           echo "$DETAIL"
           [ "$STATE" = pass ]
 
+      # Red here says the commit cannot be rolled back, not that a test broke
+      # (AUD-698): the newest revision's `downgrade()` does not reverse it, and
+      # the guarded deploy's recovery path is built on that downgrade working.
+      - name: 'phase: migration safety (single head, newest revisions reverse)'
+        if: always() && steps.phases.outputs.migration_smoke != 'skip'
+        env:
+          STATE: ${{ steps.phases.outputs.migration_smoke }}
+          DETAIL: ${{ steps.phases.outputs.migration_smoke_detail }}
+        run: |
+          echo "$DETAIL"
+          [ "$STATE" = pass ]
+
       - name: 'phase: backend suite (pytest)'
         if: always() && steps.phases.outputs.backend_suite != 'skip'
         env:

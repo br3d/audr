@@ -58,7 +58,7 @@ proven to contain both the flag and the writer that feeds it, so the false
 
 Python rather than the `.sh` the issue sketched: the registry dance and the
 `compose.yaml` rewrite are both easier to get right — and, more to the point,
-testable without a network — in Python. `scripts/test_promote_image.py` covers
+testable without a network — in Python. `backend/tests/unit/test_promote_image.py` covers
 the rewrite; the convention is the same as `registry-prune.py`.
 
 Idempotent: run it twice and the second run finds nothing to change and exits

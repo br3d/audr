@@ -3,7 +3,22 @@
 # (AUD-444; extended with news alert dispatch by AUD-584).
 #
 #   scripts/install-watchdog.sh            install/update, then show status
-#   scripts/install-watchdog.sh --check     report what is installed; no changes
+#   scripts/install-watchdog.sh --check-drift  compare the host's pinned copies against
+#                                 this checkout and print one line per file; no
+#                                 changes, no sink probes, one SSH round trip.
+#                                 Non-zero on drift. This is what the deploy
+#                                 workflow runs every deploy (AUD-698).
+#   scripts/install-watchdog.sh --check     report what is installed, probe each
+#                                           alert sink, and compare the host's
+#                                           pinned copies against this checkout;
+#                                           no changes. EXITS NON-ZERO ON DRIFT
+#                                           (AUD-698) so a workflow can gate on
+#                                           it — see scripts/host-install-drift.sh.
+#
+# Env: AUDR_DEPLOY_HOST  ssh destination of the host, or `local` to inspect the
+#                        machine this runs on (read-only modes only — that is
+#                        how the deploy workflow, which runs ON the host, checks
+#                        for drift without an ssh hop).
 #
 # What it puts on the host:
 #   <install dir>/scripts/{stand-watchdog.sh,alert-dispatch.sh,notify.sh,
@@ -32,13 +47,43 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/deploy-env.sh
 . "$REPO_DIR/scripts/lib/deploy-env.sh"
 audr_load_deploy_env "$REPO_DIR"
+# AUDR_WATCHDOG_FILES — the single source of truth for what this script pins to
+# the host, used below to drive both the copy and the drift check so the two
+# cannot disagree (AUD-698).
+# shellcheck source=scripts/lib/host-install-manifest.sh
+. "$REPO_DIR/scripts/lib/host-install-manifest.sh"
 
 HOST="${AUDR_DEPLOY_HOST:-}"
-audr_require AUDR_DEPLOY_HOST "SSH destination of the deploy host that should run the watchdog."
 KEY="${AUDR_SSH_KEY:-$REPO_DIR/id_ed25519}"
 REMOTE_DIR="${AUDR_REMOTE_DIR:-/home/codex/audr}"
 INSTALL_DIR="${AUDR_WATCHDOG_DIR:-.local/share/audr-watchdog}"
-SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$HOST")
+# AUDR_DEPLOY_HOST=local means "inspect THIS machine" (AUD-698).
+#
+# The deploy workflow's job is `runs-on: host` — it executes on the deploy host
+# itself, which is why it drives `docker compose` directly and never ssh's
+# anywhere. There is consequently no AUDR_DEPLOY_HOST set in that job and no key
+# configured to make a hop with, so a drift check that insisted on ssh would
+# exit "could not check" on every deploy: a step that looks like a guard and
+# measures nothing.
+#
+# `local` substitutes a local shell for the ssh invocation. Every command this
+# script sends is a string run by `"${SSH[@]}"`, so a plain `bash -c` satisfies
+# the same contract — the same substitution backend/tests/unit/
+# test_host_install_drift.py uses to exercise the comparison, and
+# `"${SSH[@]}" 'echo "$HOME"'` resolves the install directory identically.
+#
+# Read-only modes only. A local *install* is refused further down: scp-to-self
+# and the `sudo tee` of a unit are different enough operations that quietly
+# doing something not-quite-that would be worse than declining.
+if [ "${AUDR_DEPLOY_HOST:-}" = local ]; then
+  SSH=(bash -c)
+else
+  audr_require AUDR_DEPLOY_HOST "SSH destination of the deploy host that should run the watchdog."
+  # accept-new, not no: both learn an unknown host key without prompting, but
+  # `no` ALSO accepts a key that has CHANGED since last time, which is the one
+  # case worth stopping for. Matches scripts/deploy.sh (AUD-698 item 3).
+  SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "$HOST")
+fi
 
 # --- sink probes (AUD-594) ----------------------------------------------------
 # This script used to end with "Alert credentials present — alerts will be
@@ -172,9 +217,10 @@ EOF
 
 mode=apply
 case "${1:-}" in
-  --check) mode=check ;;
-  "")      ;;
-  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+  --check)       mode=check ;;
+  --check-drift) mode=drift ;;
+  "")            ;;
+  *) echo "usage: $0 [--check|--check-drift]" >&2; exit 2 ;;
 esac
 
 if [ "$mode" = check ]; then
@@ -214,6 +260,19 @@ fi
 remote_home="$("${SSH[@]}" 'echo "$HOME"')"
 abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
 
+# --check-drift: the content comparison alone, which is the only part of --check
+# with an exit code and the only part cheap enough to run on every deploy. The
+# full --check also lists units and timers and probes both alert sinks over the
+# network — useful to a human at a terminal, but in a workflow that is noise
+# plus an outbound HTTPS call per run, and an expired Telegram token would red a
+# step that is supposed to be about drift.
+#
+# Below abs_install on purpose: the pinned copies live under it.
+if [ "$mode" = drift ]; then
+  audr_drift_report "$REPO_DIR" "$abs_install" "$REMOTE_DIR" "${AUDR_WATCHDOG_FILES[@]}"
+  exit $?
+fi
+
 if [ "$mode" = check ]; then
   # Presence was listed above because it is a fact worth seeing; it is
   # deliberately NOT the verdict. A present file whose key has expired is the
@@ -224,20 +283,61 @@ if [ "$mode" = check ]; then
   check_tg_rc=0;    probe_telegram || check_tg_rc=$?
   report_sinks "$check_board_rc" "$check_tg_rc" \
     || echo "==> NO CHANNEL CONFIGURED — alerts are logged on this host and delivered to nobody"
-  exit 0
+
+  # Content drift (AUD-698). The sections above answer "is it installed" and
+  # "does the channel answer". Neither answers "is the installed code this
+  # commit's", and on a host whose copies are pinned on purpose that is a
+  # separate question with a separate failure: a watchdog whose thresholds were
+  # tightened in the repo three commits ago is still watching at the old ones,
+  # and every line of this report is green while it does.
+  #
+  # AUD-594 is the precedent for caring. The install used to end with "Alert
+  # credentials present — alerts will be delivered" on the strength of
+  # `test -f`, and the claim was false because the key inside had expired. Same
+  # shape here one level down: the file is present, and present is not current.
+  echo "== pinned copies vs this checkout =="
+  drift_rc=0
+  audr_drift_report "$REPO_DIR" "$abs_install" "$REMOTE_DIR" "${AUDR_WATCHDOG_FILES[@]}" || drift_rc=$?
+  if [ "$drift_rc" -ne 0 ]; then
+    echo
+    echo "==> DRIFT: the host's alerting code is not this checkout's. Re-run: $0"
+  fi
+
+  # Only drift decides the exit code, deliberately. An unconfigured sink is a
+  # host that was never set up and is reported in prose above; drift is a host
+  # that WAS set up and has silently fallen behind, which is the condition a
+  # workflow should be able to gate on without also failing every host that has
+  # no Telegram token.
+  exit "$drift_rc"
+fi
+
+# A local install is not supported; see the AUDR_DEPLOY_HOST=local note above.
+if [ "${AUDR_DEPLOY_HOST:-}" = local ]; then
+  echo "ERROR: AUDR_DEPLOY_HOST=local supports the read-only check modes only." >&2
+  echo "       Installing needs a real destination: scp and the units' \`sudo tee\`" >&2
+  echo "       are not the same operation against localhost, and guessing which" >&2
+  echo "       you meant is worse than refusing. Re-run with --check-drift, or" >&2
+  echo "       set AUDR_DEPLOY_HOST to the host's ssh destination." >&2
+  exit 2
 fi
 
 echo "==> installing host alerting scripts to $HOST:$abs_install/scripts"
 "${SSH[@]}" "mkdir -p '$abs_install/scripts'"
-scp -q -i "$KEY" -o StrictHostKeyChecking=no \
-  "$REPO_DIR/scripts/stand-watchdog.sh" "$REPO_DIR/scripts/alert-dispatch.sh" \
-  "$REPO_DIR/scripts/notify.sh" "$REPO_DIR/scripts/notify-board.py" \
-  "$HOST:$abs_install/scripts/"
-"${SSH[@]}" "chmod 755 '$abs_install/scripts/stand-watchdog.sh' '$abs_install/scripts/alert-dispatch.sh' '$abs_install/scripts/notify.sh' '$abs_install/scripts/notify-board.py'"
+# Both lists come from AUDR_WATCHDOG_FILES, so the copy and the --check above
+# cannot disagree about what "installed" means (AUD-698).
+mapfile -t pinned_sources < <(audr_manifest_scp_sources "$REPO_DIR" "$abs_install" "${AUDR_WATCHDOG_FILES[@]}")
+mapfile -t pinned_targets < <(audr_manifest_remote_targets "$abs_install" "${AUDR_WATCHDOG_FILES[@]}")
+scp -q -i "$KEY" -o StrictHostKeyChecking=accept-new \
+  "${pinned_sources[@]}" "$HOST:$abs_install/scripts/"
+"${SSH[@]}" "chmod 755 $(printf "'%s' " "${pinned_targets[@]}")"
 
 echo "==> rendering and installing systemd units (sudo on the host)"
+# Delegates to the shared substitution so the install and the --check above
+# render a unit identically. Two copies of one sed would drift, and a check that
+# rendered differently would report permanent drift on a correctly installed
+# host — an alert that always fires is one nobody reads.
 render_unit() {
-  sed -e "s|@INSTALL_DIR@|$abs_install|g" -e "s|@REMOTE_DIR@|$REMOTE_DIR|g" "$1"
+  audr_render_unit "$1" "$abs_install" "$REMOTE_DIR"
 }
 
 # Units go in via stdin rather than scp-to-/etc: the SSH user has no write

@@ -56,11 +56,16 @@ LEDGER="${1:-.test-phases.tsv}"
 # for a reason wholly outside the tree — Docker Hub's anonymous allowance is per
 # source IP and this host shares it with every other agent and with the Gitea
 # runner. Red there means re-run or warm the image, never read the diff.
+# `migration_smoke` sits between the build and the suite (AUD-698). Red there is
+# not a test failure: it means the newest revision will not downgrade, and so
+# the guarded deploy could not roll this commit back. Different verdict, and a
+# different fix, from a red `backend_suite`.
 PHASES=(
   image_pull
   ruff
   db_up
   backend_build
+  migration_smoke
   backend_suite
   backend_mypy
   frontend_install

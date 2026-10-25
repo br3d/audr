@@ -3,7 +3,21 @@
 # host (AUD-562).
 #
 #   scripts/install-backup.sh            install/update, take a first dump, show status
-#   scripts/install-backup.sh --check    report what is installed; no changes
+#   scripts/install-backup.sh --check-drift  compare the host's pinned copies against
+#                               this checkout and print one line per file; no
+#                               changes, no sink probes, one SSH round trip.
+#                               Non-zero on drift. This is what the deploy
+#                               workflow runs every deploy (AUD-698).
+#   scripts/install-backup.sh --check    report what is installed, and whether the
+#                                        host's pinned copies still match this
+#                                        checkout; no changes. EXITS NON-ZERO ON
+#                                        DRIFT (AUD-698), so a workflow can gate
+#                                        on it — see scripts/host-install-drift.sh.
+#
+# Env: AUDR_DEPLOY_HOST  ssh destination of the host, or `local` to inspect the
+#                        machine this runs on (read-only modes only — that is
+#                        how the deploy workflow, which runs ON the host, checks
+#                        for drift without an ssh hop).
 #
 # What it puts on the host:
 #   <install dir>/scripts/{backup-run.sh,backup.sh,dump-prune.py,restore.sh,
@@ -37,20 +51,70 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/deploy-env.sh
 . "$REPO_DIR/scripts/lib/deploy-env.sh"
 audr_load_deploy_env "$REPO_DIR"
+# AUDR_BACKUP_FILES — the single source of truth for what this script pins to
+# the host, used below to drive both the copy and the drift check so the two
+# cannot disagree (AUD-698).
+# shellcheck source=scripts/lib/host-install-manifest.sh
+. "$REPO_DIR/scripts/lib/host-install-manifest.sh"
 
 HOST="${AUDR_DEPLOY_HOST:-}"
-audr_require AUDR_DEPLOY_HOST "SSH destination of the deploy host that should back itself up."
 KEY="${AUDR_SSH_KEY:-$REPO_DIR/id_ed25519}"
 REMOTE_DIR="${AUDR_REMOTE_DIR:-/home/codex/audr}"
 INSTALL_DIR="${AUDR_BACKUP_INSTALL_DIR:-.local/share/audr-backup}"
-SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$HOST")
+# AUDR_DEPLOY_HOST=local means "inspect THIS machine" (AUD-698).
+#
+# The deploy workflow's job is `runs-on: host` — it executes on the deploy host
+# itself, which is why it drives `docker compose` directly and never ssh's
+# anywhere. There is consequently no AUDR_DEPLOY_HOST set in that job and no key
+# configured to make a hop with, so a drift check that insisted on ssh would
+# exit "could not check" on every deploy: a step that looks like a guard and
+# measures nothing.
+#
+# `local` substitutes a local shell for the ssh invocation. Every command this
+# script sends is a string run by `"${SSH[@]}"`, so a plain `bash -c` satisfies
+# the same contract — the same substitution backend/tests/unit/
+# test_host_install_drift.py uses to exercise the comparison, and
+# `"${SSH[@]}" 'echo "$HOME"'` resolves the install directory identically.
+#
+# Read-only modes only. A local *install* is refused further down: scp-to-self
+# and the `sudo tee` of a unit are different enough operations that quietly
+# doing something not-quite-that would be worse than declining.
+if [ "${AUDR_DEPLOY_HOST:-}" = local ]; then
+  SSH=(bash -c)
+else
+  audr_require AUDR_DEPLOY_HOST "SSH destination of the deploy host that should back itself up."
+  # accept-new, not no: both learn an unknown host key without prompting, but
+  # `no` ALSO accepts a key that has CHANGED since last time, which is the one
+  # case worth stopping for. Matches scripts/deploy.sh (AUD-698 item 3).
+  SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "$HOST")
+fi
 
 mode=apply
 case "${1:-}" in
-  --check) mode=check ;;
-  "")      ;;
-  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+  --check)       mode=check ;;
+  --check-drift) mode=drift ;;
+  "")            ;;
+  *) echo "usage: $0 [--check|--check-drift]" >&2; exit 2 ;;
 esac
+
+# Needed by --check as well as by the install since AUD-698: the drift report
+# compares the host's pinned copies, and those live under this directory.
+# Absolute install path, resolved on the host so ~ belongs to the remote user.
+# shellcheck disable=SC2016  # $HOME must reach the REMOTE shell unexpanded —
+# that is the entire point of the line. Double quotes would resolve it here, on
+# the agent host, and install under the wrong user's home.
+remote_home="$("${SSH[@]}" 'echo "$HOME"')"
+abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
+
+# --check-drift: the content comparison alone, which is the only part of --check
+# with an exit code and the only part cheap enough to run on every deploy. The
+# full --check also lists units, timers and dumps and (for the watchdog) probes
+# each alert sink over the network — useful to a human at a terminal, noise in a
+# workflow, and a probe that costs an outbound HTTPS call per run.
+if [ "$mode" = drift ]; then
+  audr_drift_report "$REPO_DIR" "$abs_install" "$REMOTE_DIR" "${AUDR_BACKUP_FILES[@]}"
+  exit $?
+fi
 
 if [ "$mode" = check ]; then
   "${SSH[@]}" "
@@ -105,28 +169,53 @@ if [ "$mode" = check ]; then
       echo 'NO KEK FOUND — a restore from these dumps cannot decrypt wallet addresses'
     fi
   "
-  exit 0
+
+  # Content drift (AUD-698). Everything above reports STATE — units, timer,
+  # dumps, engine, KEK — and every line of it can be green while the host runs
+  # a backup script three commits behind this checkout. That is not a
+  # hypothetical: pinning the copies is deliberate (the host's only git checkout
+  # is the CI runner's, rewritten every deploy), and the price of pinning is
+  # that a repo edit reaches the host only when this script runs again.
+  #
+  # So this section asks the one question the rest does not: are the bytes on
+  # the host the bytes in this commit? It is also the only part of --check with
+  # an exit code attached, which is what lets a workflow gate on it.
+  echo '== pinned copies vs this checkout =='
+  drift_rc=0
+  audr_drift_report "$REPO_DIR" "$abs_install" "$REMOTE_DIR" "${AUDR_BACKUP_FILES[@]}" || drift_rc=$?
+  if [ "$drift_rc" -ne 0 ]; then
+    echo
+    echo "==> DRIFT: the host's backup code is not this checkout's. Re-run: $0"
+  fi
+  exit "$drift_rc"
 fi
 
-# Absolute install path, resolved on the host so ~ belongs to the remote user.
-# shellcheck disable=SC2016  # $HOME must reach the REMOTE shell unexpanded —
-# that is the entire point of the line. Double quotes would resolve it here, on
-# the agent host, and install under the wrong user's home.
-remote_home="$("${SSH[@]}" 'echo "$HOME"')"
-abs_install="$remote_home/${INSTALL_DIR#"$remote_home/"}"
+
+# A local install is not supported; see the AUDR_DEPLOY_HOST=local note above.
+if [ "${AUDR_DEPLOY_HOST:-}" = local ]; then
+  echo "ERROR: AUDR_DEPLOY_HOST=local supports the read-only check modes only." >&2
+  echo "       Installing needs a real destination: scp and the units' \`sudo tee\`" >&2
+  echo "       are not the same operation against localhost, and guessing which" >&2
+  echo "       you meant is worse than refusing. Re-run with --check-drift, or" >&2
+  echo "       set AUDR_DEPLOY_HOST to the host's ssh destination." >&2
+  exit 2
+fi
 
 echo "==> installing backup scripts to $HOST:$abs_install/scripts"
 "${SSH[@]}" "mkdir -p '$abs_install/scripts'"
+# Both the file list and the chmod list come from AUDR_BACKUP_FILES, so the
+# copy and the --check above cannot disagree about what "installed" means — a
+# file dropped from one list and not the other is precisely the drift this
+# ticket is about, one level up (AUD-698).
+#
 # notify.sh resolves its sibling notify-board.py relative to its own directory,
-# so both travel together or alerting silently degrades to a log line.
-scp -q -i "$KEY" -o StrictHostKeyChecking=no \
-  "$REPO_DIR/scripts/backup-run.sh" "$REPO_DIR/scripts/backup.sh" \
-  "$REPO_DIR/scripts/dump-prune.py" "$REPO_DIR/scripts/restore.sh" \
-  "$REPO_DIR/scripts/notify.sh" "$REPO_DIR/scripts/notify-board.py" \
-  "$HOST:$abs_install/scripts/"
-"${SSH[@]}" "chmod 755 '$abs_install/scripts/backup-run.sh' '$abs_install/scripts/backup.sh' \
-  '$abs_install/scripts/dump-prune.py' '$abs_install/scripts/restore.sh' \
-  '$abs_install/scripts/notify.sh' '$abs_install/scripts/notify-board.py'"
+# so both travel together or alerting silently degrades to a log line. The
+# manifest keeps them adjacent for that reason.
+mapfile -t pinned_sources < <(audr_manifest_scp_sources "$REPO_DIR" "$abs_install" "${AUDR_BACKUP_FILES[@]}")
+mapfile -t pinned_targets < <(audr_manifest_remote_targets "$abs_install" "${AUDR_BACKUP_FILES[@]}")
+scp -q -i "$KEY" -o StrictHostKeyChecking=accept-new \
+  "${pinned_sources[@]}" "$HOST:$abs_install/scripts/"
+"${SSH[@]}" "chmod 755 $(printf "'%s' " "${pinned_targets[@]}")"
 
 echo "==> checking the host can encrypt"
 if ! "${SSH[@]}" 'command -v age >/dev/null 2>&1'; then
@@ -142,8 +231,11 @@ if ! "${SSH[@]}" 'command -v age >/dev/null 2>&1'; then
 fi
 
 echo "==> rendering and installing systemd units (sudo on the host)"
-service="$(sed -e "s|@INSTALL_DIR@|$abs_install|g" -e "s|@REMOTE_DIR@|$REMOTE_DIR|g" \
-  "$REPO_DIR/ci/host-units/audr-backup.service.in")"
+# Via audr_render_unit so the substitution the install applies is literally the
+# same code the --check above renders with. Two copies of one sed would drift,
+# and a check that rendered differently would report permanent drift on a
+# correctly installed host — an alert that always fires is one nobody reads.
+service="$(audr_render_unit "$REPO_DIR/ci/host-units/audr-backup.service.in" "$abs_install" "$REMOTE_DIR")"
 
 # Units go in via stdin rather than scp-to-/etc: the SSH user has no write
 # access there, and this keeps the privileged step to one explicit sudo tee.

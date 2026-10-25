@@ -1,31 +1,74 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/promote-image.py (AUD-546).
 
-Dependency-free and offline: run with `python3 scripts/test_promote_image.py`.
-Same home and same reason as scripts/test_registry_prune.py — the backend
-pytest suite runs in a container that only copies `backend/`.
-
 What is covered is the half that can be got wrong silently: the `compose.yaml`
 rewrite. Every failure here lands a broken anchor or a healthcheck calling a
 module the pinned image does not have, which is the exact class of bug this
 script exists to end. The registry half is left to the real registry; it fails
 loudly and in one place.
+
+Moved here from `scripts/` by AUD-698, where it ran in NO job — see
+test_registry_prune.py for the history. Sibling file:
+test_promote_image_drift.py, which was written in backend/tests/unit from the
+start because this one was unreachable.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import pathlib
+import subprocess
 import sys
 
-_SCRIPT = pathlib.Path(__file__).with_name("promote-image.py")
+import pytest
+
+# Required: backend-tests runs `-m "unit or integration or contract"`, so an
+# unmarked file is collected and then deselected — moved and still not run.
+pytestmark = pytest.mark.unit
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_SCRIPT = REPO_ROOT / "scripts" / "promote-image.py"
+
+# Two separate mounts, so they are reported separately: the script is the
+# subject, and compose.yaml is the fixture every rewrite case reads.
+if not _SCRIPT.exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "scripts/promote-image.py is not mounted into the test container; add it "
+        "to compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+if not (REPO_ROOT / "compose.yaml").exists():  # pragma: no cover - mount missing
+    pytest.skip(
+        "compose.yaml is not mounted into the test container; add it to "
+        "compose.test.yaml's backend-tests volumes",
+        allow_module_level=True,
+    )
+
 _spec = importlib.util.spec_from_file_location("promote_image", _SCRIPT)
 pi = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pi)
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-
 COMPOSE = (REPO_ROOT / "compose.yaml").read_text()
+
+# The healthcheck-revert cases below only mean anything while compose.yaml
+# actually carries the inline probes, and today it does not: AUD-442 inlined
+# them temporarily, AUD-546 built this revert path, and the revert has since
+# happened — compose.yaml calls `python -m audr.operations.healthcheck`
+# directly. With nothing to restore, `rewrite_compose(restore_api=True)` is a
+# no-op and four cases here assert changes that cannot occur.
+#
+# They had been failing for exactly as long, unnoticed, because this file ran in
+# no job (AUD-698) — which is a tidy demonstration of why it was worth wiring in
+# rather than deleting. Skipped rather than dropped, on the same reasoning as
+# test_healthcheck.py, which guards the other half of this mechanism and skips
+# the mirrored cases with "compose.yaml calls the module directly": the inline
+# form comes back the next time a publish has to be pinned before the tag
+# carrying the module exists, and the revert path has to still be tested then.
+INLINE_PRESENT = pi.API_INLINE_ANCHOR in COMPOSE
+needs_inline = pytest.mark.skipif(
+    not INLINE_PRESENT,
+    reason="compose.yaml calls the module directly; there is no inline probe to revert",
+)
 
 
 def check(condition: bool, message: str) -> None:
@@ -69,6 +112,7 @@ def test_rejects_a_file_with_no_anchor() -> None:
 # --- the healthcheck reverts ------------------------------------------------
 
 
+@needs_inline
 def test_restores_both_healthchecks() -> None:
     out, changes = pi.rewrite_compose(COMPOSE, "9.9.9", restore_api=True, restore_worker=True)
     live = pi.uncommented(out)
@@ -80,6 +124,7 @@ def test_restores_both_healthchecks() -> None:
     check('open("/app/worker-heartbeat")' not in out, "inline worker probe survived the revert")
 
 
+@needs_inline
 def test_leaves_healthchecks_alone_when_the_tag_lacks_the_module() -> None:
     """The AUD-544 guard: an unverified tag must not get the module form.
 
@@ -95,6 +140,7 @@ def test_leaves_healthchecks_alone_when_the_tag_lacks_the_module() -> None:
     check(pi.WORKER_INLINE_ANCHOR in out, "worker inline marker lost")
 
 
+@needs_inline
 def test_restores_api_without_worker() -> None:
     """The real intermediate case: a tag with the module but not the beacon writer."""
     out, changes = pi.rewrite_compose(COMPOSE, "9.9.9", restore_api=True, restore_worker=False)
@@ -104,6 +150,7 @@ def test_restores_api_without_worker() -> None:
     check(len(changes) == 2, f"expected pin + api revert, got {changes}")
 
 
+@needs_inline
 def test_rejects_a_third_healthcheck_shape() -> None:
     """Neither module nor a matchable inline block: stop, do not guess."""
     mangled = COMPOSE.replace(pi.API_INLINE_ANCHOR, "# someone reworded this")
@@ -145,7 +192,25 @@ def test_worker_gate_needs_both_halves() -> None:
 
 
 def test_head_of_main_carries_both() -> None:
-    """Sanity: the predicates agree with the tree they are reading right now."""
+    """Sanity: the predicates agree with the tree they are reading right now.
+
+    Alone in this file in needing a git checkout — `carries_*_healthcheck` reads
+    its blobs with `git show <commit>:<path>`. The backend test container mounts
+    `./backend` and a handful of individual files, not `.git`, so this one case
+    is skipped there rather than failing. It still bites where it can: a local
+    `./scripts/test.sh` run and anyone running this file by hand.
+    """
+    try:
+        subprocess.run(  # noqa: S603 — argv is a constant plus the resolved repo root
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--git-dir"],  # noqa: S607 — `git` from PATH
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):  # pragma: no cover - container
+        pytest.skip(
+            "not a git checkout (the test container mounts no .git), and these "
+            "two predicates read blobs with `git show`"
+        )
     check(pi.carries_api_healthcheck(REPO_ROOT, "HEAD"), "HEAD has no healthcheck module?")
     check(pi.carries_worker_healthcheck(REPO_ROOT, "HEAD"), "HEAD has no worker beacon?")
 

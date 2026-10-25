@@ -17,9 +17,13 @@ means cut-now-publish-later is the normal shape of a release here, so it will
 come round again; these tests are what makes the refusal automatic.
 
 They live in the backend suite rather than next to the script because
-`scripts/test_*.py` is run by no CI job (`backend/pyproject.toml` pins
+`scripts/test_*.py` was run by no CI job (`backend/pyproject.toml` pins
 `testpaths = ["tests"]`), and an unrun test reads as coverage while providing
-none. compose.test.yaml already mounts `scripts/promote-image.py` for
+none. AUD-698 moved the stragglers here for that reason — including
+test_promote_image.py, four of whose cases turned out to have been failing
+unnoticed against a `compose.yaml` that had changed under them.
+
+compose.test.yaml already mounts `scripts/promote-image.py` for
 `test_healthcheck.py`, which reads it as text; this file executes it.
 
 Nothing here reaches GHCR: the registry and tag lookups are stubbed, and the

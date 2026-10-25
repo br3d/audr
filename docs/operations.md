@@ -437,8 +437,9 @@ The owner stand takes one encrypted dump a day from a systemd timer. Install or
 update it from a clone:
 
 ```bash
-./scripts/install-backup.sh            # install/update, take a first dump, show status
-./scripts/install-backup.sh --check    # report what is installed; change nothing
+./scripts/install-backup.sh              # install/update, take a first dump, show status
+./scripts/install-backup.sh --check      # report what is installed; change nothing
+./scripts/install-backup.sh --check-drift # just: does the host still run this checkout?
 ```
 
 That installs `audr-backup.timer` → `audr-backup.service` →
@@ -455,6 +456,22 @@ As with the watchdog, the scripts on the host are **pinned copies** under
 host belongs to the CI runner, which rewrites it on every deploy. Changing
 `backup.sh`, `backup-run.sh` or `dump-prune.py` in this repo does not reach the
 host until `install-backup.sh` runs again.
+
+Since AUD-698 something *notices* when that happens. `--check` ends with a
+content comparison of every pinned copy against the checkout it is run from and
+exits non-zero on drift, and `scripts/host-install-drift.sh` asks all three
+installers the same question and raises one keyed, self-resolving `notify.sh`
+alert when any of them has fallen behind. The deploy workflow runs it on every
+deploy, which is the right cadence: a deploy is when the repo moves, so it is
+exactly when the host starts being behind.
+
+That check exists because drift in *these* files is the quiet kind. The backup,
+the watchdog and the alert path only run when something has already gone wrong,
+so a stale copy is never noticed by its own failure — nobody sees the alert that
+did not arrive. It is the same class as AUD-443, where the host's copies of the
+CI workflow files fell behind the repo's and two hours passed with nobody
+noticing. Workflows ship with the commit now; these files deliberately cannot,
+so they are measured instead.
 
 #### What the schedule does and does not protect against
 
