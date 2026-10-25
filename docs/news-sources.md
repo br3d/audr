@@ -879,3 +879,42 @@ argument that the names look distinctive.
   primary source.
 - Rows written before the stage-3 allow-list were misattributed by definition
   and are deleted by migration 0027.
+
+## 10. LLM-based significance gate (ADR-007 phase 3, AUD-658)
+
+An optional global flag (`news_analysis_setting.enabled`, off by default)
+that scores every ingested article's significance to the owner before it is
+allowed into `asset_news`. Off, ingestion is unaffected — the gate is a
+pure pass-through (`audr.jobs.news_gate.NewsAnalysisGate.ingest`). On, with
+an Anthropic key configured (`PUT /api/v1/integrations/llm`):
+
+- Each article's full text is downloaded with `trafilatura` and fed to the
+  classifier **transiently** — used for that one call and discarded. Only
+  the model's own summary (`asset_news.summary`) and a 0-100 importance
+  score (`asset_news.importance`) are ever written to the database. **No
+  third-party article body is persisted anywhere**, full stop — that is
+  this feature's one hard data-handling rule, not a configurable default.
+- An article scoring below `news_analysis_setting.importance_threshold` is
+  not inserted into `asset_news` at all; it is recorded in `news_suppressed`
+  (url, title, asset, score, reason, timestamp — no body) instead, pruned
+  after 30 days. That table exists so "why did news stop showing up for X"
+  has an answer once the gate is live; it has no effect on anything else.
+- **Fail-open is absolute.** A missing/invalid key, a timeout, a 429, a
+  malformed response, or the run's own per-run USD budget
+  (`llm_news_budget_usd_per_run`) being exhausted all fall through to the
+  exact same plain insert as the flag-off path — unanalyzed, but never
+  dropped. An Anthropic outage must never look like "no news today."
+- The model and the per-run budget are config (`llm_news_model`,
+  `llm_news_budget_usd_per_run`, `llm_news_max_output_tokens` in
+  `audr.config.Settings`), not hardcoded at the call site — the founder
+  picks the production values (AUD-644 card `0910f224`); the code ships
+  with conservative fallbacks (`claude-haiku-4-5`, $1/run).
+- The client (`audr.providers.llm.AnthropicClient`) is a raw `httpx` call
+  against the Messages API, the same pattern every other adapter in
+  `audr.providers` uses — no `anthropic` SDK dependency.
+- `audr.jobs.news_analyze`'s heuristic alert classifier (ADR-007 phase 2,
+  AUD-583) is untouched by this phase: `news_alert.classifier='llm'` is
+  schema-ready (migration 0033) but not wired up yet — a deliberate,
+  separately-scoped follow-up, not an oversight. Both consumers share the
+  one `AnthropicClient` when that lands, rather than each owning their own
+  HTTP call.

@@ -447,6 +447,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Integration Llm */
+        put: operations["put_integration_llm_api_v1_integrations_llm_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/quotes": {
         parameters: {
             query?: never;
@@ -694,6 +711,34 @@ export interface paths {
          * @description Update schedule settings (optimistic-lock on revision).
          */
         patch: operations["patch_settings_api_v1_settings_patch"];
+        trace?: never;
+    };
+    "/api/v1/settings/news-analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get News Analysis Setting Route
+         * @description Return the global "smart analysis" gate flag and importance threshold.
+         */
+        get: operations["get_news_analysis_setting_route_api_v1_settings_news_analysis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch News Analysis Setting Route
+         * @description Update the gate flag and/or importance threshold (revision-checked).
+         *
+         *     Turning this on with no Anthropic key configured (PUT
+         *     /integrations/llm) is accepted — `NewsAnalysisGate` fails open for every
+         *     article in that state (AUD-658), it does not reject the setting.
+         */
+        patch: operations["patch_news_analysis_setting_route_api_v1_settings_news_analysis_patch"];
         trace?: never;
     };
     "/api/v1/settings/schedules/{kind}": {
@@ -1784,6 +1829,24 @@ export interface components {
             /** Native Symbol */
             native_symbol: string;
         };
+        /** NewsAnalysisSettingPatch */
+        NewsAnalysisSettingPatch: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Expected Revision */
+            expected_revision?: number | null;
+            /** Importance Threshold */
+            importance_threshold?: number | null;
+        };
+        /** NewsAnalysisSettingRead */
+        NewsAnalysisSettingRead: {
+            /** Enabled */
+            enabled: boolean;
+            /** Importance Threshold */
+            importance_threshold: number;
+            /** Revision */
+            revision: number;
+        };
         /** OnchainEventResponse */
         OnchainEventResponse: {
             /** Amount */
@@ -2246,6 +2309,13 @@ export interface components {
             kind: string;
             /** Wallet Id */
             wallet_id?: string | null;
+        };
+        /** UpdateLlmInput */
+        UpdateLlmInput: {
+            /** Api Key */
+            api_key: string;
+            /** Revision */
+            revision: string;
         };
         /** UpdateQuotesInput */
         UpdateQuotesInput: {
@@ -3130,6 +3200,43 @@ export interface operations {
             };
         };
     };
+    put_integration_llm_api_v1_integrations_llm_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLlmInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     put_integration_quotes_api_v1_integrations_quotes_put: {
         parameters: {
             query?: never;
@@ -3603,6 +3710,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_news_analysis_setting_route_api_v1_settings_news_analysis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsAnalysisSettingRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_news_analysis_setting_route_api_v1_settings_news_analysis_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewsAnalysisSettingPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewsAnalysisSettingRead"];
                 };
             };
             /** @description Validation Error */

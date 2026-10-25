@@ -37,6 +37,7 @@ from audr.jobs.news_feed_registry import (
     record_feed_not_modified,
     record_feed_success,
 )
+from audr.jobs.news_gate import NewsAnalysisGate, prune_old_suppressed
 from audr.jobs.news_tiers import NewsTier, run_capped_tier
 from audr.jobs.news_tracked_registry import list_tracked_asset_symbols
 from audr.jobs.snapshot_registry import (
@@ -181,7 +182,10 @@ class HeldAsset:
 async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     """Poll the feed registry and GDELT, caching articles for held assets.
 
-    Requires no API key anywhere in this path.
+    Requires no API key when the news-analysis gate's global flag is off
+    (the default) — every keyless tier here is unaffected either way. With
+    the flag on and an Anthropic key configured, each item is scored for
+    significance before insertion (AUD-658); see `audr.jobs.news_gate`.
     """
     assets = await _get_held_assets(session)
     if not assets:
@@ -204,123 +208,139 @@ async def handle_news_refresh(session: AsyncSession, run_id: uuid.UUID) -> None:
     inserted = 0
     polled = 0
     pattern_errors = 0
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(_HTTP_TIMEOUT),
-        follow_redirects=True,
-        headers={"User-Agent": _USER_AGENT},
-    ) as client:
-        # Commit per feed (AUD-515 P2): a later tier's crash (GDELT, Snapshot)
-        # must not roll back feed polls and health counters that already
-        # succeeded — staging lost 13 minutes of successful feed polling to
-        # exactly that when the GDELT tier ground through 429s mid-run.
-        for feed in due_feeds:
-            if feed.symbols and not (feed.symbols & held_symbols):
-                continue
-            polled += 1
-            feed_inserted, feed_pattern_errors = await _poll_feed(
-                session, client=client, feed=feed, assets=assets, tracked_symbols=tracked_symbols
-            )
-            inserted += feed_inserted
-            pattern_errors += feed_pattern_errors
-            await session.commit()
-
-        hn_due_now = [
-            feed for feed in hn_due_feeds if not feed.symbols or (feed.symbols & held_symbols)
-        ]
-        hn_tier = NewsTier(
-            name="hackernews",
-            max_queries_per_run=_HN_MAX_QUERIES_PER_RUN,
-            max_consecutive_429=_HN_MAX_CONSECUTIVE_429,
-            query_delay_s=_HN_QUERY_DELAY_S,
-        )
-
-        async def _poll_hn_feed(feed: NewsFeed) -> tuple[int, bool]:
-            return await _poll_hackernews_feed(session, client=client, feed=feed, assets=assets)
-
-        hn_inserted, hn_polled = await run_capped_tier(
-            run_id=run_id,
-            tier=hn_tier,
-            items=hn_due_now,
-            poll_one=_poll_hn_feed,
-            commit=session.commit,
-        )
-        inserted += hn_inserted
-        polled += hn_polled
-
-        covered = await covered_asset_symbols(session)
-        # AUD-729: `gdelt_assets` is capped by `run_capped_tier` exactly like
-        # `hn_due_now` above, and this list has no per-item throttling
-        # column analogous to `news_feed.last_polled_at` — the hackernews
-        # fix (ordering `list_due_feeds` oldest-polled-first) cannot be
-        # applied here, and `_get_held_assets`'s unordered `SELECT DISTINCT`
-        # gives no fairness guarantee of its own. This is currently safe only
-        # because `news_tracked_asset` is a deliberately small, static
-        # allow-list (migration 0026: WETH/UNI/AAVE/LINK, all already
-        # covered by dedicated feeds per 0026/0031/0035's own docstrings) —
-        # `tracked_symbols - covered` is empty by design, so the cap never
-        # bites. If `news_tracked_asset` ever grows past
-        # `_GDELT_MAX_QUERIES_PER_RUN` uncovered symbols, this tier can form
-        # the same starvation fixed point hackernews did, and fixing it for
-        # real needs a persisted per-asset "last GDELT query" timestamp — a
-        # schema change, not an ordering tweak.
-        gdelt_assets = [
-            a
-            for a in assets
-            if a.symbol.upper() in tracked_symbols
-            and a.symbol.upper() not in covered
-            and len(a.symbol) >= _GDELT_MIN_SYMBOL_LEN
-        ]
-        if gdelt_assets:
-            gdelt_tier = NewsTier(
-                name="gdelt",
-                max_queries_per_run=_GDELT_MAX_QUERIES_PER_RUN,
-                max_consecutive_429=_GDELT_MAX_CONSECUTIVE_429,
-                query_delay_s=_GDELT_QUERY_DELAY_S,
-            )
-            async with GdeltProvider(http_client=client) as gdelt:
-
-                async def _poll_gdelt_asset(asset: HeldAsset) -> tuple[int, bool]:
-                    try:
-                        articles = await gdelt.search_news(f'"{asset.symbol}"')
-                    except GdeltRateLimited:
-                        return 0, True
-                    asset_inserted = 0
-                    for article in articles:
-                        asset_inserted += await _insert_gdelt_article(
-                            session, asset_id=asset.id, article=article
-                        )
-                    return asset_inserted, False
-
-                gdelt_inserted, _gdelt_polled = await run_capped_tier(
-                    run_id=run_id,
-                    tier=gdelt_tier,
-                    items=gdelt_assets,
-                    poll_one=_poll_gdelt_asset,
-                    commit=session.commit,
-                    commit_on_rate_limit=False,
-                )
-                inserted += gdelt_inserted
-
-        due_spaces = await list_due_spaces(session)
-        async with SnapshotProvider(http_client=client) as snapshot:
-            for space in due_spaces:
-                asset_ids = [a.id for a in assets if a.symbol.upper() == space.asset_symbol.upper()]
-                if not asset_ids:
+    gate = await NewsAnalysisGate.load(session, run_id=run_id)
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(_HTTP_TIMEOUT),
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        ) as client:
+            # Commit per feed (AUD-515 P2): a later tier's crash (GDELT, Snapshot)
+            # must not roll back feed polls and health counters that already
+            # succeeded — staging lost 13 minutes of successful feed polling to
+            # exactly that when the GDELT tier ground through 429s mid-run.
+            for feed in due_feeds:
+                if feed.symbols and not (feed.symbols & held_symbols):
                     continue
-                inserted += await _poll_snapshot_space(
-                    session, snapshot=snapshot, space=space, asset_ids=asset_ids
+                polled += 1
+                feed_inserted, feed_pattern_errors = await _poll_feed(
+                    session,
+                    client=client,
+                    feed=feed,
+                    assets=assets,
+                    tracked_symbols=tracked_symbols,
+                    gate=gate,
                 )
+                inserted += feed_inserted
+                pattern_errors += feed_pattern_errors
                 await session.commit()
 
+            hn_due_now = [
+                feed for feed in hn_due_feeds if not feed.symbols or (feed.symbols & held_symbols)
+            ]
+            hn_tier = NewsTier(
+                name="hackernews",
+                max_queries_per_run=_HN_MAX_QUERIES_PER_RUN,
+                max_consecutive_429=_HN_MAX_CONSECUTIVE_429,
+                query_delay_s=_HN_QUERY_DELAY_S,
+            )
+
+            async def _poll_hn_feed(feed: NewsFeed) -> tuple[int, bool]:
+                return await _poll_hackernews_feed(
+                    session, client=client, feed=feed, assets=assets, gate=gate
+                )
+
+            hn_inserted, hn_polled = await run_capped_tier(
+                run_id=run_id,
+                tier=hn_tier,
+                items=hn_due_now,
+                poll_one=_poll_hn_feed,
+                commit=session.commit,
+            )
+            inserted += hn_inserted
+            polled += hn_polled
+
+            covered = await covered_asset_symbols(session)
+            # AUD-729: `gdelt_assets` is capped by `run_capped_tier` exactly like
+            # `hn_due_now` above, and this list has no per-item throttling
+            # column analogous to `news_feed.last_polled_at` — the hackernews
+            # fix (ordering `list_due_feeds` oldest-polled-first) cannot be
+            # applied here, and `_get_held_assets`'s unordered `SELECT DISTINCT`
+            # gives no fairness guarantee of its own. This is currently safe only
+            # because `news_tracked_asset` is a deliberately small, static
+            # allow-list (migration 0026: WETH/UNI/AAVE/LINK, all already
+            # covered by dedicated feeds per 0026/0031/0035's own docstrings) —
+            # `tracked_symbols - covered` is empty by design, so the cap never
+            # bites. If `news_tracked_asset` ever grows past
+            # `_GDELT_MAX_QUERIES_PER_RUN` uncovered symbols, this tier can form
+            # the same starvation fixed point hackernews did, and fixing it for
+            # real needs a persisted per-asset "last GDELT query" timestamp — a
+            # schema change, not an ordering tweak.
+            gdelt_assets = [
+                a
+                for a in assets
+                if a.symbol.upper() in tracked_symbols
+                and a.symbol.upper() not in covered
+                and len(a.symbol) >= _GDELT_MIN_SYMBOL_LEN
+            ]
+            if gdelt_assets:
+                gdelt_tier = NewsTier(
+                    name="gdelt",
+                    max_queries_per_run=_GDELT_MAX_QUERIES_PER_RUN,
+                    max_consecutive_429=_GDELT_MAX_CONSECUTIVE_429,
+                    query_delay_s=_GDELT_QUERY_DELAY_S,
+                )
+                async with GdeltProvider(http_client=client) as gdelt:
+
+                    async def _poll_gdelt_asset(asset: HeldAsset) -> tuple[int, bool]:
+                        try:
+                            articles = await gdelt.search_news(f'"{asset.symbol}"')
+                        except GdeltRateLimited:
+                            return 0, True
+                        asset_inserted = 0
+                        for article in articles:
+                            asset_inserted += await _insert_gdelt_article(
+                                session, asset=asset, article=article, gate=gate
+                            )
+                        return asset_inserted, False
+
+                    gdelt_inserted, _gdelt_polled = await run_capped_tier(
+                        run_id=run_id,
+                        tier=gdelt_tier,
+                        items=gdelt_assets,
+                        poll_one=_poll_gdelt_asset,
+                        commit=session.commit,
+                        commit_on_rate_limit=False,
+                    )
+                    inserted += gdelt_inserted
+
+            due_spaces = await list_due_spaces(session)
+            async with SnapshotProvider(http_client=client) as snapshot:
+                for space in due_spaces:
+                    asset_ids = [
+                        a.id for a in assets if a.symbol.upper() == space.asset_symbol.upper()
+                    ]
+                    if not asset_ids:
+                        continue
+                    inserted += await _poll_snapshot_space(
+                        session, snapshot=snapshot, space=space, asset_ids=asset_ids
+                    )
+                    await session.commit()
+    finally:
+        await gate.close()
+
     pruned = await _prune_old_news(session)
+    suppressed_pruned = await prune_old_suppressed(session)
     await session.commit()
     logger.info(
-        "news_refresh run_id=%s feeds_polled=%d inserted=%d pruned=%d pattern_errors=%d",
+        "news_refresh run_id=%s feeds_polled=%d inserted=%d pruned=%d pattern_errors=%d"
+        " suppressed_pruned=%d",
         run_id,
         polled,
         inserted,
         pruned,
         pattern_errors,
+        suppressed_pruned,
     )
 
 
@@ -446,6 +466,7 @@ async def _poll_feed(
     feed: NewsFeed,
     assets: list[HeldAsset],
     tracked_symbols: set[str],
+    gate: NewsAnalysisGate,
 ) -> tuple[int, int]:
     """Poll one feed; returns (rows inserted, keep/block patterns that failed to compile)."""
     headers: dict[str, str] = {}
@@ -489,6 +510,7 @@ async def _poll_feed(
     pattern_errors = int(keep_error) + int(block_error)
 
     target_asset_ids = _targets_for_feed(feed, assets, tracked_symbols)
+    asset_by_id = {asset.id: asset for asset in assets}
     retention_cutoff = datetime.now(UTC) - NEWS_RETENTION
     inserted = 0
     for item in items:
@@ -505,7 +527,8 @@ async def _poll_feed(
             # (AUD-655) — see should_drop_feed_item.
             continue
         for asset_id in target_asset_ids(item):
-            inserted += await _insert_news(
+            asset = asset_by_id.get(asset_id)
+            inserted += await gate.ingest(
                 session,
                 asset_id=asset_id,
                 source=feed.key,
@@ -514,6 +537,9 @@ async def _poll_feed(
                 url=item.url,
                 news_site=feed.key,
                 published_at=item.published_at,
+                asset_symbol=asset.symbol if asset else "",
+                asset_name=asset.name if asset else "",
+                insert=_insert_news,
             )
     return inserted, pattern_errors
 
@@ -565,6 +591,7 @@ async def _poll_hackernews_feed(
     client: httpx.AsyncClient,
     feed: NewsFeed,
     assets: list[HeldAsset],
+    gate: NewsAnalysisGate,
 ) -> tuple[int, bool]:
     """Poll one `hackernews:<symbol>` feed.
 
@@ -579,6 +606,7 @@ async def _poll_hackernews_feed(
     scoped_assets = [a for a in assets if a.symbol.upper() in feed.symbols]
     if not scoped_assets:
         return 0, False
+    asset_by_id = {asset.id: asset for asset in scoped_assets}
 
     try:
         response = await client.get(feed.url)
@@ -624,7 +652,8 @@ async def _poll_hackernews_feed(
         ):
             continue
         for asset_id in match_assets(story.title, scoped_assets):
-            inserted += await _insert_news(
+            asset = asset_by_id.get(asset_id)
+            inserted += await gate.ingest(
                 session,
                 asset_id=asset_id,
                 source=_HACKERNEWS_SOURCE,
@@ -633,6 +662,9 @@ async def _poll_hackernews_feed(
                 url=story.url,
                 news_site=_HACKERNEWS_SOURCE,
                 published_at=story.published_at,
+                asset_symbol=asset.symbol if asset else "",
+                asset_name=asset.name if asset else "",
+                insert=_insert_news,
             )
     return inserted, False
 
@@ -643,17 +675,20 @@ async def _poll_hackernews_feed(
 
 
 async def _insert_gdelt_article(
-    session: AsyncSession, *, asset_id: uuid.UUID, article: GdeltArticle
+    session: AsyncSession, *, asset: HeldAsset, article: GdeltArticle, gate: NewsAnalysisGate
 ) -> int:
-    return await _insert_news(
+    return await gate.ingest(
         session,
-        asset_id=asset_id,
+        asset_id=asset.id,
         source=_GDELT_SOURCE,
         external_id=article.external_id,
         title=article.title,
         url=article.url,
         news_site=article.news_site,
         published_at=article.published_at,
+        asset_symbol=asset.symbol,
+        asset_name=asset.name,
+        insert=_insert_news,
     )
 
 
@@ -756,16 +791,25 @@ async def _insert_news(
     news_site: str,
     published_at: datetime,
     thumbnail_url: str | None = None,
+    summary: str | None = None,
+    importance: int | None = None,
 ) -> int:
+    """Insert one `asset_news` row.
+
+    `summary`/`importance` (AUD-658) are set only when the analysis gate
+    scored this article; every call with the gate off leaves both NULL, the
+    same row shape this function always wrote before migration 0043 added
+    the columns.
+    """
     result = await session.execute(
         sa.text(
             """
             INSERT INTO asset_news
               (asset_id, source, external_id, title, url, news_site,
-               thumbnail_url, published_at)
+               thumbnail_url, published_at, summary, importance)
             VALUES
               (:asset_id, :source, :external_id, :title, :url, :news_site,
-               :thumbnail_url, :published_at)
+               :thumbnail_url, :published_at, :summary, :importance)
             ON CONFLICT (asset_id, source, external_id) DO NOTHING
             """
         ),
@@ -778,6 +822,8 @@ async def _insert_news(
             "news_site": news_site,
             "thumbnail_url": thumbnail_url,
             "published_at": published_at,
+            "summary": summary,
+            "importance": importance,
         },
     )
     return result.rowcount or 0

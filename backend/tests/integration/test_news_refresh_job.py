@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 import respx
@@ -120,9 +121,18 @@ async def _purge_news_tables(session: AsyncSession) -> None:
     await session.execute(text("DELETE FROM news_feed_symbol"))
     await session.execute(text("DELETE FROM news_feed"))
     await session.execute(text("DELETE FROM snapshot_space"))
+    await session.execute(text("DELETE FROM news_suppressed"))
     await session.execute(text("DELETE FROM asset_news"))
     await session.execute(text("DELETE FROM balance_observation_invalidation"))
     await session.execute(text("DELETE FROM balance_observation"))
+    # AUD-658: the gate's global flag and the Anthropic key are state a few
+    # tests in this module set — reset them so a later test (in this module
+    # or, since this commits for real, any other integration module sharing
+    # the database) doesn't inherit "gate enabled" from this one.
+    await session.execute(
+        text("UPDATE news_analysis_setting SET enabled = false, importance_threshold = 50")
+    )
+    await session.execute(text("DELETE FROM integration WHERE kind = 'anthropic'"))
     # _SEED_TRACKED_SYMBOLS is a module-local constant, not user input.
     _seed_list = ", ".join(f"'{symbol}'" for symbol in _SEED_TRACKED_SYMBOLS)
     _delete_sql = f"DELETE FROM news_tracked_asset WHERE asset_symbol NOT IN ({_seed_list})"  # noqa: S608
@@ -1611,3 +1621,183 @@ async def test_gdelt_not_queried_for_asset_with_hackernews_feed(
         await handle_news_refresh(news_session, uuid.uuid4())
 
     assert not gdelt_route.called
+
+
+# ---------------------------------------------------------------------------
+# News-analysis gate (AUD-658)
+# ---------------------------------------------------------------------------
+
+
+async def _full_news_rows(session: AsyncSession, *, asset_id: uuid.UUID) -> list[dict]:
+    rows = await session.execute(
+        text(
+            "SELECT title, summary, importance FROM asset_news"
+            " WHERE asset_id = :id ORDER BY published_at"
+        ),
+        {"id": str(asset_id)},
+    )
+    return [dict(r) for r in rows.mappings()]
+
+
+async def test_gate_off_by_default_leaves_summary_and_importance_null(
+    news_session: AsyncSession,
+) -> None:
+    """The acceptance criterion: flag off (the migration-seeded default) is
+    byte-for-byte today's ingest — no LLM call, no new columns touched.
+    """
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://blog.ethereum.org/en/feed.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://blog.ethereum.org/en/feed.xml").mock(
+            return_value=Response(
+                200, content=_atom("entry-1", "Upgrade ships", "https://blog.ethereum.org/1")
+            )
+        )
+        anthropic_route = mock.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=Response(500)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert not anthropic_route.called
+    rows = await _full_news_rows(news_session, asset_id=asset_id)
+    assert len(rows) == 1
+    assert rows[0]["summary"] is None
+    assert rows[0]["importance"] is None
+
+
+async def test_gate_enabled_scores_articles_important_and_suppressed(
+    news_session: AsyncSession,
+    test_secret_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the flag on and a key configured: the important article gets
+    `summary`/`importance` and lands in `asset_news`; the unimportant one is
+    suppressed into `news_suppressed` instead (AUD-658 acceptance criteria).
+    """
+    from audr.jobs import news_gate
+    from audr.operations.init_key import init_key
+    from audr.settings.llm import save_anthropic_credentials
+    from audr.settings.news_analysis import update_news_analysis_setting
+
+    # The full-text fetch is real trafilatura hitting the article URL
+    # directly (not through httpx/respx) — stub it so this test stays
+    # offline; the classifier decision below only depends on the title.
+    monkeypatch.setattr(news_gate, "_fetch_full_text", AsyncMock(return_value=""))
+
+    await init_key(news_session)
+    await save_anthropic_credentials(news_session, api_key="sk-test-key")
+    await update_news_analysis_setting(news_session, enabled=True, importance_threshold=50)
+    await news_session.commit()
+
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://blog.ethereum.org/en/feed.xml",
+    )
+
+    def _decision(request: object) -> Response:
+        import json
+
+        body = json.loads(request.content)  # type: ignore[attr-defined]
+        prompt = body["messages"][0]["content"]
+        if "Important upgrade" in prompt:
+            decision = {
+                "important": True,
+                "importance": 90,
+                "summary": "Upgrade matters.",
+                "reason": "ok",
+            }
+        else:
+            decision = {"important": False, "importance": 5, "summary": "", "reason": "routine"}
+        return Response(
+            200,
+            json={
+                "content": [{"type": "text", "text": json.dumps(decision)}],
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+            },
+        )
+
+    updated = _RECENT.strftime("%Y-%m-%dT%H:%M:%SZ")
+    two_entry_feed = f"""<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>e-important</id>
+    <title>Important upgrade ships</title>
+    <link href="https://blog.ethereum.org/1" rel="alternate"/>
+    <updated>{updated}</updated>
+  </entry>
+  <entry>
+    <id>e-routine</id>
+    <title>Routine market chatter</title>
+    <link href="https://blog.ethereum.org/2" rel="alternate"/>
+    <updated>{updated}</updated>
+  </entry>
+</feed>
+""".encode()
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://blog.ethereum.org/en/feed.xml").mock(
+            return_value=Response(200, content=two_entry_feed)
+        )
+        mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=_decision)
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    rows = await _full_news_rows(news_session, asset_id=asset_id)
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Important upgrade ships"
+    assert rows[0]["summary"] == "Upgrade matters."
+    assert rows[0]["importance"] == 90
+
+    suppressed = await news_session.execute(
+        text("SELECT title, score, reason FROM news_suppressed WHERE asset_id = :id"),
+        {"id": str(asset_id)},
+    )
+    suppressed_rows = [dict(r) for r in suppressed.mappings()]
+    assert len(suppressed_rows) == 1
+    assert suppressed_rows[0]["title"] == "Routine market chatter"
+    assert suppressed_rows[0]["score"] == 5
+
+
+async def test_gate_enabled_no_key_fails_open(news_session: AsyncSession) -> None:
+    """Flag on, no Anthropic key stored — every article still gets ingested
+    unanalyzed rather than the run degrading (AUD-658 acceptance criterion).
+    """
+    from audr.settings.news_analysis import update_news_analysis_setting
+
+    await update_news_analysis_setting(news_session, enabled=True)
+    await news_session.commit()
+
+    asset_id = await _hold_asset(news_session, symbol="WETH", name="Wrapped Ether")
+    await _insert_feed(
+        news_session,
+        key="project:ethereum-blog",
+        tier="project",
+        symbols=["WETH"],
+        url="https://blog.ethereum.org/en/feed.xml",
+    )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://blog.ethereum.org/en/feed.xml").mock(
+            return_value=Response(
+                200, content=_atom("entry-1", "Upgrade ships", "https://blog.ethereum.org/1")
+            )
+        )
+        anthropic_route = mock.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=Response(500)
+        )
+        await handle_news_refresh(news_session, uuid.uuid4())
+
+    assert not anthropic_route.called
+    rows = await _full_news_rows(news_session, asset_id=asset_id)
+    assert len(rows) == 1
+    assert rows[0]["summary"] is None

@@ -27,6 +27,13 @@ from audr.operations.exports import (
     stream_history_csv,
 )
 from audr.operations.purge import execute_purge, preview_purge
+from audr.settings.news_analysis import (
+    RevisionConflictError as NewsAnalysisRevisionConflictError,
+)
+from audr.settings.news_analysis import (
+    get_news_analysis_setting,
+    update_news_analysis_setting,
+)
 from audr.settings.schedules import (
     RevisionConflictError,
     get_max_revision,
@@ -124,6 +131,18 @@ def _validate_schedule_patch(patch: SettingsSchedulePatch) -> None:
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="freshness_seconds must be positive",
         )
+
+
+class NewsAnalysisSettingRead(BaseModel):
+    enabled: bool
+    importance_threshold: int
+    revision: int
+
+
+class NewsAnalysisSettingPatch(BaseModel):
+    enabled: bool | None = None
+    importance_threshold: int | None = None
+    expected_revision: int | None = None
 
 
 class DbStatus(BaseModel):
@@ -457,6 +476,63 @@ async def resume_schedule_route(
         ) from None
     await db.commit()
     return _dict_to_schedule_read(d)
+
+
+# ---------------------------------------------------------------------------
+# Routes — news-analysis gate (AUD-658)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/settings/news-analysis", response_model=NewsAnalysisSettingRead)
+async def get_news_analysis_setting_route(
+    _session: Annotated[Session, Depends(_require_session)],
+    db: AsyncSession = Depends(get_db),
+) -> NewsAnalysisSettingRead:
+    """Return the global "smart analysis" gate flag and importance threshold."""
+    setting = await get_news_analysis_setting(db)
+    return NewsAnalysisSettingRead(
+        enabled=setting.enabled,
+        importance_threshold=setting.importance_threshold,
+        revision=setting.revision,
+    )
+
+
+@router.patch("/settings/news-analysis", response_model=NewsAnalysisSettingRead)
+async def patch_news_analysis_setting_route(
+    body: NewsAnalysisSettingPatch,
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: AsyncSession = Depends(get_db),
+) -> NewsAnalysisSettingRead:
+    """Update the gate flag and/or importance threshold (revision-checked).
+
+    Turning this on with no Anthropic key configured (PUT
+    /integrations/llm) is accepted — `NewsAnalysisGate` fails open for every
+    article in that state (AUD-658), it does not reject the setting.
+    """
+    try:
+        setting = await update_news_analysis_setting(
+            db,
+            enabled=body.enabled,
+            importance_threshold=body.importance_threshold,
+            expected_revision=body.expected_revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except NewsAnalysisRevisionConflictError:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="revision conflict",
+        ) from None
+
+    await db.commit()
+    return NewsAnalysisSettingRead(
+        enabled=setting.enabled,
+        importance_threshold=setting.importance_threshold,
+        revision=setting.revision,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,9 @@ dependencies = [
     "cryptography==50.0.2",
     # Password hashing (Argon2id)
     "argon2-cffi==25.1.0",
+    # Transient full-article-text extraction for the news-analysis gate
+    # (AUD-658) — downloaded and fed to the LLM classifier, never persisted.
+    "trafilatura==2.0.0",
 ]
 
 [project.optional-dependencies]
