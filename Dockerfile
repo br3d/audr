@@ -20,7 +20,25 @@
 #
 # Pin the multi-arch manifest-list digest that command returns, not a
 # per-architecture one, or the build stops working on one of the two arches.
-FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend-builder
+#
+# Why this one digest is NOT "what the tag means today", unlike the python and
+# postgres pins below and in compose.yaml (AUD-697). Node is a *build-stage*
+# image: it runs `npm run build` here and Vitest in compose.test.yaml, and it is
+# never shipped — stage 3 copies out `/app/dist` and nothing else. So a fresher
+# node digest buys no runtime security, which is the thing that justified
+# resolving the other two live. What it does cost is a mandatory fresh pull:
+# a bumped digest by construction names an image no local store has yet, and
+# Docker Hub rate-limits unauthenticated pulls per source IP. This host and the
+# Gitea runner share that IP, so the bump turned the frontend leg of the suite
+# red with `429 Too Many Requests` on a tree whose code was green — see the
+# follow-up issue filed from AUD-697 about the missing pull-through mirror.
+#
+# So this stays on the digest the suite has been green against for weeks, and
+# the images that actually ship or run in production (python here, postgres in
+# compose.yaml) carry today's. Dependabot will propose node's bump on its weekly
+# run like any other; take it once there is a mirror, and move
+# compose.test.yaml's `frontend-tests` in the same commit.
+FROM node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci

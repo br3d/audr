@@ -42,7 +42,7 @@ is checked against it**, not the other way round.
 
 | Stage / service | Image | Digest | Upstream licensing |
 | --- | --- | --- | --- |
-| `Dockerfile` `frontend-builder`; `compose.test.yaml` `frontend-tests` | `node:22-alpine` | `sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage and test runner only — not shipped. |
+| `Dockerfile` `frontend-builder`; `compose.test.yaml` `frontend-tests` | `node:22-alpine` | `sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8` | Node.js: MIT. Alpine base: MIT/BSD-style packages plus musl libc (MIT) and BusyBox (GPL-2.0-only). Build stage and test runner only — not shipped. |
 | `Dockerfile` `backend-builder` + `runtime`; `Dockerfile.test` | `python:3.14-slim` | `sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8` | CPython: PSF-2.0. Debian `slim` base: mixed DFSG-free licences (GPL-2.0, GPL-3.0, LGPL, MIT, BSD) — per-package texts under `/usr/share/doc/*/copyright` in the image. |
 | `compose.yaml` `db`; `compose.test.yaml` `db-test` | `postgres:16-alpine` | `sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36` | PostgreSQL: PostgreSQL Licence (BSD-style). Alpine base as above. Not redistributed — pulled from Docker Hub by the deploy host. |
 | `compose.test.yaml` `provider-mock` | `wiremock/wiremock:3.13.0` | `sha256:8d9a0330e4de2f9e2035fc290df0a370ac7c2a92072a6c8752a42597310edb09` | WireMock: Apache-2.0. Test runner only — never shipped and never pulled by the deploy host. |
@@ -65,6 +65,20 @@ shares no artifact with anything the tree builds and nothing has to move with
 it. It is in this table because it was the one external image the first pass of
 AUD-697 left floating — and because the guard described below is what found
 that, on its first run, in the same change that introduced it.
+
+**Two of these three are today's digests and `node` deliberately is not.**
+`python` ships inside the runtime image and `postgres` runs in production, so
+for those a stale pin means importing known-fixed CVEs on purpose, and AUD-697
+resolved both live. `node` is a build-stage image — it runs `npm run build` and
+Vitest, and `runtime` copies out `/app/dist` and nothing else — so a fresher
+digest buys no runtime security there. What it costs is real: a bumped digest by
+construction names an image no local store has yet, and Docker Hub rate-limits
+unauthenticated pulls **per source IP**, which this host and the Gitea runner
+share. Bumping node turned the suite's frontend leg red with `429 Too Many
+Requests` on a tree whose code was green, so it stays on the digest the suite
+has been green against. Take Dependabot's node bump once there is a
+pull-through mirror (the follow-up issue AUD-697 filed), and move
+`compose.test.yaml`'s `frontend-tests` in the same commit.
 
 Pin the **multi-arch manifest-list** digest, not a per-architecture one, or the
 build stops working on one of the two arches. To bump by hand, resolve the tag
