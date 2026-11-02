@@ -53,7 +53,7 @@ ENV AUDR_VERSION=${AUDR_VERSION} AUDR_GIT_SHA=${AUDR_GIT_SHA}
 RUN npm run build
 
 # Stage 2: install Python dependencies with uv
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS backend-builder
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS backend-builder
 # Pinned for the same reason the bases above are (AUD-697): `uv sync --frozen`
 # is deterministic given uv.lock, but which *uv* reads that lock was not, so the
 # resolver version floated with the build date. Keep in step with Dockerfile.test.
@@ -65,7 +65,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Stage 3: final runtime image
 # Same digest as `backend-builder` on purpose: the venv copied out of that stage
 # is built against its interpreter, so the two must not drift apart.
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS runtime
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS runtime
 WORKDIR /app
 
 # No apt layer here on purpose: an apt install resolves to whatever the Debian
