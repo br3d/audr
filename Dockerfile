@@ -38,7 +38,7 @@
 # compose.yaml) carry today's. Dependabot will propose node's bump on its weekly
 # run like any other; take it once there is a mirror, and move
 # compose.test.yaml's `frontend-tests` in the same commit.
-FROM node:22-alpine@sha256:2c752226d477b4a886378baa95b9af252be59301b725fdb0b7e15208131505a8 AS frontend-builder
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci
