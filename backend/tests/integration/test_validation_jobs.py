@@ -133,7 +133,7 @@ async def test_validate_llm_raises_when_no_key_configured(
     # committing it closes the context manager out from under the test.
     await db_session.execute(sa.text("DELETE FROM integration WHERE kind = 'anthropic'"))
 
-    with pytest.raises(ValueError, match="No Anthropic API key configured"):
+    with pytest.raises(ValueError, match="No LLM provider configured"):
         await handle_validate_llm(db_session, uuid.uuid4())
 
 
@@ -178,3 +178,57 @@ async def test_validate_llm_propagates_rejected_key(
         mock.post("https://api.anthropic.com/v1/messages").mock(return_value=Response(401))
         with pytest.raises(NoApiKey):
             await handle_validate_llm(db_session, uuid.uuid4())
+
+
+@pytest.mark.integration
+async def test_validate_llm_hits_private_openai_compatible_base_url(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    """AUD-932: an Ollama on the LAN works through the allow_private_host path."""
+    import respx
+    from httpx import Response
+
+    from audr.jobs.validation import handle_validate_llm
+    from audr.settings.llm import LlmConfig, save_llm_config
+
+    await save_llm_config(
+        db_session,
+        config=LlmConfig(
+            provider="openai_compatible",
+            base_url="http://192.168.1.50:11434/v1",
+            api_key=None,
+            model="llama3.1",
+            price_input_per_mtok=None,
+            price_output_per_mtok=None,
+            allow_private_host=True,
+        ),
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("http://192.168.1.50:11434/v1/chat/completions").mock(
+            return_value=Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+        )
+        await handle_validate_llm(db_session, uuid.uuid4())
+    assert "authorization" not in route.calls[0].request.headers
+
+
+@pytest.mark.integration
+async def test_validate_llm_refuses_private_base_url_without_the_flag(
+    db_session: AsyncSession, test_secret_key: str
+) -> None:
+    from audr.jobs.validation import handle_validate_llm
+    from audr.settings.llm import LlmConfig, save_llm_config
+
+    await save_llm_config(
+        db_session,
+        config=LlmConfig(
+            provider="openai_compatible",
+            base_url="http://127.0.0.1:11434/v1",
+            api_key=None,
+            model="m",
+            price_input_per_mtok=None,
+            price_output_per_mtok=None,
+            allow_private_host=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="base URL rejected"):
+        await handle_validate_llm(db_session, uuid.uuid4())

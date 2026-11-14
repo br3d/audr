@@ -216,6 +216,29 @@ class TestGateFailsOpen:
         assert client.calls == 0
         insert.assert_awaited_once()
 
+    async def test_article_cap_stops_a_free_model_that_never_spends(self) -> None:
+        """AUD-932: a $0 local model must not run unbounded."""
+        client = _FakeClient(
+            result=ClassificationResult(
+                important=True, importance=90, summary="s", reason="", cost_usd=Decimal(0)
+            )
+        )
+        gate = NewsAnalysisGate(
+            enabled=True,
+            threshold=50,
+            client=client,
+            budget=_RunBudget(Decimal("1.00"), max_articles=2),
+            run_id=_RUN_ID,
+        )
+        session = _session_mock()
+        insert = AsyncMock(return_value=1)
+
+        for _ in range(4):
+            await gate.ingest(session, **_ingest_kwargs(insert))
+
+        assert client.calls == 2
+        assert insert.await_count == 4  # the rest fail open, none are dropped
+
 
 class TestAlreadyHandled:
     async def test_already_in_asset_news_skips_without_calling_llm(self) -> None:

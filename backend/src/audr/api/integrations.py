@@ -3,7 +3,7 @@
 GET  /api/v1/integrations               → IntegrationsResponse
 PUT  /api/v1/integrations/rpc           → IntegrationEntry
 PUT  /api/v1/integrations/quotes        → IntegrationEntry
-PUT  /api/v1/integrations/llm           → IntegrationEntry (AUD-658, Anthropic key)
+PUT  /api/v1/integrations/llm           → IntegrationEntry (AUD-658/932, universal LLM provider)
 POST /api/v1/integrations/{kind}/validate → JobRef (rpc | quotes | llm)
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -22,12 +23,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
 from audr.auth.models import Session
+from audr.config import get_settings
 from audr.db import get_db
 from audr.jobs.store import JobKind, enqueue_job
 from audr.providers.rpc_defaults import DEFAULT_PUBLIC_RPC_URLS
 from audr.providers.rpc_targets import RpcUrlError, validate_rpc_url_async
 from audr.settings.integrations import RevisionConflictError, get_integration, upsert_integration
-from audr.settings.llm import get_anthropic_api_key, save_anthropic_credentials
+from audr.settings.llm import (
+    PROVIDER_ANTHROPIC,
+    PROVIDER_OPENAI_COMPATIBLE,
+    LlmConfig,
+    load_llm_config,
+    save_llm_config,
+)
 from audr.settings.quotes import get_coingecko_api_key, save_coingecko_credentials
 
 router = APIRouter(prefix="/api/v1")
@@ -75,6 +83,13 @@ class ProviderOption(BaseModel):
     label: str
     requires_api_key: bool
     note: str
+    # LLM presets (AUD-932): what selecting the preset pre-fills in the form.
+    # `provider` is the wire protocol to store (`anthropic` | `openai_compatible`).
+    provider: str | None = None
+    base_url: str | None = None
+    default_model: str | None = None
+    # True for LAN/localhost presets: saving needs `allow_private_host`.
+    private_host: bool = False
 
 
 class IntegrationEntry(BaseModel):
@@ -91,6 +106,12 @@ class IntegrationEntry(BaseModel):
     effective_source: str | None = None
     using_default: bool = False
     options: list[ProviderOption] = []
+    # LLM only (AUD-932). The key itself is never returned.
+    base_url: str | None = None
+    model: str | None = None
+    allow_private_host: bool | None = None
+    price_input_per_mtok: str | None = None
+    price_output_per_mtok: str | None = None
 
 
 class IntegrationsResponse(BaseModel):
@@ -114,7 +135,14 @@ class UpdateQuotesInput(BaseModel):
 
 class UpdateLlmInput(BaseModel):
     revision: str
-    api_key: str
+    provider: str = PROVIDER_ANTHROPIC
+    base_url: str | None = None
+    # Empty/absent on update = keep the stored key (AUD-932).
+    api_key: str | None = None
+    model: str | None = None
+    allow_private_host: bool = False
+    price_input_per_mtok: Decimal | None = None
+    price_output_per_mtok: Decimal | None = None
 
 
 class JobRef(BaseModel):
@@ -140,6 +168,108 @@ _QUOTE_PROVIDER_OPTIONS: list[ProviderOption] = [
             "Needs a free CoinGecko Demo API key. Prices tokens by contract "
             "address, so it covers more ERC-20 tokens than the default."
         ),
+    ),
+]
+
+
+def _llm(
+    id_: str,
+    label: str,
+    base_url: str | None,
+    model: str | None,
+    note: str,
+    *,
+    key: bool = True,
+    provider: str = PROVIDER_OPENAI_COMPATIBLE,
+    private: bool = False,
+) -> ProviderOption:
+    return ProviderOption(
+        id=id_,
+        label=label,
+        requires_api_key=key,
+        note=note,
+        provider=provider,
+        base_url=base_url,
+        default_model=model,
+        private_host=private,
+    )
+
+
+# Selectable LLM presets (AUD-932). Everything but `anthropic` speaks the OpenAI
+# `/chat/completions` protocol; a preset only pre-fills the form — what is stored
+# is provider + base_url + model, so "custom" and the presets are one mechanism.
+_LLM_PROVIDER_OPTIONS: list[ProviderOption] = [
+    _llm(
+        "anthropic",
+        "Anthropic (Claude)",
+        None,
+        "claude-haiku-4-5",
+        "Native Messages API. Known Claude prices drive the per-run budget.",
+        provider=PROVIDER_ANTHROPIC,
+    ),
+    _llm(
+        "openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini", "Needs an OpenAI API key."
+    ),
+    _llm(
+        "openrouter",
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        "openai/gpt-4o-mini",
+        "One key for many hosted models; model ids look like vendor/model.",
+    ),
+    _llm(
+        "groq",
+        "Groq",
+        "https://api.groq.com/openai/v1",
+        "llama-3.1-8b-instant",
+        "Fast hosted open models; free tier available.",
+    ),
+    _llm(
+        "deepseek",
+        "DeepSeek",
+        "https://api.deepseek.com/v1",
+        "deepseek-chat",
+        "Needs a DeepSeek API key.",
+    ),
+    _llm(
+        "mistral",
+        "Mistral",
+        "https://api.mistral.ai/v1",
+        "mistral-small-latest",
+        "Needs a Mistral API key.",
+    ),
+    _llm(
+        "gemini",
+        "Google Gemini (OpenAI-compatible)",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "gemini-2.0-flash",
+        "Gemini's OpenAI-compatible endpoint; needs a Gemini API key.",
+    ),
+    _llm(
+        "ollama",
+        "Ollama (local)",
+        "http://localhost:11434/v1",
+        "llama3.1",
+        "Runs on your own machine or LAN host; no key. Replace localhost with the host "
+        "running Ollama.",
+        key=False,
+        private=True,
+    ),
+    _llm(
+        "lmstudio",
+        "LM Studio (local)",
+        "http://localhost:1234/v1",
+        None,
+        "LM Studio's local server; no key. Set the model to the one loaded.",
+        key=False,
+        private=True,
+    ),
+    _llm(
+        "custom",
+        "Custom (OpenAI-compatible)",
+        None,
+        None,
+        "Any server that implements POST {base_url}/chat/completions. Key optional.",
     ),
 ]
 
@@ -268,24 +398,49 @@ async def _build_quotes_entry(db: AsyncSession) -> IntegrationEntry:
 
 
 async def _build_llm_entry(db: AsyncSession) -> IntegrationEntry:
-    """Describe the Anthropic key used by the news-analysis gate (AUD-658).
+    """Describe the LLM provider used by the news-analysis gate (AUD-658, AUD-932).
 
-    Configuring a key does not turn the gate on by itself — that is the
-    separate global flag at GET/PATCH /settings/news-analysis. This entry
-    only reports whether a key is stored.
+    Configuring a provider does not turn the gate on by itself — that is the
+    separate global flag at GET/PATCH /settings/news-analysis. This entry only
+    reports what is stored. The API key is never included.
     """
     row = await get_integration(db, kind="anthropic", decrypt_fields=False)
     health = await _get_health(db, "llm")
-    api_key = await get_anthropic_api_key(db)
+    config = await load_llm_config(db)
+    configured = config is not None and (
+        bool(config.api_key) or config.provider == PROVIDER_OPENAI_COMPATIBLE
+    )
+    label = None
+    if config is not None and configured:
+        label = (
+            "Anthropic"
+            if config.provider == PROVIDER_ANTHROPIC
+            else (_host_label(config.base_url) or "OpenAI-compatible")
+        )
     return IntegrationEntry(
         kind="llm",
-        configured=bool(api_key),
+        configured=configured,
         enabled=True,
-        provider="anthropic",
+        provider=config.provider if config else PROVIDER_ANTHROPIC,
         revision=str(row.revision) if row is not None else "0",
         health=health,
-        effective_source="Anthropic" if api_key else None,
+        effective_source=label,
         using_default=False,
+        options=_LLM_PROVIDER_OPTIONS,
+        base_url=config.base_url if config else None,
+        model=config.model if config else None,
+        allow_private_host=config.allow_private_host if config else None,
+        host_label=_host_label(config.base_url) if config else None,
+        price_input_per_mtok=(
+            str(config.price_input_per_mtok)
+            if config and config.price_input_per_mtok is not None
+            else None
+        ),
+        price_output_per_mtok=(
+            str(config.price_output_per_mtok)
+            if config and config.price_output_per_mtok is not None
+            else None
+        ),
     )
 
 
@@ -400,12 +555,68 @@ async def put_integration_llm(
     _session: Annotated[Session, Depends(_require_csrf)],
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationEntry:
-    api_key = body.api_key.strip()
-    if not api_key:
+    if body.provider not in (PROVIDER_ANTHROPIC, PROVIDER_OPENAI_COMPATIBLE):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="provider must be 'anthropic' or 'openai_compatible'",
+        )
+    for price in (body.price_input_per_mtok, body.price_output_per_mtok):
+        if price is not None and (price < 0 or not price.is_finite()):
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="prices must be non-negative numbers",
+            )
+
+    stored = await load_llm_config(db)
+    base_url: str | None = None
+    allow_private = False
+    if body.provider == PROVIDER_OPENAI_COMPATIBLE:
+        raw_url = (body.base_url or "").strip()
+        if not raw_url:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="base_url is required for an OpenAI-compatible provider",
+            )
+        allow_private = body.allow_private_host
+        try:
+            base_url = await validate_rpc_url_async(raw_url, allow_private_hosts=allow_private)
+        except RpcUrlError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"base_url rejected: {exc}",
+            ) from exc
+
+    # Same provider *and* same endpoint → "empty = keep" the stored secrets.
+    # A changed provider or host never inherits the old key: it would be sent
+    # to a server the owner never typed it in for.
+    same_target = (
+        stored is not None
+        and stored.provider == body.provider
+        and (body.provider == PROVIDER_ANTHROPIC or stored.base_url == base_url)
+    )
+    api_key = (body.api_key or "").strip() or (stored.api_key if same_target and stored else None)
+    if body.provider == PROVIDER_ANTHROPIC and not api_key:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="api_key must not be empty",
         )
+    model = (
+        (body.model or "").strip()
+        or (stored.model if same_target and stored else "")
+        or get_settings().llm_news_model
+    )
+    if body.provider == PROVIDER_OPENAI_COMPATIBLE and not (
+        (body.model or "").strip() or (same_target and stored)
+    ):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="model is required for an OpenAI-compatible provider",
+        )
+    price_in = body.price_input_per_mtok
+    price_out = body.price_output_per_mtok
+    if same_target and stored:
+        price_in = price_in if price_in is not None else stored.price_input_per_mtok
+        price_out = price_out if price_out is not None else stored.price_output_per_mtok
 
     try:
         expected_rev = int(body.revision) if body.revision else None
@@ -413,9 +624,17 @@ async def put_integration_llm(
         expected_rev = None
 
     try:
-        await save_anthropic_credentials(
+        await save_llm_config(
             db,
-            api_key=api_key,
+            config=LlmConfig(
+                provider=body.provider,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                price_input_per_mtok=price_in,
+                price_output_per_mtok=price_out,
+                allow_private_host=allow_private,
+            ),
             expected_revision=expected_rev,
         )
     except RevisionConflictError as exc:

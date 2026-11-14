@@ -436,3 +436,128 @@ async def test_get_settings_no_csrf_needed(http_client: httpx.AsyncClient) -> No
 async def test_get_settings_requires_session(http_client: httpx.AsyncClient) -> None:
     r = await http_client.get(_SETTINGS_URL)
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# PUT /integrations/llm — universal provider (AUD-932)
+# ---------------------------------------------------------------------------
+
+
+async def _put_llm(client: httpx.AsyncClient, csrf: str, rev: str, **body):
+    return await client.put(
+        f"{_INTEGRATIONS_URL}/llm",
+        json={"revision": rev, **body},
+        headers={"x-csrf-token": csrf},
+    )
+
+
+@pytest.mark.integration
+async def test_put_llm_anthropic_legacy_shape_still_works(http_client: httpx.AsyncClient) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await _put_llm(http_client, csrf, "0", api_key="sk-ant")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "anthropic" and data["configured"] is True
+    assert data["model"] and "sk-ant" not in r.text
+    assert {o["id"] for o in data["options"]} >= {"anthropic", "openrouter", "ollama", "custom"}
+
+
+@pytest.mark.integration
+async def test_put_llm_openai_compatible_private_url_and_keep_key(
+    http_client: httpx.AsyncClient,
+) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await _put_llm(
+        http_client,
+        csrf,
+        "0",
+        provider="openai_compatible",
+        base_url="http://192.168.1.50:11434/v1",
+        model="llama3.1",
+        allow_private_host=True,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["configured"] is True and data["base_url"] == "http://192.168.1.50:11434/v1"
+    assert data["model"] == "llama3.1" and data["allow_private_host"] is True
+
+    # Empty key on update keeps the stored one; model omitted keeps the model.
+    r = await _put_llm(
+        http_client,
+        csrf,
+        data["revision"],
+        provider="openai_compatible",
+        base_url="http://192.168.1.50:11434/v1",
+        allow_private_host=True,
+        api_key="sk-or",
+    )
+    r = await _put_llm(
+        http_client,
+        csrf,
+        r.json()["revision"],
+        provider="openai_compatible",
+        base_url="http://192.168.1.50:11434/v1",
+        allow_private_host=True,
+        api_key="",
+    )
+    assert r.status_code == 200 and r.json()["model"] == "llama3.1"
+    from audr.settings.llm import load_llm_config
+
+    async for session in app.dependency_overrides[get_db]():
+        cfg = await load_llm_config(session)
+    assert cfg is not None and cfg.api_key == "sk-or"
+
+
+@pytest.mark.integration
+async def test_put_llm_private_url_without_flag_is_422(http_client: httpx.AsyncClient) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await _put_llm(
+        http_client,
+        csrf,
+        "0",
+        provider="openai_compatible",
+        base_url="http://127.0.0.1:11434/v1",
+        model="m",
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+async def test_put_llm_validation_errors(http_client: httpx.AsyncClient) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    assert (await _put_llm(http_client, csrf, "0", provider="bogus")).status_code == 422
+    assert (await _put_llm(http_client, csrf, "0", provider="anthropic")).status_code == 422
+    assert (
+        await _put_llm(http_client, csrf, "0", provider="openai_compatible", model="m")
+    ).status_code == 422
+    assert (
+        await _put_llm(
+            http_client,
+            csrf,
+            "0",
+            provider="openai_compatible",
+            base_url="https://api.openai.com/v1",
+        )
+    ).status_code == 422
+
+
+@pytest.mark.integration
+async def test_put_llm_switching_provider_does_not_inherit_old_key(
+    http_client: httpx.AsyncClient,
+) -> None:
+    csrf = await _setup_and_get_csrf(http_client)
+    r = await _put_llm(http_client, csrf, "0", api_key="sk-ant-secret")
+    r = await _put_llm(
+        http_client,
+        csrf,
+        r.json()["revision"],
+        provider="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o-mini",
+    )
+    assert r.status_code == 200
+    from audr.settings.llm import load_llm_config
+
+    async for session in app.dependency_overrides[get_db]():
+        cfg = await load_llm_config(session)
+    assert cfg is not None and cfg.api_key is None

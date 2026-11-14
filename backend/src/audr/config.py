@@ -79,7 +79,8 @@ class Settings(BaseSettings):
     coingecko_residual_rate_limit_per_second: float = 0.1
     coingecko_residual_rate_limit_burst: int = 1
 
-    # News-analysis gate (ADR-007 phase 3, AUD-658): which Anthropic model
+    # News-analysis gate (ADR-007 phase 3, AUD-658): which model (AUD-932: only
+    # a fallback default — the stored integration's model wins)
     # classifies articles and how much one `news_refresh` run may spend
     # before the gate fails open for the rest of the run. The founder picks
     # the production values (AUD-644 card `0910f224`) — these are only the
@@ -90,6 +91,9 @@ class Settings(BaseSettings):
     llm_news_model: str = "claude-haiku-4-5"
     llm_news_max_output_tokens: int = 300
     llm_news_budget_usd_per_run: Decimal = Decimal("1.00")
+    # AUD-932: a $0 local model never trips the USD ceiling, so each run is also
+    # capped by article count.
+    llm_news_max_articles_per_run: int = 200
 
     @field_validator("database_url")
     @classmethod

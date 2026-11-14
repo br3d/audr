@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,9 @@ class IntegrationRead:
     url: str | None = None
     api_key: str | None = None
     allow_private_host: bool = False
+    # Provider-specific extras (AUD-932: LLM provider/model/prices). Absent keys
+    # in older rows simply mean "not set" — callers apply their own defaults.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 async def get_integration(
@@ -64,6 +68,7 @@ async def get_integration(
         read.url = payload.get("url")
         read.api_key = payload.get("api_key")
         read.allow_private_host = bool(payload.get("allow_private_host", False))
+        read.extra = payload.get("extra") or {}
 
     return read
 
@@ -75,6 +80,7 @@ async def upsert_integration(
     url: str | None = None,
     api_key: str | None = None,
     allow_private_host: bool = False,
+    extra: dict[str, Any] | None = None,
     expected_revision: int | None = None,
 ) -> IntegrationRead:
     """Create or replace an integration.
@@ -96,9 +102,14 @@ async def upsert_integration(
                 f"revision mismatch: expected {expected_revision}, got {row[1]}"
             )
 
-    payload = json.dumps(
-        {"url": url, "api_key": api_key, "allow_private_host": allow_private_host}
-    ).encode()
+    body: dict[str, Any] = {
+        "url": url,
+        "api_key": api_key,
+        "allow_private_host": allow_private_host,
+    }
+    if extra:
+        body["extra"] = extra
+    payload = json.dumps(body).encode()
 
     if row is None:
         int_id = uuid.uuid4()

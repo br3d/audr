@@ -1631,6 +1631,10 @@ export interface components {
         };
         /** IntegrationEntry */
         IntegrationEntry: {
+            /** Allow Private Host */
+            allow_private_host?: boolean | null;
+            /** Base Url */
+            base_url?: string | null;
             /** Configured */
             configured: boolean;
             /** Effective Source */
@@ -1642,11 +1646,17 @@ export interface components {
             host_label?: string | null;
             /** Kind */
             kind: string;
+            /** Model */
+            model?: string | null;
             /**
              * Options
              * @default []
              */
             options: components["schemas"]["ProviderOption"][];
+            /** Price Input Per Mtok */
+            price_input_per_mtok?: string | null;
+            /** Price Output Per Mtok */
+            price_output_per_mtok?: string | null;
             /** Provider */
             provider?: string | null;
             /** Revision */
@@ -2007,12 +2017,23 @@ export interface components {
          * @description One selectable provider, with what it costs the owner to use it.
          */
         ProviderOption: {
+            /** Base Url */
+            base_url?: string | null;
+            /** Default Model */
+            default_model?: string | null;
             /** Id */
             id: string;
             /** Label */
             label: string;
             /** Note */
             note: string;
+            /**
+             * Private Host
+             * @default false
+             */
+            private_host: boolean;
+            /** Provider */
+            provider?: string | null;
             /** Requires Api Key */
             requires_api_key: boolean;
         };
@@ -2316,8 +2337,26 @@ export interface components {
         };
         /** UpdateLlmInput */
         UpdateLlmInput: {
+            /**
+             * Allow Private Host
+             * @default false
+             */
+            allow_private_host: boolean;
             /** Api Key */
-            api_key: string;
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Price Input Per Mtok */
+            price_input_per_mtok?: number | string | null;
+            /** Price Output Per Mtok */
+            price_output_per_mtok?: number | string | null;
+            /**
+             * Provider
+             * @default anthropic
+             */
+            provider: string;
             /** Revision */
             revision: string;
         };

@@ -886,7 +886,7 @@ An optional global flag (`news_analysis_setting.enabled`, off by default)
 that scores every ingested article's significance to the owner before it is
 allowed into `asset_news`. Off, ingestion is unaffected — the gate is a
 pure pass-through (`audr.jobs.news_gate.NewsAnalysisGate.ingest`). On, with
-an Anthropic key configured (`PUT /api/v1/integrations/llm`):
+an LLM provider configured (`PUT /api/v1/integrations/llm`, §10.1):
 
 - Each article's full text is downloaded with `trafilatura` and fed to the
   classifier **transiently** — used for that one call and discarded. Only
@@ -904,17 +904,60 @@ an Anthropic key configured (`PUT /api/v1/integrations/llm`):
   (`llm_news_budget_usd_per_run`) being exhausted all fall through to the
   exact same plain insert as the flag-off path — unanalyzed, but never
   dropped. An Anthropic outage must never look like "no news today."
-- The model and the per-run budget are config (`llm_news_model`,
-  `llm_news_budget_usd_per_run`, `llm_news_max_output_tokens` in
-  `audr.config.Settings`), not hardcoded at the call site — the founder
+- Provider, base URL, key and model are the stored integration (§10.1);
+  `llm_news_model` is only the fallback default. The per-run budget
+  (`llm_news_budget_usd_per_run`, `llm_news_max_articles_per_run`) and
+  `llm_news_max_output_tokens` are config in
+  `audr.config.Settings`, not hardcoded at the call site — the founder
   picks the production values (AUD-644 card `0910f224`); the code ships
   with conservative fallbacks (`claude-haiku-4-5`, $1/run).
-- The client (`audr.providers.llm.AnthropicClient`) is a raw `httpx` call
-  against the Messages API, the same pattern every other adapter in
+- The clients (`audr.providers.llm`: `AnthropicClient`,
+  `OpenAICompatibleClient`) are raw `httpx` calls, the same pattern every other adapter in
   `audr.providers` uses — no `anthropic` SDK dependency.
 - `audr.jobs.news_analyze`'s heuristic alert classifier (ADR-007 phase 2,
   AUD-583) is untouched by this phase: `news_alert.classifier='llm'` is
   schema-ready (migration 0033) but not wired up yet — a deliberate,
   separately-scoped follow-up, not an oversight. Both consumers share the
-  one `AnthropicClient` when that lands, rather than each owning their own
+  one `LlmClient` when that lands, rather than each owning their own
   HTTP call.
+
+### 10.1 Choosing a provider (AUD-932)
+
+One integration, not one per vendor: **provider type + base URL + API key +
+model**. Two wire protocols exist: `anthropic` (native Messages API, the
+default) and `openai_compatible` (`POST {base_url}/chat/completions`, which
+OpenAI, OpenRouter, Groq, DeepSeek, Mistral, Gemini's compat endpoint, Ollama
+and LM Studio all speak). `GET /api/v1/integrations` lists the presets under
+the `llm` entry's `options` — a preset only pre-fills the form; what is stored
+is provider + base URL + model.
+
+`PUT /api/v1/integrations/llm` takes
+`{revision, provider, base_url?, api_key?, model?, allow_private_host?,
+price_input_per_mtok?, price_output_per_mtok?}`. An empty `api_key` on update
+keeps the stored key — but only if provider and base URL are unchanged; a
+changed target never inherits the old secret. The key is never returned. The
+**Validate** button sends a one-token call to the configured provider + model.
+
+An existing Anthropic key keeps working untouched: a stored row with no
+`provider` is an Anthropic row and takes `llm_news_model` as its model.
+
+**Budget.** Known Claude models carry built-in prices. Any other model costs
+$0 unless you store `price_input_per_mtok` / `price_output_per_mtok` (USD per
+million tokens). The per-run USD ceiling still applies; since a free local model
+never reaches it, every run is also capped at `llm_news_max_articles_per_run`
+(default 200) classified articles. Past either cap the rest of the run fails
+open (inserted unanalyzed).
+
+**Recipe — Ollama on the host or LAN** (no key):
+provider `openai_compatible`, base URL `http://<host>:11434/v1`, model e.g.
+`llama3.1` (`ollama pull` it first), **`allow_private_host: true`** — a LAN or
+loopback address is refused otherwise (the same SSRF guard the RPC URL uses;
+re-checked before every use). From the compose stack `localhost` is the
+container, so use the host's LAN IP or `host.docker.internal`. Small local
+models often ignore "JSON only"; fenced or prose-wrapped JSON is tolerated.
+
+**Recipe — OpenRouter**: provider `openai_compatible`, base URL
+`https://openrouter.ai/api/v1`, your `sk-or-...` key, model such as
+`openai/gpt-4o-mini` or `anthropic/claude-haiku-4.5`. OpenRouter prices vary
+by model — copy the per-Mtok prices from its model page into the price fields
+so the USD ceiling means something.

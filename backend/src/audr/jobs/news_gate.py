@@ -33,8 +33,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.config import get_settings
-from audr.providers.llm import AnthropicClient, LlmUnavailable
-from audr.settings.llm import get_anthropic_api_key
+from audr.providers.llm import LlmClient, LlmUnavailable, build_client
+from audr.providers.rpc_targets import RpcUrlError
+from audr.settings.llm import load_validated_llm_config
 from audr.settings.news_analysis import get_news_analysis_setting
 
 logger = logging.getLogger(__name__)
@@ -52,12 +53,19 @@ InsertFn = Callable[..., Awaitable[int]]
 class _RunBudget:
     limit_usd: Decimal
     spent_usd: Decimal = field(default_factory=lambda: Decimal(0))
+    # AUD-932: a free local model never exhausts the USD ceiling, so the run is
+    # also bounded by how many articles it may classify. None = unbounded.
+    max_articles: int | None = None
+    articles: int = 0
 
     def has_room(self) -> bool:
+        if self.max_articles is not None and self.articles >= self.max_articles:
+            return False
         return self.spent_usd < self.limit_usd
 
     def charge(self, cost_usd: Decimal) -> None:
         self.spent_usd += cost_usd
+        self.articles += 1
 
 
 async def _already_handled(
@@ -139,7 +147,7 @@ async def _fetch_full_text(url: str) -> str:
 
 class NewsAnalysisGate:
     """One instance per `news_refresh` run — owns the run's LLM budget and
-    (if configured) its `AnthropicClient`.
+    (if configured) its LLM client.
     """
 
     def __init__(
@@ -147,7 +155,7 @@ class NewsAnalysisGate:
         *,
         enabled: bool,
         threshold: int,
-        client: AnthropicClient | None,
+        client: LlmClient | None,
         budget: _RunBudget,
         run_id: uuid.UUID,
     ) -> None:
@@ -170,17 +178,33 @@ class NewsAnalysisGate:
             )
 
         settings = get_settings()
-        api_key = await get_anthropic_api_key(session)
-        client: AnthropicClient | None = None
-        if api_key:
-            client = AnthropicClient(
-                api_key=api_key,
-                model=settings.llm_news_model,
-                max_output_tokens=settings.llm_news_max_output_tokens,
-            )
+        client: LlmClient | None = None
+        try:
+            config = await load_validated_llm_config(session)
+        except RpcUrlError as exc:
+            logger.warning("news_gate run_id=%s: stored LLM base url rejected: %s", run_id, exc)
+            config = None
+        if config is not None and (config.api_key or config.provider != "anthropic"):
+            prices = None
+            if config.price_input_per_mtok is not None or config.price_output_per_mtok is not None:
+                prices = (
+                    config.price_input_per_mtok or Decimal(0),
+                    config.price_output_per_mtok or Decimal(0),
+                )
+            try:
+                client = build_client(
+                    provider=config.provider,
+                    api_key=config.api_key,
+                    base_url=config.base_url,
+                    model=config.model,
+                    max_output_tokens=settings.llm_news_max_output_tokens,
+                    prices=prices,
+                )
+            except LlmUnavailable as exc:
+                logger.warning("news_gate run_id=%s: llm client not built: %s", run_id, exc)
         else:
             logger.warning(
-                "news_gate run_id=%s: gate enabled but no anthropic key configured — "
+                "news_gate run_id=%s: gate enabled but no LLM provider configured — "
                 "every article fails open unanalyzed",
                 run_id,
             )
@@ -188,7 +212,10 @@ class NewsAnalysisGate:
             enabled=True,
             threshold=setting.importance_threshold,
             client=client,
-            budget=_RunBudget(settings.llm_news_budget_usd_per_run),
+            budget=_RunBudget(
+                settings.llm_news_budget_usd_per_run,
+                max_articles=settings.llm_news_max_articles_per_run,
+            ),
             run_id=run_id,
         )
 

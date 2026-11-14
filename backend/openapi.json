@@ -1625,6 +1625,28 @@
       },
       "IntegrationEntry": {
         "properties": {
+          "allow_private_host": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Private Host"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -1662,6 +1684,17 @@
             "title": "Kind",
             "type": "string"
           },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "options": {
             "default": [],
             "items": {
@@ -1669,6 +1702,28 @@
             },
             "title": "Options",
             "type": "array"
+          },
+          "price_input_per_mtok": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Input Per Mtok"
+          },
+          "price_output_per_mtok": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Output Per Mtok"
           },
           "provider": {
             "anyOf": [
@@ -2691,6 +2746,28 @@
       "ProviderOption": {
         "description": "One selectable provider, with what it costs the owner to use it.",
         "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -2702,6 +2779,22 @@
           "note": {
             "title": "Note",
             "type": "string"
+          },
+          "private_host": {
+            "default": false,
+            "title": "Private Host",
+            "type": "boolean"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
           },
           "requires_api_key": {
             "title": "Requires Api Key",
@@ -3586,8 +3679,77 @@
       },
       "UpdateLlmInput": {
         "properties": {
+          "allow_private_host": {
+            "default": false,
+            "title": "Allow Private Host",
+            "type": "boolean"
+          },
           "api_key": {
-            "title": "Api Key",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "price_input_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Input Per Mtok"
+          },
+          "price_output_per_mtok": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Output Per Mtok"
+          },
+          "provider": {
+            "default": "anthropic",
+            "title": "Provider",
             "type": "string"
           },
           "revision": {
@@ -3596,8 +3758,7 @@
           }
         },
         "required": [
-          "revision",
-          "api_key"
+          "revision"
         ],
         "title": "UpdateLlmInput",
         "type": "object"
