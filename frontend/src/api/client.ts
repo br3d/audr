@@ -175,6 +175,11 @@ export interface ProviderOption {
   label: string
   requires_api_key: boolean
   note: string
+  /** LLM presets only (AUD-932). */
+  provider?: string | null
+  base_url?: string | null
+  default_model?: string | null
+  private_host?: boolean
 }
 
 export interface IntegrationEntry {
@@ -189,6 +194,12 @@ export interface IntegrationEntry {
   effective_source: string | null
   using_default: boolean
   options: ProviderOption[]
+  /** LLM only — the stored target. The key is never returned. */
+  base_url?: string | null
+  model?: string | null
+  allow_private_host?: boolean | null
+  price_input_per_mtok?: string | null
+  price_output_per_mtok?: string | null
 }
 
 export interface IntegrationsResponse {
@@ -404,7 +415,14 @@ export function updateQuotes(input: UpdateQuotesInput): Promise<IntegrationEntry
 
 export interface UpdateLlmInput {
   revision: string
-  api_key: string
+  provider: 'anthropic' | 'openai_compatible'
+  base_url?: string
+  /** Omit to keep the stored key (only honoured while provider + base_url are unchanged). */
+  api_key?: string
+  model?: string
+  allow_private_host?: boolean
+  price_input_per_mtok?: string
+  price_output_per_mtok?: string
 }
 
 export function updateLlm(input: UpdateLlmInput): Promise<IntegrationEntry> {

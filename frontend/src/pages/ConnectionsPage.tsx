@@ -8,7 +8,7 @@ import {
   validateIntegration,
   ApiError,
 } from '../api/client'
-import type { IntegrationEntry, ProviderOption } from '../api/client'
+import type { IntegrationEntry, ProviderOption, UpdateLlmInput } from '../api/client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import { errorMessage } from '../api/errorMessage'
@@ -418,6 +418,17 @@ function QuotesForm({
   )
 }
 
+/** The preset the stored config corresponds to: exact base_url match, else Anthropic, else Custom. */
+function initialPresetId(current: IntegrationEntry | null, options: ProviderOption[]): string {
+  if (current?.provider === 'anthropic' || !current?.provider) {
+    return options.find((o) => o.provider === 'anthropic')?.id ?? 'anthropic'
+  }
+  const byUrl = options.find(
+    (o) => o.provider === 'openai_compatible' && o.base_url && o.base_url === current.base_url,
+  )
+  return byUrl?.id ?? 'custom'
+}
+
 function LlmForm({
   current,
   onSaved,
@@ -427,16 +438,56 @@ function LlmForm({
   onSaved: () => void
   onValidated: () => void
 }) {
+  const options = current?.options ?? []
   const [editing, setEditing] = useState(false)
+  const [presetId, setPresetId] = useState('anthropic')
+  const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState('')
+  const [priceIn, setPriceIn] = useState('')
+  const [priceOut, setPriceOut] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
 
+  const preset = options.find((o) => o.id === presetId) ?? null
+  const isAnthropic = (preset?.provider ?? 'anthropic') === 'anthropic'
+  const keyStored = current?.configured === true
+
+  function startEditing() {
+    const id = initialPresetId(current, options)
+    setPresetId(id)
+    setBaseUrl(current?.base_url ?? options.find((o) => o.id === id)?.base_url ?? '')
+    setModel(current?.model ?? '')
+    setPriceIn(current?.price_input_per_mtok ?? '')
+    setPriceOut(current?.price_output_per_mtok ?? '')
+    setApiKey('')
+    setValidationError(null)
+    setEditing(true)
+  }
+
+  function pickPreset(id: string) {
+    setPresetId(id)
+    const next = options.find((o) => o.id === id)
+    // A preset pre-fills the URL; Custom keeps whatever is typed so it stays editable.
+    if (next && id !== 'custom') setBaseUrl(next.base_url ?? '')
+  }
+
   const saveMutation = useMutation({
-    mutationFn: () =>
-      updateLlm({
+    mutationFn: () => {
+      const key = apiKey.trim()
+      const input: UpdateLlmInput = {
         revision: current?.revision ?? '0',
-        api_key: apiKey.trim(),
-      }),
+        provider: isAnthropic ? 'anthropic' : 'openai_compatible',
+      }
+      if (!isAnthropic) {
+        input.base_url = baseUrl.trim()
+        if (preset?.private_host) input.allow_private_host = true
+      }
+      if (model.trim()) input.model = model.trim()
+      if (key) input.api_key = key // blank = keep the stored key
+      if (priceIn.trim()) input.price_input_per_mtok = priceIn.trim()
+      if (priceOut.trim()) input.price_output_per_mtok = priceOut.trim()
+      return updateLlm(input)
+    },
     onSuccess: () => {
       setEditing(false)
       setApiKey('')
@@ -452,9 +503,23 @@ function LlmForm({
   function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setValidationError(null)
-    if (!apiKey.trim()) {
-      setValidationError('An Anthropic API key is required.')
+    const keyOptional = preset ? !preset.requires_api_key : false
+    const sameTarget =
+      (current?.provider ?? 'anthropic') === (isAnthropic ? 'anthropic' : 'openai_compatible') &&
+      (isAnthropic || (current?.base_url ?? '') === baseUrl.trim())
+    if (!apiKey.trim() && !keyOptional && !(keyStored && sameTarget)) {
+      setValidationError(`An API key is required for ${preset?.label ?? 'this provider'}.`)
       return
+    }
+    if (!isAnthropic) {
+      if (!baseUrl.trim()) {
+        setValidationError('A base URL is required.')
+        return
+      }
+      if (!model.trim() && !preset?.default_model) {
+        setValidationError('A model name is required.')
+        return
+      }
     }
     saveMutation.mutate()
   }
@@ -469,31 +534,33 @@ function LlmForm({
     : validateMutation.error
       ? validationFailureMessage(validateMutation.error)
       : null
+  const providerName = preset?.label ?? 'the provider'
 
   return (
     <section aria-labelledby="llm-heading" className="card">
       <h2 id="llm-heading" className="section-heading mb-8">
-        AI News Analysis (Anthropic)
+        AI News Analysis (LLM)
       </h2>
       <p className="muted-text mb-16">
         Optional. Powers the "Smart news analysis" gate on the Schedules page, which scores each incoming news
-        article's significance before it is cached. Storing a key here does not turn the gate on by itself —
-        switch it on under Schedules.
+        article's significance before it is cached. Saving a provider here does not turn the gate on by itself
+        — switch it on under Schedules. Any OpenAI-compatible provider works (OpenAI, OpenRouter, Groq,
+        Ollama, …) as well as Anthropic.
       </p>
 
       <p className="muted-text mb-16">
-        <strong className="text-secondary">Disclosure:</strong> When the gate is on, Anthropic receives each
-        article's headline and full text for scoring. It does not receive your wallet addresses, password, or
-        session credentials, and the article text itself is never stored — only the resulting summary and
-        score are.
+        <strong className="text-secondary">Disclosure:</strong> When the gate is on, the configured provider
+        receives each article's headline and full text for scoring. It does not receive your wallet addresses,
+        password, or session credentials, and the article text itself is never stored — only the resulting
+        summary and score are.
       </p>
 
       <SourceSummary entry={current} fallback="not configured — articles are ingested unanalyzed" />
 
       {!editing && (
         <div className="btn-group">
-          <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>
-            {current?.configured ? 'Change Anthropic key' : 'Add Anthropic key'}
+          <button type="button" className="btn btn-primary" onClick={startEditing}>
+            {current?.configured ? 'Change LLM provider' : 'Set up LLM provider'}
           </button>
 
           {current?.configured && (
@@ -502,7 +569,7 @@ function LlmForm({
               className="btn btn-secondary"
               onClick={() => validateMutation.mutate()}
               disabled={validating}
-              aria-label="Test the stored Anthropic key through the server"
+              aria-label="Test the configured LLM provider through the server"
             >
               {validating ? 'Testing…' : 'Test connection'}
             </button>
@@ -513,8 +580,46 @@ function LlmForm({
       {editing && (
         <form onSubmit={handleSave} noValidate className="form-grid">
           <div className="form-group">
+            <label htmlFor="llm-preset" className="form-label">
+              Provider
+            </label>
+            <select
+              id="llm-preset"
+              className="input-folio"
+              value={presetId}
+              onChange={(e) => pickPreset(e.target.value)}
+              disabled={submitting}
+            >
+              {options.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            {preset && <p className="form-hint">{preset.note}</p>}
+          </div>
+
+          {!isAnthropic && (
+            <div className="form-group">
+              <label htmlFor="llm-base-url" className="form-label">
+                Base URL
+              </label>
+              <input
+                id="llm-base-url"
+                type="url"
+                className="input-folio"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                disabled={submitting}
+                placeholder="https://host/v1"
+                autoComplete="off"
+              />
+            </div>
+          )}
+
+          <div className="form-group">
             <label htmlFor="llm-api-key" className="form-label">
-              Anthropic API key
+              API key{preset && !preset.requires_api_key ? ' (optional)' : ''}
             </label>
             <input
               id="llm-api-key"
@@ -522,12 +627,62 @@ function LlmForm({
               className="input-folio"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              required
               disabled={submitting}
               autoComplete="new-password"
+              placeholder={keyStored ? 'saved — leave blank to keep it' : ''}
             />
-            <p className="form-hint">Stored encrypted and never shown again.</p>
+            <p className="form-hint">
+              {keyStored
+                ? 'A key is saved. Leave blank to keep it (only while the provider and base URL are unchanged). '
+                : ''}
+              Stored encrypted and never shown again.
+            </p>
           </div>
+
+          <div className="form-group">
+            <label htmlFor="llm-model" className="form-label">
+              Model
+            </label>
+            <input
+              id="llm-model"
+              type="text"
+              className="input-folio"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={submitting}
+              placeholder={preset?.default_model ?? 'model name'}
+              autoComplete="off"
+            />
+          </div>
+
+          <details className="form-group">
+            <summary className="form-label">Price per 1M tokens (optional)</summary>
+            <label htmlFor="llm-price-in" className="form-label">
+              Input, USD
+            </label>
+            <input
+              id="llm-price-in"
+              type="text"
+              inputMode="decimal"
+              className="input-folio"
+              value={priceIn}
+              onChange={(e) => setPriceIn(e.target.value)}
+              disabled={submitting}
+            />
+            <label htmlFor="llm-price-out" className="form-label">
+              Output, USD
+            </label>
+            <input
+              id="llm-price-out"
+              type="text"
+              inputMode="decimal"
+              className="input-folio"
+              value={priceOut}
+              onChange={(e) => setPriceOut(e.target.value)}
+              disabled={submitting}
+            />
+            <p className="form-hint">Used for the per-run budget. Enter 0 for a local or free model.</p>
+          </details>
 
           {error !== null && (
             <p role="alert" className="alert alert-danger">
@@ -537,7 +692,7 @@ function LlmForm({
 
           <div className="btn-group">
             <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Saving…' : 'Save Anthropic key'}
+              {submitting ? 'Saving…' : `Save ${providerName}`}
             </button>
             <button
               type="button"

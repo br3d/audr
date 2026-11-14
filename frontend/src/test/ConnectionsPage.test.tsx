@@ -40,6 +40,49 @@ const QUOTE_OPTIONS: ProviderOption[] = [
   },
 ]
 
+const LLM_OPTIONS: ProviderOption[] = [
+  {
+    id: 'anthropic',
+    label: 'Anthropic (Claude)',
+    requires_api_key: true,
+    note: 'Native.',
+    provider: 'anthropic',
+    base_url: null,
+    default_model: 'claude-haiku-4-5',
+    private_host: false,
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    requires_api_key: true,
+    note: 'Needs key.',
+    provider: 'openai_compatible',
+    base_url: 'https://api.openai.com/v1',
+    default_model: 'gpt-4o-mini',
+    private_host: false,
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama (local)',
+    requires_api_key: false,
+    note: 'No key.',
+    provider: 'openai_compatible',
+    base_url: 'http://localhost:11434/v1',
+    default_model: 'llama3.1',
+    private_host: true,
+  },
+  {
+    id: 'custom',
+    label: 'Custom (OpenAI-compatible)',
+    requires_api_key: false,
+    note: 'Any.',
+    provider: 'openai_compatible',
+    base_url: null,
+    default_model: null,
+    private_host: false,
+  },
+]
+
 /** A fresh install: nothing configured, both keyless defaults in use. */
 function defaultEntries(): IntegrationEntry[] {
   const health = { status: 'unvalidated' as const, last_checked_at: null, error_message: null }
@@ -78,7 +121,7 @@ function defaultEntries(): IntegrationEntry[] {
       health,
       effective_source: null,
       using_default: false,
-      options: [],
+      options: LLM_OPTIONS,
     },
   ]
 }
@@ -218,68 +261,113 @@ describe('ConnectionsPage — the page must describe the source actually in use 
     })
   })
 
-  it('offers an Anthropic key field for the llm integration, masked like the others', async () => {
+  async function setValue(el: HTMLInputElement | HTMLSelectElement, v: string) {
+    await act(async () => {
+      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+      Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(el, v)
+      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+    })
+  }
+  const q = (id: string) => container.querySelector(`#${id}`) as HTMLInputElement
+
+  async function openLlm() {
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
-
-    expect(container.querySelector('#llm-api-key')).toBeNull()
-
     await act(async () => {
-      buttonByText(container, 'Add Anthropic key').click()
+      buttonByText(container, 'Set up LLM provider').click()
     })
+  }
 
-    const input = container.querySelector('#llm-api-key') as HTMLInputElement
-    expect(input).toBeTruthy()
-    expect(input.type).toBe('password')
-    expect(container.textContent).toContain('Stored encrypted and never shown again.')
-    // No validate button — the backend has no validation job for this kind yet.
-    expect(
-      Array.from(container.querySelectorAll('button')).some((b) =>
-        /test connection|test.*anthropic/i.test(b.textContent ?? ''),
-      ),
-    ).toBe(false)
+  it('shows the Anthropic preset with a masked key field and no base URL', async () => {
+    await openLlm()
+    expect((q('llm-preset') as unknown as HTMLSelectElement).value).toBe('anthropic')
+    expect(q('llm-api-key').type).toBe('password')
+    expect(container.querySelector('#llm-base-url')).toBeNull()
+    expect(container.textContent).toContain('Any OpenAI-compatible provider works')
   })
 
-  it('requires a non-empty key before saving the llm integration', async () => {
-    ;({ container, root } = mountPage())
-    await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
+  it('pre-fills the base URL from a preset and keeps Custom editable', async () => {
+    await openLlm()
+    await setValue(q('llm-preset'), 'openai')
+    expect(q('llm-base-url').value).toBe('https://api.openai.com/v1')
+    expect(q('llm-model').placeholder).toBe('gpt-4o-mini')
+    await setValue(q('llm-preset'), 'custom')
+    expect(q('llm-base-url').value).toBe('https://api.openai.com/v1')
+    await setValue(q('llm-base-url'), 'https://my.host/v1')
+    expect(q('llm-base-url').value).toBe('https://my.host/v1')
+  })
 
+  it('requires a key for a keyed provider with none stored', async () => {
+    await openLlm()
     await act(async () => {
-      buttonByText(container, 'Add Anthropic key').click()
+      buttonByText(container, 'Save Anthropic').click()
     })
-    await act(async () => {
-      buttonByText(container, 'Save Anthropic key').click()
-    })
-
     expect(mockUpdateLlm).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('An Anthropic API key is required.')
+    expect(container.textContent).toContain('An API key is required')
   })
 
-  it('saves the Anthropic key and never echoes it back into the DOM', async () => {
-    mockUpdateLlm.mockResolvedValue({
-      ...defaultEntries()[2],
-      configured: true,
-      effective_source: 'Anthropic',
+  it('saves Anthropic with the key, and never echoes it into the DOM', async () => {
+    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true })
+    await openLlm()
+    await setValue(q('llm-api-key'), 'sk-ant-secret-value')
+    await act(async () => {
+      buttonByText(container, 'Save Anthropic').click()
     })
+    expect(mockUpdateLlm).toHaveBeenCalledWith({
+      revision: '0',
+      provider: 'anthropic',
+      api_key: 'sk-ant-secret-value',
+    })
+    expect(container.innerHTML).not.toContain('sk-ant-secret-value')
+  })
+
+  it('saves Ollama with no key and flags the private host', async () => {
+    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true })
+    await openLlm()
+    await setValue(q('llm-preset'), 'ollama')
+    await act(async () => {
+      buttonByText(container, 'Save Ollama').click()
+    })
+    expect(mockUpdateLlm).toHaveBeenCalledWith({
+      revision: '0',
+      provider: 'openai_compatible',
+      base_url: 'http://localhost:11434/v1',
+      allow_private_host: true,
+    })
+  })
+
+  it('sends prices when entered', async () => {
+    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true })
+    await openLlm()
+    await setValue(q('llm-preset'), 'ollama')
+    await setValue(q('llm-model'), 'qwen3')
+    await setValue(q('llm-price-in'), '0')
+    await setValue(q('llm-price-out'), '0')
+    await act(async () => {
+      buttonByText(container, 'Save Ollama').click()
+    })
+    expect(mockUpdateLlm).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'qwen3', price_input_per_mtok: '0', price_output_per_mtok: '0' }),
+    )
+  })
+
+  it('renders a stored Anthropic setup as the Anthropic preset and leaves a blank key unsent', async () => {
+    mockUpdateLlm.mockResolvedValue({ ...defaultEntries()[2], configured: true })
+    const items = defaultEntries()
+    items[2] = { ...items[2], configured: true, revision: '3', model: 'claude-haiku-4-5' }
+    mockFetchIntegrations.mockResolvedValue(makeResponse(items))
     ;({ container, root } = mountPage())
     await vi.waitFor(() => expect(container.textContent).toContain('In use:'))
-
     await act(async () => {
-      buttonByText(container, 'Add Anthropic key').click()
+      buttonByText(container, 'Change LLM provider').click()
     })
-
-    const input = container.querySelector('#llm-api-key') as HTMLInputElement
+    expect((q('llm-preset') as unknown as HTMLSelectElement).value).toBe('anthropic')
+    expect(q('llm-api-key').placeholder).toContain('saved')
     await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setter?.call(input, 'sk-ant-secret-value')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      buttonByText(container, 'Save Anthropic').click()
     })
-
-    await act(async () => {
-      buttonByText(container, 'Save Anthropic key').click()
-    })
-
-    expect(mockUpdateLlm).toHaveBeenCalledWith({ revision: '0', api_key: 'sk-ant-secret-value' })
-    expect(container.innerHTML).not.toContain('sk-ant-secret-value')
+    const call = mockUpdateLlm.mock.calls[0][0]
+    expect(call).not.toHaveProperty('api_key')
+    expect(call).toMatchObject({ revision: '3', provider: 'anthropic', model: 'claude-haiku-4-5' })
   })
 })
