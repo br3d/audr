@@ -16,6 +16,7 @@ import DashboardPage from './pages/DashboardPage'
 import WalletsPage from './pages/WalletsPage'
 import AssetsPage from './pages/AssetsPage'
 import EventsPage from './pages/EventsPage'
+import NewsPage from './pages/NewsPage'
 import ConnectionsPage from './pages/ConnectionsPage'
 import SchedulesPage from './pages/SchedulesPage'
 import StatusPage from './pages/StatusPage'
@@ -101,6 +102,7 @@ export default function App() {
       {page === 'wallets' && <WalletsPage />}
       {page === 'assets' && <AssetsPage />}
       {page === 'events' && <EventsPage />}
+      {page === 'news' && <NewsPage />}
       {page === 'connections' && <ConnectionsPage />}
       {page === 'schedules' && <SchedulesPage />}
       {page === 'status' && <StatusPage />}

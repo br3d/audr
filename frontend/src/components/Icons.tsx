@@ -327,3 +327,18 @@ export function IconKey(props: IconProps) {
     </svg>
   )
 }
+
+export function IconNews(props: IconProps) {
+  return (
+    <svg {...defaults} {...props}>
+      <path
+        d="M4 4h10v12H5.5A1.5 1.5 0 0 1 4 14.5V4zM14 7h2.5v7.5a1.5 1.5 0 0 1-1.5 1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M6.5 7.5h5M6.5 10h5M6.5 12.5h3" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
+}

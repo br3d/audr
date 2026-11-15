@@ -14,6 +14,10 @@ vi.mock('../api/client', async () => {
     fetchEvents: vi.fn(),
     fetchAssets: vi.fn(),
     patchAsset: vi.fn(),
+    fetchAlerts: vi.fn(),
+    fetchAllowances: vi.fn(),
+    fetchAssetNews: vi.fn(),
+    markAlertRead: vi.fn(),
     ApiError: MockApiError,
   }
 })
@@ -22,9 +26,14 @@ vi.mock('../components/HistoryChart', () => ({
   default: () => null,
 }))
 
-vi.mock('../components/NewsFeed', () => ({
-  default: ({ items }: { items: { asset_id: string }[] }) =>
-    React.createElement('div', { 'aria-label': 'News feed stub' }, `${items.length} assets`),
+// The compact news / In focus panels have their own suite (InFocusPanel.test,
+// MyAssetsNewsPanel.test); here they are stubbed so these cases stay about layout.
+vi.mock('../components/MyAssetsNewsPanel', () => ({
+  default: ({ assets }: { assets: { asset_id: string }[] }) =>
+    React.createElement('section', { 'aria-label': 'My assets news' }, `${assets.length} assets`),
+}))
+vi.mock('../components/InFocusPanel', () => ({
+  default: () => React.createElement('section', { 'aria-label': 'In focus' }),
 }))
 
 import DashboardPage from '../pages/DashboardPage'
@@ -736,20 +745,23 @@ describe('DashboardPage', () => {
     })
   })
 
-  describe('news section', () => {
-    it('renders the News section wired to priced allocations', async () => {
+  describe('right rail', () => {
+    it('reads In focus → Allocation → My assets news, with no per-asset news stack', async () => {
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
         priced_subtotal_usd: '4000.00',
         allocations: [ETH_ALLOCATION],
       })
-      expect(container.querySelector('[aria-label="Asset news"]')).toBeTruthy()
-      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe('1 assets')
+      const labels = Array.from(container.querySelectorAll('.dashboard-right > section')).map((e) =>
+        e.getAttribute('aria-label'),
+      )
+      expect(labels).toEqual(['In focus', 'Allocation summary', 'My assets news'])
+      expect(container.querySelector('[aria-label="Asset news"]')).toBeNull()
       await unmount(container, root)
     })
 
-    it('excludes unpriced assets from the News section item count', async () => {
+    it('passes only priced, included allocations to the compact news panel', async () => {
       const { container, root } = mountWithData({
         ...EMPTY_PORTFOLIO,
         total_usd: '4000.00',
@@ -766,13 +778,7 @@ describe('DashboardPage', () => {
           }),
         ],
       })
-      expect(container.querySelector('[aria-label="News feed stub"]')?.textContent).toBe('1 assets')
-      await unmount(container, root)
-    })
-
-    it('does not render the News section when there are no priced allocations', async () => {
-      const { container, root } = mountWithData(EMPTY_PORTFOLIO)
-      expect(container.querySelector('[aria-label="Asset news"]')).toBeNull()
+      expect(container.querySelector('[aria-label="My assets news"]')?.textContent).toBe('1 assets')
       await unmount(container, root)
     })
   })

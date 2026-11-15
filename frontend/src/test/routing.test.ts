@@ -23,6 +23,12 @@ describe('pageFromHash / hashForPage with a query part', () => {
     expect(pageFromHash('#/wallets')).toBe('wallets')
   })
 
+  it('routes #/news with its asset filter (AUD-947)', () => {
+    expect(pageFromHash('#/news')).toBe('news')
+    expect(pageFromHash('#/news?asset=ETH')).toBe('news')
+    expect(hashForPage('news', 'asset=ETH')).toBe('#/news?asset=ETH')
+  })
+
   it('returns null for an unknown page regardless of query', () => {
     expect(pageFromHash('#/not-a-page?x=1')).toBeNull()
   })

@@ -6,6 +6,7 @@ import {
   IconClock,
   IconActivity,
   IconZap,
+  IconNews,
   IconKey,
   IconPlug,
   IconSettings,
@@ -38,6 +39,7 @@ export const MAIN_PAGES = [
   'wallets',
   'assets',
   'events',
+  'news',
   'connections',
   'schedules',
   'status',
@@ -69,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
       // manual contracts), not a portfolio view. It stays routable at #/assets and
       // is reached from the Dashboard links, but it no longer takes a nav slot.
       { page: 'events', label: 'Events', Icon: IconZap },
+      { page: 'news', label: 'News', Icon: IconNews },
     ],
   },
   {
@@ -90,6 +93,7 @@ const PAGE_TITLES: Record<MainPage, string> = {
   wallets: 'Wallets',
   assets: 'Assets',
   events: 'Events',
+  news: 'News',
   connections: 'Connections',
   schedules: 'Schedules',
   status: 'Status',

@@ -11,7 +11,8 @@ import { errorMessage } from '../api/errorMessage'
 import MoneyValue from '../components/MoneyValue'
 import AllocationList from '../components/AllocationList'
 import AllocationBar from '../components/AllocationBar'
-import NewsFeed from '../components/NewsFeed'
+import InFocusPanel from '../components/InFocusPanel'
+import MyAssetsNewsPanel from '../components/MyAssetsNewsPanel'
 import ScanStatus from '../components/ScanStatus'
 import NoticeBadge from '../components/NoticeBadge'
 import EventRow from '../components/EventRow'
@@ -444,7 +445,9 @@ export default function DashboardPage({ setPage }: Props) {
         </div>
 
         <div className="dashboard-right">
-          {/* Allocation summary */}
+          {/* AUD-947: In focus → Allocation → My assets news */}
+          <InFocusPanel allocations={data.allocations} setPage={setPage} />
+
           {hasPricedAllocations && (
             <section aria-label="Allocation summary" className="card mb-20">
               <div className="card-header">
@@ -454,13 +457,7 @@ export default function DashboardPage({ setPage }: Props) {
             </section>
           )}
 
-          {/* News */}
-          {hasPricedAllocations && (
-            <section aria-label="Asset news" className="mb-20">
-              <div className="section-heading">News</div>
-              <NewsFeed items={pricedAllocations} />
-            </section>
-          )}
+          <MyAssetsNewsPanel assets={pricedAllocations} setPage={setPage} />
         </div>
       </div>
     </div>

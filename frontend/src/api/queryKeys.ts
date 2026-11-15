@@ -12,6 +12,7 @@ export const queryKeys = {
 
   assets: (filters: { excluded: boolean; showAllCatalog: boolean }) =>
     ['assets', filters.excluded, filters.showAllCatalog] as const,
+  assetsSymbolLookup: () => ['assets', 'symbol-lookup'] as const,
   assetsExcludedStrip: () => ['assets', 'excluded-strip'] as const,
 
   history: (period: HistoryPeriod) => ['history', period] as const,
@@ -36,7 +37,11 @@ export const queryKeys = {
 
   apiTokens: () => ['api-tokens'] as const,
   alerts: () => ['alerts'] as const,
+  // Prefixed by alerts() so the bell's mark-read invalidation refreshes it too.
+  alertsUnread: () => ['alerts', 'unread'] as const,
   assetNews: (assetId: string) => ['asset-news', assetId] as const,
+  assetNewsLatest: (assetId: string) => ['asset-news', assetId, 'latest'] as const,
+  allowancesUnlimited: () => ['allowances', 'unlimited-dashboard'] as const,
   purgePreview: (provider: string) => ['purge-preview', provider] as const,
 } satisfies Record<string, (...args: never[]) => readonly unknown[]>
 
