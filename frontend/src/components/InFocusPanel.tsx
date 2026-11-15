@@ -140,12 +140,7 @@ function SignalRow({
             <span className="news-item-title">{a.article_title}</span>
           ))}
         {a.summary && <p className="text-secondary infocus-summary">{a.summary}</p>}
-        <button
-          type="button"
-          className="link-button"
-          disabled={marking}
-          onClick={() => onMarkRead(a.id)}
-        >
+        <button type="button" className="link-button" disabled={marking} onClick={() => onMarkRead(a.id)}>
           Mark read
         </button>
       </li>

@@ -62,7 +62,9 @@ describe('NewsPage', () => {
     const c = await mount()
     expect(c.querySelector('h2')?.textContent).toBe('News')
     expect(c.textContent).toContain('Headlines for the assets you hold.')
-    const chips = Array.from(c.querySelectorAll('[aria-label="Filter by asset"] button')).map((b) => b.textContent)
+    const chips = Array.from(c.querySelectorAll('[aria-label="Filter by asset"] button')).map(
+      (b) => b.textContent,
+    )
     expect(chips).toEqual(['All', 'ETH', 'USDC'])
     expect(c.querySelectorAll('[aria-label^="News for"]')).toHaveLength(2)
   })
@@ -71,7 +73,9 @@ describe('NewsPage', () => {
     setup()
     window.history.replaceState(null, '', '#/news')
     const c = await mount()
-    const eth = Array.from(c.querySelectorAll('[aria-label="Filter by asset"] button')).find((b) => b.textContent === 'ETH')!
+    const eth = Array.from(c.querySelectorAll('[aria-label="Filter by asset"] button')).find(
+      (b) => b.textContent === 'ETH',
+    )!
     await act(async () => eth.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(window.location.hash).toBe('#/news?asset=ETH')
     expect(c.querySelectorAll('[aria-label^="News for"]')).toHaveLength(1)

@@ -118,6 +118,11 @@ describe('orderSignals', () => {
       moves,
       allows,
     )
-    expect(out.map((s) => s.key)).toEqual(['alert:c1', 'alert:w1', 'move:eth', expect.stringMatching(/^allowance:/)])
+    expect(out.map((s) => s.key)).toEqual([
+      'alert:c1',
+      'alert:w1',
+      'move:eth',
+      expect.stringMatching(/^allowance:/),
+    ])
   })
 })

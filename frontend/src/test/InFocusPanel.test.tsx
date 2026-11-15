@@ -7,7 +7,13 @@ import type { AlertItem, AllocationItem } from '../api/client'
 
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client')
-  return { ...actual, fetchAlerts: vi.fn(), fetchAllowances: vi.fn(), fetchAssets: vi.fn(), markAlertRead: vi.fn() }
+  return {
+    ...actual,
+    fetchAlerts: vi.fn(),
+    fetchAllowances: vi.fn(),
+    fetchAssets: vi.fn(),
+    markAlertRead: vi.fn(),
+  }
 })
 
 import InFocusPanel from '../components/InFocusPanel'
@@ -34,7 +40,8 @@ const alert = (o: Partial<AlertItem>): AlertItem => ({
   article_url: 'https://example.com/x',
   ...o,
 })
-const alertsResp = (alerts: AlertItem[]) => ({ alerts, unread_count: alerts.length, total: alerts.length, limit: 20, offset: 0 }) as never
+const alertsResp = (alerts: AlertItem[]) =>
+  ({ alerts, unread_count: alerts.length, total: alerts.length, limit: 20, offset: 0 }) as never
 const allowResp = (n: number) =>
   ({
     total: n,
@@ -74,7 +81,11 @@ async function mount(allocs: AllocationItem[], setPage = vi.fn()) {
   const root = createRoot(container)
   await act(async () => {
     root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(InFocusPanel, { allocations: allocs, setPage })),
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(InFocusPanel, { allocations: allocs, setPage }),
+      ),
     )
     await new Promise((r) => setTimeout(r, 0))
   })

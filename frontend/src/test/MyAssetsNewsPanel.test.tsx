@@ -24,7 +24,8 @@ const item = (id: string, at: string): AssetNewsItem => ({
   published_at: at,
   fetched_at: at,
 })
-const resp = (news: AssetNewsItem[]) => ({ asset_id: 'x', total: news.length, limit: 3, offset: 0, news }) as never
+const resp = (news: AssetNewsItem[]) =>
+  ({ asset_id: 'x', total: news.length, limit: 3, offset: 0, news }) as never
 
 async function mount(assets: { asset_id: string; symbol: string; percentage: string }[], setPage = vi.fn()) {
   const container = document.createElement('div')
@@ -33,7 +34,11 @@ async function mount(assets: { asset_id: string; symbol: string; percentage: str
   const root = createRoot(container)
   await act(async () => {
     root.render(
-      React.createElement(QueryClientProvider, { client: qc }, React.createElement(MyAssetsNewsPanel, { assets, setPage })),
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(MyAssetsNewsPanel, { assets, setPage }),
+      ),
     )
     await new Promise((r) => setTimeout(r, 0))
   })
@@ -52,7 +57,11 @@ describe('MyAssetsNewsPanel', () => {
   it('merges the newest 3 across assets, newest first, with asset pill and source', async () => {
     mNews.mockImplementation(async (id) =>
       id === 'eth'
-        ? resp([item('e1', '2026-11-15T10:00:00Z'), item('e2', '2026-11-15T08:00:00Z'), item('e3', '2026-11-14T00:00:00Z')])
+        ? resp([
+            item('e1', '2026-11-15T10:00:00Z'),
+            item('e2', '2026-11-15T08:00:00Z'),
+            item('e3', '2026-11-14T00:00:00Z'),
+          ])
         : resp([item('u1', '2026-11-15T09:00:00Z'), item('u2', '2026-11-15T07:00:00Z')]),
     )
     const { container } = await mount([
