@@ -242,10 +242,24 @@ rebuild_main() {
   tree="$(git write-tree)"
   rm -f "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
 
-  # The mirrored GitHub commit is the parent, and the message names it, so the
-  # GitHub sha behind any Gitea main commit stays recoverable by hand even
+  # The SUBJECT is the mirrored commit's own subject (AUD-943). Gitea titles
+  # every Actions run with the first line of the head commit, and the head
+  # commit of a main run is always this overlay commit — so a fixed subject
+  # here made every run in the Actions list read ".gitea/workflows overlay
+  # [AUD-294]" and told you nothing about what was being tested or deployed.
+  # The short sha suffix keeps the overlay recognisable at a glance.
+  #
+  # The mirrored GitHub commit is the parent, and the body names it in full, so
+  # the GitHub sha behind any Gitea main commit stays recoverable by hand even
   # though nothing in the retry logic has to parse either any more.
-  msg="ci(gitea): sync GitHub main ($gh_main) + .gitea/workflows overlay [AUD-294]"
+  subject="$(git log -1 --format=%s "$gh_main")"
+  [ -n "$subject" ] || subject="sync GitHub main"
+  if [ "$attempt" -ge 1 ]; then
+    subject="$subject [deploy retry $attempt/$MAX_RETRIES]"
+  fi
+  msg="$subject (gitea ${gh_main:0:7})
+
+ci(gitea): sync GitHub main ($gh_main) + .gitea/workflows overlay [AUD-294]"
 
   # A retry MUST produce a different commit, and the attempt number in the
   # message is what guarantees it. `git commit-tree` is a pure function of its

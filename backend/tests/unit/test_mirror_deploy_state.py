@@ -363,6 +363,31 @@ def test_sync_records_both_shas(harness: Harness) -> None:
     assert harness.notify_calls() == []
 
 
+def _gitea_subject(harness: Harness) -> str:
+    return _git(harness.gitea, "log", "-1", "--format=%s", "refs/heads/main")
+
+
+@requires_mirror
+def test_gitea_run_title_is_the_mirrored_commit_subject(harness: Harness) -> None:
+    """AUD-943: Gitea titles an Actions run with the head commit's first line.
+
+    The head commit of every main run is the overlay commit, so a fixed subject
+    there named every run in the list ".gitea/workflows overlay [AUD-294]".
+    """
+    gh = harness.commit_to_github("AUD-123: something a human can recognise")
+    assert harness.run(**NO_GRACE).returncode == 0
+    assert _gitea_subject(harness) == f"AUD-123: something a human can recognise (gitea {gh[:7]})"
+    # The full GitHub sha is still in the body, recoverable by hand.
+    body = _git(harness.gitea, "log", "-1", "--format=%b", "refs/heads/main")
+    assert gh in body
+
+    # A retry says so in the title, so the list shows why the commit ran twice.
+    assert harness.run(**NO_GRACE).returncode == 0
+    assert _gitea_subject(harness) == (
+        f"AUD-123: something a human can recognise [deploy retry 1/1] (gitea {gh[:7]})"
+    )
+
+
 @requires_mirror
 def test_undeployed_main_is_rebuilt_once_then_alerted_once(harness: Harness) -> None:
     """End to end: the exact sequence that would have recovered AUD-701 alone."""
