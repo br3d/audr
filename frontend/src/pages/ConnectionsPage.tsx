@@ -539,7 +539,7 @@ function LlmForm({
   return (
     <section aria-labelledby="llm-heading" className="card">
       <h2 id="llm-heading" className="section-heading mb-8">
-        AI News Analysis (LLM)
+        AI Analysis
       </h2>
       <p className="muted-text mb-16">
         Optional. Powers the "Smart news analysis" gate on the Schedules page, which scores each incoming news
