@@ -1,9 +1,32 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import React from 'react'
-import { act } from 'react'
+import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AssistantPanel from '../components/AssistantPanel'
+import { ApiError } from '../api/client'
+import * as client from '../api/client'
+
+vi.mock('../api/client', async (orig) => ({
+  ...(await orig<typeof import('../api/client')>()),
+  assistantChat: vi.fn(),
+}))
+
+const chat = vi.mocked(client.assistantChat)
+
+const OK = {
+  reply: 'Summary\n\n- point one\n- point two',
+  mode: 'portfolio' as const,
+  provider: 'openai_compatible',
+  model: 'deepseek-v4',
+  context_as_of: '2026-11-17T10:00:00Z',
+  usage: { input_tokens: 1, output_tokens: 1 },
+  elapsed_ms: 4200,
+}
+
+function apiError(status: number, code: string, message: string) {
+  return new ApiError(status, { error: { code, message }, request_id: 'r' })
+}
 
 describe('AssistantPanel', () => {
   let container: HTMLDivElement
@@ -13,135 +36,99 @@ describe('AssistantPanel', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    vi.useFakeTimers()
+    chat.mockReset()
   })
 
   afterEach(async () => {
-    await act(async () => {
-      root.unmount()
-    })
+    await act(async () => root.unmount())
     document.body.removeChild(container)
     vi.useRealTimers()
-    vi.clearAllMocks()
   })
 
-  function mount(props: Partial<React.ComponentProps<typeof AssistantPanel>> = {}) {
+  function mount() {
+    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
     act(() => {
-      root.render(React.createElement(AssistantPanel, props))
+      root.render(
+        React.createElement(QueryClientProvider, { client: qc }, React.createElement(AssistantPanel)),
+      )
     })
   }
+  const q = (id: string) => container.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+  async function click(id: string) {
+    await act(async () => q(id)!.click())
+  }
 
-  it('renders the panel with initial greeting', () => {
+  it('"Analyse portfolio" sends mode portfolio with empty messages and shows the answer + caption', async () => {
+    chat.mockResolvedValue(OK)
     mount()
-    expect(container.querySelector('[data-testid="assistant-panel"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="assistant-messages"]')).toBeTruthy()
-    const msgs = container.querySelectorAll('[data-testid="assistant-message"]')
-    expect(msgs.length).toBe(1)
-    expect(msgs[0].textContent).toContain('non-functional prototype')
+    await click('assistant-quick-portfolio')
+    expect(chat).toHaveBeenCalledWith({ mode: 'portfolio', messages: [] })
+    expect(q('assistant-message')!.textContent).toContain('- point one')
+    expect(q('assistant-caption')!.textContent).toContain('deepseek-v4')
+    expect(q('assistant-caption')!.textContent).toContain('2026-11-17T10:00:00Z')
+    expect(q('assistant-caption')!.textContent).toContain('4.2 s')
+    expect(q('assistant-disclaimer')!.textContent).toContain('not financial advice')
   })
 
-  // AUD-436: the prototype may describe itself, never the operator's holdings.
-  it('never claims anything about the real portfolio', async () => {
+  it('"What matters in the news" sends mode news', async () => {
+    chat.mockResolvedValue({ ...OK, mode: 'news' })
     mount()
-
-    const input = container.querySelector('[data-testid="assistant-input"]') as HTMLInputElement
-    const form = container.querySelector('form[aria-label="Send message"]') as HTMLFormElement
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-
-    // Drain more replies than the stub list holds so the cycle is covered.
-    for (let i = 0; i < 8; i++) {
-      await act(async () => {
-        nativeSetter?.call(input, `question ${i}`)
-        input.dispatchEvent(new Event('input', { bubbles: true }))
-      })
-      await act(async () => {
-        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-      })
-      await act(async () => {
-        vi.advanceTimersByTime(700)
-      })
-    }
-
-    const replies = Array.from(container.querySelectorAll('[data-testid="assistant-message"]'))
-      .map((el) => el.textContent ?? '')
-      .join(' ')
-      .toLowerCase()
-    for (const claim of ['look healthy', 'looks healthy', 'your eth', 'i notice you have']) {
-      expect(replies).not.toContain(claim)
-    }
+    await click('assistant-quick-news')
+    expect(chat).toHaveBeenCalledWith({ mode: 'news', messages: [] })
   })
 
-  it('renders send input and button', () => {
+  it('free-form question sends mode chat with the history', async () => {
+    chat.mockResolvedValue(OK)
     mount()
-    expect(container.querySelector('[data-testid="assistant-input"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="assistant-send"]')).toBeTruthy()
-  })
-
-  it('send button is disabled when input is empty', () => {
-    mount()
-    const sendBtn = container.querySelector('[data-testid="assistant-send"]') as HTMLButtonElement
-    expect(sendBtn.disabled).toBe(true)
-  })
-
-  it('appends user message and stub reply after submit', async () => {
-    mount()
-
-    const input = container.querySelector('[data-testid="assistant-input"]') as HTMLInputElement
-    const form = container.querySelector('form[aria-label="Send message"]') as HTMLFormElement
-
-    // Use native setter so React's synthetic onChange fires in jsdom
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    const input = q('assistant-input') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
     await act(async () => {
-      nativeSetter?.call(input, 'What is my portfolio worth?')
+      setter?.call(input, 'Why is ETH down?')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
-
     await act(async () => {
-      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })
-
-    const userMsgs = container.querySelectorAll('[data-testid="user-message"]')
-    expect(userMsgs.length).toBe(1)
-    expect(userMsgs[0].textContent).toContain('What is my portfolio worth?')
-
-    // Typing indicator visible
-    expect(container.querySelector('[data-testid="typing-indicator"]')).toBeTruthy()
-
-    // Advance fake timers to resolve stub response
-    await act(async () => {
-      vi.advanceTimersByTime(700)
+    expect(chat).toHaveBeenCalledWith({
+      mode: 'chat',
+      messages: [{ role: 'user', content: 'Why is ETH down?' }],
     })
-
-    // Typing indicator gone, assistant reply appeared
-    expect(container.querySelector('[data-testid="typing-indicator"]')).toBeNull()
-    const assistantMsgs = container.querySelectorAll('[data-testid="assistant-message"]')
-    expect(assistantMsgs.length).toBe(2)
   })
 
-  it('calls onClose when Close button is clicked', async () => {
-    const onClose = vi.fn()
-    mount({ onClose })
-    const closeBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.getAttribute('aria-label') === 'Close assistant panel',
-    )
-    expect(closeBtn).toBeTruthy()
-    await act(async () => {
-      closeBtn!.click()
-    })
-    expect(onClose).toHaveBeenCalledOnce()
-  })
-
-  it('does not render Close button when onClose is not provided', () => {
+  it('shows a live "Analysing… N s" indicator and disables sending while in flight', async () => {
+    vi.useFakeTimers()
+    chat.mockReturnValue(new Promise(() => {}))
     mount()
-    const closeBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.getAttribute('aria-label') === 'Close assistant panel',
-    )
-    expect(closeBtn).toBeUndefined()
+    await click('assistant-quick-portfolio')
+    expect(q('assistant-pending')!.textContent).toContain('Analysing… 0 s')
+    await act(async () => {
+      vi.advanceTimersByTime(3000)
+    })
+    expect(q('assistant-pending')!.textContent).toContain('Analysing… 3 s')
+    expect((q('assistant-quick-portfolio') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('assistant-quick-news') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('assistant-input') as HTMLInputElement).disabled).toBe(true)
   })
 
-  it('shows prototype badge in heading', () => {
+  it('409 llm_not_configured shows the empty state with a Connections link', async () => {
+    chat.mockRejectedValue(apiError(409, 'llm_not_configured', 'no llm'))
     mount()
-    const heading = container.querySelector('h2')
-    expect(heading?.textContent).toContain('prototype')
+    await click('assistant-quick-portfolio')
+    expect(q('assistant-not-configured')!.textContent).toContain('LLM is not connected')
+    expect(q('assistant-not-configured')!.querySelector('a')!.getAttribute('href')).toBe('#/connections')
+    expect(q('assistant-error')).toBeNull()
+  })
+
+  it('502 shows the server message and Retry re-sends the same request', async () => {
+    chat.mockRejectedValueOnce(apiError(502, 'llm_unavailable', 'provider is down'))
+    chat.mockResolvedValueOnce(OK)
+    mount()
+    await click('assistant-quick-news')
+    expect(q('assistant-error')!.textContent).toContain('provider is down')
+    await click('assistant-retry')
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(chat).toHaveBeenLastCalledWith({ mode: 'news', messages: [] })
+    expect(q('assistant-error')).toBeNull()
+    expect(q('assistant-message')).toBeTruthy()
   })
 })

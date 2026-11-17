@@ -896,3 +896,13 @@ export function fetchAllowances(params: FetchAllowancesParams = {}): Promise<All
   q.set('offset', String(params.offset ?? 0))
   return get<AllowancesResponse>(`/allowances?${q.toString()}`)
 }
+
+// --- Assistant (AUD-956) ---
+
+export type AssistantMode = 'portfolio' | 'news' | 'chat'
+export type AssistantChatRequest = components['schemas']['AssistantChatRequest']
+export type AssistantChatResponse = components['schemas']['AssistantChatResponse']
+
+export function assistantChat(input: AssistantChatRequest): Promise<AssistantChatResponse> {
+  return post<AssistantChatResponse>('/assistant/chat', input)
+}

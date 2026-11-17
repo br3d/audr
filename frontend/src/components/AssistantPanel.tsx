@@ -1,95 +1,113 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { ApiError, assistantChat } from '../api/client'
+import type { AssistantChatResponse, AssistantMode } from '../api/client'
+
+// AUD-956: talks to POST /api/v1/assistant/chat (AUD-955). The conversation
+// lives only in component state; the server stores nothing. The answer is
+// rendered as plain text (white-space: pre-wrap) — never as HTML.
 
 export interface ChatMessage {
   role: 'user' | 'assistant'
-  text: string
+  content: string
+  /** Set on assistant turns: the response metadata shown as a caption. */
+  meta?: AssistantChatResponse
 }
 
-// TODO(AUD-302): replace stub responses with POST /api/v1/assistant/chat
-// When the backend LLM endpoint is ready, call it here instead of pickStubResponse()
-// and remove the STUB_RESPONSES array. The ChatMessage shape and component interface
-// are designed to require no UI changes when the real endpoint is wired in.
-//
-// AUD-436: these lines must never state anything about the operator's actual
-// holdings. The earlier set included "Your ETH holdings look healthy" and a
-// claim about stale price data — assertions made without reading a single
-// balance, which is exactly what made this prototype feel dishonest. Keep
-// every line self-describing: it may explain what the finished assistant
-// would do, never what the portfolio currently is.
-
-const STUB_RESPONSES = [
-  'This is sample text, not an answer — the prototype has no access to your wallets or balances.',
-  'When the assistant is implemented, a question like that will be answered from your own indexed data.',
-  'Still a prototype: there is no model behind this box, only a fixed list of phrases played in order.',
-  'Planned scope: portfolio summaries, per-token questions, and history explanations — none of it live yet.',
-]
-
-let _stubIndex = 0
-function pickStubResponse(): string {
-  const response = STUB_RESPONSES[_stubIndex % STUB_RESPONSES.length]
-  _stubIndex++
-  return response
+interface SendArgs {
+  mode: AssistantMode
+  messages: ChatMessage[]
 }
 
-interface AssistantPanelProps {
-  onClose?: () => void
+function useElapsedSeconds(running: boolean): number {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    if (!running) return
+    setSeconds(0)
+    const started = Date.now()
+    const id = window.setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+  return seconds
 }
 
-export default function AssistantPanel({ onClose }: AssistantPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: 'assistant',
-      text:
-        'This is a non-functional prototype of the portfolio assistant. Anything you send gets ' +
-        'a fixed sample reply — your holdings are never read or analysed.',
-    },
-  ])
+function formatDuration(ms: number): string {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
+}
+
+export default function AssistantPanel() {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
-  const [isTyping, setIsTyping] = useState(false)
+  const lastRequest = useRef<SendArgs | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const mutation = useMutation({
+    mutationFn: ({ mode, messages: history }: SendArgs) =>
+      assistantChat({ mode, messages: history.map(({ role, content }) => ({ role, content })) }),
+    onSuccess: (res, vars) => {
+      setMessages([...vars.messages, { role: 'assistant', content: res.reply, meta: res }])
+    },
+  })
+
+  const pending = mutation.isPending
+  const elapsed = useElapsedSeconds(pending)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, pending])
+
+  function send(args: SendArgs) {
+    if (pending) return
+    lastRequest.current = args
+    mutation.mutate(args)
+  }
+
+  function quickAction(mode: 'portfolio' | 'news') {
+    // A quick action starts a fresh analysis; earlier turns are dropped.
+    setMessages([])
+    send({ mode, messages: [] })
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || isTyping) return
-
-    const userMsg: ChatMessage = { role: 'user', text }
-    setMessages((prev) => [...prev, userMsg])
+    if (!text || pending) return
+    const next: ChatMessage[] = [...messages, { role: 'user', content: text }]
+    setMessages(next)
     setInput('')
-    setIsTyping(true)
-
-    // Simulate async response delay
-    setTimeout(() => {
-      const reply: ChatMessage = { role: 'assistant', text: pickStubResponse() }
-      setMessages((prev) => [...prev, reply])
-      setIsTyping(false)
-    }, 600)
+    send({ mode: 'chat', messages: next })
   }
 
+  const error = mutation.error
+  const notConfigured =
+    error instanceof ApiError && error.status === 409 && error.body?.error.code === 'llm_not_configured'
+
   return (
-    <section aria-label="AI Assistant" data-testid="assistant-panel" className="card assistant-panel">
+    <section aria-label="AI assistant" data-testid="assistant-panel" className="card assistant-panel">
       <header className="card-header">
-        <h2 className="card-title assistant-panel-title">
-          AI Assistant{' '}
-          <span aria-label="prototype badge" className="badge badge-warning">
-            prototype
-          </span>
-        </h2>
-        {onClose && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon"
-            onClick={onClose}
-            aria-label="Close assistant panel"
-          >
-            ×
-          </button>
-        )}
+        <h2 className="card-title assistant-panel-title">AI assistant</h2>
       </header>
+
+      <div className="assistant-quick">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={pending}
+          onClick={() => quickAction('portfolio')}
+          data-testid="assistant-quick-portfolio"
+        >
+          Analyse portfolio
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={pending}
+          onClick={() => quickAction('news')}
+          data-testid="assistant-quick-news"
+        >
+          What matters in the news
+        </button>
+      </div>
 
       <div
         role="log"
@@ -102,26 +120,54 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
           <div
             key={i}
             data-testid={msg.role === 'user' ? 'user-message' : 'assistant-message'}
-            aria-label={msg.role === 'user' ? 'You' : 'Assistant'}
             className={`assistant-message assistant-message-${msg.role}`}
           >
-            <strong>{msg.role === 'user' ? 'You' : 'Assistant'}:</strong> {msg.text}
+            <strong>{msg.role === 'user' ? 'You' : 'Assistant'}:</strong>
+            <div className="assistant-text" style={{ whiteSpace: 'pre-wrap' }}>
+              {msg.content}
+            </div>
+            {msg.meta && (
+              <small className="assistant-caption" data-testid="assistant-caption">
+                {msg.meta.model} · data as of {msg.meta.context_as_of} · took{' '}
+                {formatDuration(msg.meta.elapsed_ms)}
+              </small>
+            )}
           </div>
         ))}
-        {isTyping && (
-          // AUD-436: the delay demonstrates the pending state of the finished
-          // interface, so it stays — but it is labelled as simulated rather
-          // than dressed up as an assistant that is thinking.
+        {pending && (
           <div
-            aria-label="Simulated reply pending"
-            data-testid="typing-indicator"
+            role="status"
+            data-testid="assistant-pending"
             className="assistant-message assistant-message-assistant assistant-typing"
           >
-            Simulated reply…
+            Analysing… {elapsed} s
           </div>
         )}
         <div ref={bottomRef} />
       </div>
+
+      {notConfigured && (
+        <div className="empty-state" data-testid="assistant-not-configured">
+          <p>
+            <strong>LLM is not connected.</strong> Connect a model provider to use the assistant.
+          </p>
+          <a href="#/connections">Go to Settings → Connections</a>
+        </div>
+      )}
+
+      {error && !notConfigured && (
+        <div className="alert alert-error" role="alert" data-testid="assistant-error">
+          <span>{error.message}</span>{' '}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            data-testid="assistant-retry"
+            onClick={() => lastRequest.current && send(lastRequest.current)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} aria-label="Send message" className="assistant-form">
         <label htmlFor="assistant-input" className="visually-hidden">
@@ -132,21 +178,25 @@ export default function AssistantPanel({ onClose }: AssistantPanelProps) {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Type anything — the reply is sample text"
-          disabled={isTyping}
+          placeholder="Ask a question about your portfolio or the news"
+          disabled={pending}
           autoComplete="off"
           data-testid="assistant-input"
           className="input-folio"
         />
         <button
           type="submit"
-          disabled={isTyping || !input.trim()}
+          disabled={pending || !input.trim()}
           data-testid="assistant-send"
           className="btn btn-primary"
         >
           Send
         </button>
       </form>
+
+      <p className="assistant-disclaimer" data-testid="assistant-disclaimer">
+        Analysis is informational and not financial advice.
+      </p>
     </section>
   )
 }

@@ -9,6 +9,7 @@ import {
   IconNews,
   IconKey,
   IconPlug,
+  IconChat,
   IconSettings,
   IconSun,
   IconMoon,
@@ -45,11 +46,7 @@ export const MAIN_PAGES = [
   'status',
   'account',
   'api-tokens',
-  // AUD-436: the assistant is a canned-response prototype, not a working
-  // feature. It keeps a route so the intended interface can still be shown
-  // on purpose (`#/assistant-prototype`), but it is deliberately absent from
-  // the nav and from every in-app link — nobody reaches it by browsing.
-  'assistant-prototype',
+  'assistant',
 ] as const
 
 export type MainPage = (typeof MAIN_PAGES)[number]
@@ -72,6 +69,7 @@ const NAV_GROUPS: NavGroup[] = [
       // is reached from the Dashboard links, but it no longer takes a nav slot.
       { page: 'events', label: 'Events', Icon: IconZap },
       { page: 'news', label: 'News', Icon: IconNews },
+      { page: 'assistant', label: 'AI assistant', Icon: IconChat },
     ],
   },
   {
@@ -83,7 +81,6 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'connections', label: 'Connections', Icon: IconPlug },
       { page: 'account', label: 'Account & Data', Icon: IconSettings },
       { page: 'api-tokens', label: 'API Tokens', Icon: IconKey },
-      // AUD-436: no Assistant entry — see MAIN_PAGES.
     ],
   },
 ]
@@ -99,7 +96,7 @@ const PAGE_TITLES: Record<MainPage, string> = {
   status: 'Status',
   account: 'Account & Data',
   'api-tokens': 'API Tokens',
-  'assistant-prototype': 'Assistant (prototype)',
+  assistant: 'AI assistant',
 }
 
 // ---- User menu ----

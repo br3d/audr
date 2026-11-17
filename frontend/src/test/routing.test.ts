@@ -37,11 +37,10 @@ describe('pageFromHash / hashForPage with a query part', () => {
     expect(pageFromHash('#/holdings')).toBeNull()
   })
 
-  // AUD-436: the assistant demo no longer answers at its old, guessable slug;
-  // the prototype lives behind an explicitly named route instead.
-  it('resolves the assistant only at #/assistant-prototype, not #/assistant', () => {
-    expect(pageFromHash('#/assistant')).toBeNull()
-    expect(pageFromHash('#/assistant-prototype')).toBe('assistant-prototype')
+  // AUD-956: the real tab lives at #/assistant; the AUD-436 prototype slug redirects.
+  it('resolves #/assistant and redirects the old #/assistant-prototype slug', () => {
+    expect(pageFromHash('#/assistant')).toBe('assistant')
+    expect(pageFromHash('#/assistant-prototype')).toBe('assistant')
   })
 
   it('builds a hash with or without a query string', () => {

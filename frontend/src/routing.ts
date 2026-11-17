@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { MAIN_PAGES } from './components/Layout'
 import type { MainPage } from './components/Layout'
 
+const LEGACY_ASSISTANT_SLUG = 'assistant-prototype'
 const DEFAULT_PAGE: MainPage = 'dashboard'
 
 function isMainPage(value: string): value is MainPage {
@@ -36,7 +37,9 @@ function splitHash(hash: string): { slug: string; search: string } {
 
 /** Parse `#/wallets` (or `#/wallets?foo=bar`, or the legacy `#wallets`) into a known page. */
 export function pageFromHash(hash: string): MainPage | null {
-  const { slug } = splitHash(hash)
+  const { slug: raw } = splitHash(hash)
+  // AUD-956: the AUD-436 prototype slug now lands on the real assistant tab.
+  const slug = raw === LEGACY_ASSISTANT_SLUG ? 'assistant' : raw
   return isMainPage(slug) ? slug : null
 }
 
@@ -68,6 +71,8 @@ export function useHashPage(): [MainPage, (page: MainPage) => void] {
   useEffect(() => {
     if (pageFromHash(window.location.hash) === null) {
       window.history.replaceState(null, '', hashForPage(page))
+    } else if (splitHash(window.location.hash).slug === LEGACY_ASSISTANT_SLUG) {
+      window.history.replaceState(null, '', hashForPage('assistant'))
     }
   }, [page])
 

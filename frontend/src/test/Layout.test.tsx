@@ -62,24 +62,23 @@ describe('Layout', () => {
     expect(navLabels).not.toContain('Holdings')
   })
 
-  it('does not render an Assistant nav entry (AUD-436 pulled the prototype out of the menu)', () => {
+  it('renders an "AI assistant" nav entry (AUD-956) and titles the route', () => {
     mount(vi.fn(), vi.fn())
-    const navText = container.querySelector('.sidebar-nav')?.textContent ?? ''
-    expect(navText).not.toContain('Assistant')
-  })
-
-  it('titles the prototype route so it cannot be mistaken for a feature (AUD-436)', () => {
+    const navLabels = Array.from(container.querySelectorAll('.sidebar-nav .nav-item')).map(
+      (b) => b.textContent,
+    )
+    expect(navLabels).toContain('AI assistant')
     act(() => {
       root.render(
         React.createElement(Layout, {
-          page: 'assistant-prototype',
+          page: 'assistant',
           setPage: vi.fn(),
           onSignOut: vi.fn(),
           children: React.createElement('div', null, 'content'),
         }),
       )
     })
-    expect(container.querySelector('.topbar-title')?.textContent).toBe('Assistant (prototype)')
+    expect(container.querySelector('.topbar-title')?.textContent).toBe('AI assistant')
   })
 
   it('renders the space card, grouped nav section labels, and self-hosted status without a Sign out button in the sidebar', () => {
@@ -102,7 +101,7 @@ describe('Layout', () => {
     expect(groups).toHaveLength(2)
     const itemsOf = (group: Element) =>
       Array.from(group.querySelectorAll('.nav-item')).map((b) => b.textContent)
-    expect(itemsOf(groups[0])).toEqual(['Dashboard', 'Wallets', 'Events', 'News'])
+    expect(itemsOf(groups[0])).toEqual(['Dashboard', 'Wallets', 'Events', 'News', 'AI assistant'])
     expect(itemsOf(groups[1])).toEqual(['Schedules', 'Status', 'Connections', 'Account & Data', 'API Tokens'])
     expect(groups[1].classList.contains('nav-group-secondary')).toBe(true)
     expect(groups[0].classList.contains('nav-group-secondary')).toBe(false)

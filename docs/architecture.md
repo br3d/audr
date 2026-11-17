@@ -353,16 +353,17 @@ from `/app/static`. No server-side rendering and no router library.
   state. Hash routing was chosen so the server needs no per-route rewrite rules
   beyond the single SPA fallback on `/`.
 - `src/pages/` — Dashboard, Holdings, Wallets, Assets, Events, Connections,
-  History, Schedules, Status, AccountData, AssistantPrototype, Setup, SignIn.
+  History, Schedules, Status, AccountData, Assistant, Setup, SignIn.
 - `src/components/` — Layout (which owns the nav list), AllocationList,
   AssetEmblem, AssistantPanel, ErrorBoundary, HistoryChart, HistoryTable, Icons,
   MoneyValue, NewsFeed, ScanStatus.
 - The **assistant is backed by `POST /api/v1/assistant/chat`** (AUD-955; see
   `docs/api.md` §Assistant). The backend builds the same context snapshot as
   `GET /api/v1/llm/context` (plus more headlines/alerts in `news` mode) and sends
-  it with the client-held conversation to the stored LLM integration. The old
-  fixed-phrase `AssistantPanel` prototype is superseded by the real tab once the
-  frontend task lands; until then it stays behind `#/assistant-prototype`.
+  it with the client-held conversation to the stored LLM integration. The
+  **"AI assistant" tab** (`#/assistant`, AUD-956) calls it through `useMutation`;
+  the conversation lives in component state only. The AUD-436 fixed-phrase
+  prototype is gone and `#/assistant-prototype` redirects to `#/assistant`.
 - `src/api/client.ts` — `BASE = '/api/v1'`, a module-level CSRF token
   (`setCSRFToken`/`getCSRFToken`), and `ApiError`/`AuthError` classes over the
   typed error envelope.
