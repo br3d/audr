@@ -357,13 +357,12 @@ from `/app/static`. No server-side rendering and no router library.
 - `src/components/` — Layout (which owns the nav list), AllocationList,
   AssetEmblem, AssistantPanel, ErrorBoundary, HistoryChart, HistoryTable, Icons,
   MoneyValue, NewsFeed, ScanStatus.
-- The **assistant is an interface prototype, not a feature**. It has no model
-  and no backend; `AssistantPanel` replays a fixed list of phrases, none of
-  which may assert anything about the operator's actual holdings. It is
-  therefore kept out of the nav and out of every in-app link, and is reachable
-  only by typing `#/assistant-prototype`, where the page says so in a banner
-  before the panel. The route earns a nav slot again, and loses the banner,
-  once a real `POST /api/v1/assistant/chat` backs it.
+- The **assistant is backed by `POST /api/v1/assistant/chat`** (AUD-955; see
+  `docs/api.md` §Assistant). The backend builds the same context snapshot as
+  `GET /api/v1/llm/context` (plus more headlines/alerts in `news` mode) and sends
+  it with the client-held conversation to the stored LLM integration. The old
+  fixed-phrase `AssistantPanel` prototype is superseded by the real tab once the
+  frontend task lands; until then it stays behind `#/assistant-prototype`.
 - `src/api/client.ts` — `BASE = '/api/v1'`, a module-level CSRF token
   (`setCSRFToken`/`getCSRFToken`), and `ApiError`/`AuthError` classes over the
   typed error envelope.

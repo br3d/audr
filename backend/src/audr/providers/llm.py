@@ -96,6 +96,42 @@ class LlmResponseError(LlmUnavailable):
     """2xx response that was not the single JSON object the prompt demands."""
 
 
+class LlmReasoningOnly(LlmResponseError):
+    """A reasoning model spent the whole token budget thinking and answered nothing."""
+
+
+@dataclass(frozen=True)
+class ChatResult:
+    """A free-form completion (AUD-955). Missing usage is reported as 0, not failed."""
+
+    text: str
+    input_tokens: int
+    output_tokens: int
+    model: str
+
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>.*\Z", re.DOTALL | re.IGNORECASE)
+
+REASONING_ONLY_MESSAGE = (
+    "the model returned only reasoning — choose a non-reasoning model or raise the limit"
+)
+
+
+def strip_reasoning(content: str) -> str:
+    """Drop `<think>…</think>` blocks (and an unterminated trailing one)."""
+    return _THINK_OPEN_RE.sub("", _THINK_RE.sub("", content)).strip()
+
+
+def _usage_ints(usage: object, in_key: str, out_key: str) -> tuple[int, int]:
+    if not isinstance(usage, dict):
+        return 0, 0
+    try:
+        return int(usage.get(in_key) or 0), int(usage.get(out_key) or 0)
+    except (TypeError, ValueError):
+        return 0, 0
+
+
 @dataclass(frozen=True)
 class ClassificationResult:
     important: bool
@@ -204,6 +240,10 @@ class LlmClient(Protocol):
     ) -> ClassificationResult: ...
 
     async def check_connectivity(self) -> None: ...
+
+    async def chat(
+        self, *, system: str, messages: list[dict[str, str]], max_tokens: int
+    ) -> ChatResult: ...
 
     async def close(self) -> None: ...
 
@@ -379,6 +419,31 @@ class AnthropicClient(_HttpLlmClient):
             cost_usd=self._cost(in_tok, out_tok),
         )
 
+    async def chat(
+        self, *, system: str, messages: list[dict[str, str]], max_tokens: int
+    ) -> ChatResult:
+        """Free-form completion over the Messages API (AUD-955)."""
+        payload = await self._post(
+            {
+                "model": self._model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": messages,
+            }
+        )
+        try:
+            blocks = payload["content"]
+            text = "".join(
+                str(b.get("text", "")) for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+            )
+        except (KeyError, TypeError) as exc:
+            raise LlmResponseError(f"unexpected response shape: {exc}") from exc
+        text = strip_reasoning(text)
+        if not text:
+            raise LlmResponseError("the model returned an empty answer")
+        in_tok, out_tok = _usage_ints(payload.get("usage"), "input_tokens", "output_tokens")
+        return ChatResult(text=text, input_tokens=in_tok, output_tokens=out_tok, model=self._model)
+
     async def check_connectivity(self) -> None:
         """Probe the stored key with the smallest possible Messages call (AUD-743).
 
@@ -483,6 +548,39 @@ class OpenAICompatibleClient(_HttpLlmClient):
             cost_usd=self._cost(in_tok, out_tok),
         )
 
+    async def chat(
+        self, *, system: str, messages: list[dict[str, str]], max_tokens: int
+    ) -> ChatResult:
+        """Free-form `/chat/completions` call (AUD-955).
+
+        Reasoning models (MiniMax-M2.7, GLM on Gonka) put chain-of-thought in
+        `<think>` tags or in `message.reasoning[_content]`. The former is
+        stripped; an answer that is *only* reasoning is an explicit error, not
+        an empty reply.
+        """
+        payload = await self._post(
+            {
+                "model": self._model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system}, *messages],
+            }
+        )
+        try:
+            message = payload["choices"][0]["message"]
+            content = message.get("content")
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise LlmResponseError(f"unexpected response shape: {exc}") from exc
+        if content is not None and not isinstance(content, str):
+            raise LlmResponseError("message content was not text")
+        text = strip_reasoning(content or "")
+        if not text:
+            reasoning = message.get("reasoning") or message.get("reasoning_content")
+            if reasoning or (content and content.strip()):
+                raise LlmReasoningOnly(REASONING_ONLY_MESSAGE)
+            raise LlmResponseError("the model returned an empty answer")
+        in_tok, out_tok = _usage_ints(payload.get("usage"), "prompt_tokens", "completion_tokens")
+        return ChatResult(text=text, input_tokens=in_tok, output_tokens=out_tok, model=self._model)
+
     async def check_connectivity(self) -> None:
         """One-token chat completion: proves this endpoint serves this model."""
         payload = await self._post(
@@ -504,6 +602,8 @@ def build_client(
     model: str,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     prices: Prices | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    retries: int = DEFAULT_RETRIES,
 ) -> LlmClient:
     """Construct the adapter for a stored provider config."""
     if provider == "openai_compatible":
@@ -513,7 +613,14 @@ def build_client(
             api_key=api_key,
             max_output_tokens=max_output_tokens,
             prices=prices,
+            timeout=timeout,
+            retries=retries,
         )
     return AnthropicClient(
-        api_key=api_key or "", model=model, max_output_tokens=max_output_tokens, prices=prices
+        api_key=api_key or "",
+        model=model,
+        max_output_tokens=max_output_tokens,
+        prices=prices,
+        timeout=timeout,
+        retries=retries,
     )

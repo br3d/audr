@@ -266,6 +266,30 @@ on both response schemas carries an OpenAPI `description` explaining what
 `null` means there and what moment `as_of` refers to — visible in the
 curated `GET /openapi.json` above (§2).
 
+### Assistant
+
+`POST /api/v1/assistant/chat` — on-demand analysis of the portfolio and news by
+the configured LLM (AUD-955). Owner session + CSRF only; API tokens are refused
+and the route is not in the curated `/openapi.json`. Synchronous: expect 5–60 s
+(`assistant_timeout_s`, default 120 s, no retries); it never runs in the worker.
+
+Request: `{"mode": "portfolio"|"news"|"chat", "messages": [{"role": "user"|"assistant", "content": "..."}]}`.
+The client owns the history; the server uses the last 10 turns, each capped at
+4000 characters, and stores nothing. For `portfolio`/`news` an empty `messages`
+gets a default request; `chat` needs a final `user` message (else 422).
+
+Context: the `/llm/context` snapshot; `news` adds ~30 recent headlines with the
+news gate's `summary`/`importance` and 20 alerts; `chat` adds 10 headlines.
+
+Response 200: `{reply, mode, provider, model, context_as_of, usage: {input_tokens, output_tokens}, elapsed_ms}`
+(`<think>` blocks are stripped; unreported usage is 0).
+
+Errors (`detail` is `{code, message}`): 409 `llm_not_configured` (UI links to
+Connections); 504 `llm_timeout`; 502 `llm_reasoning_only` (the model spent its
+budget thinking — choose a non-reasoning model or raise
+`assistant_max_output_tokens`); 502 `llm_error`. The provider key is never
+returned or logged.
+
 ### MCP server
 
 Stage 3 of [docs/llm-access.md](llm-access.md): `audr-mcp`, a thin client

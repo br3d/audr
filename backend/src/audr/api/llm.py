@@ -713,6 +713,18 @@ async def get_llm_context(
     auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
 ) -> Response:
+    body = await build_llm_context(db, auth)
+    return _render(body, _context_to_markdown(body), request)
+
+
+async def build_llm_context(
+    db: AsyncSession,
+    auth: ReadPrincipal,
+    *,
+    headlines_limit: int = _HEADLINES_LIMIT,
+    alerts_limit: int = _ALERTS_LIMIT,
+) -> LlmContextResponse:
+    """The /context snapshot as a model; shared with the assistant (AUD-955)."""
     now = datetime.now(tz=UTC)
     portfolio = await get_portfolio(auth, db)
 
@@ -734,8 +746,8 @@ async def get_llm_context(
         db, now=now, current_total=current_total, target_hours=30 * 24, tolerance_hours=72
     )
 
-    headlines_total, headline_rows = await _get_global_headlines(db, _HEADLINES_LIMIT)
-    unread_count, alert_rows = await _get_global_alerts(db, _ALERTS_LIMIT)
+    headlines_total, headline_rows = await _get_global_headlines(db, headlines_limit)
+    unread_count, alert_rows = await _get_global_alerts(db, alerts_limit)
 
     quotes_as_of = (
         await db.execute(sa.text("SELECT MAX(fetched_at) FROM quote_set WHERE status = 'complete'"))
@@ -814,7 +826,6 @@ async def get_llm_context(
         ),
         request_id=str(uuid.uuid4()),
     )
-    return _render(body, _context_to_markdown(body), request)
 
 
 @router.get("/asset/{ref}", response_model=LlmAssetResponse)

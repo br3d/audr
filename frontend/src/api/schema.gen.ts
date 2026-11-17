@@ -181,6 +181,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assistant/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assistant Chat */
+        post: operations["assistant_chat_api_v1_assistant_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1410,6 +1427,56 @@ export interface components {
             /** Request Id */
             request_id: string;
         };
+        /** AssistantChatRequest */
+        AssistantChatRequest: {
+            /**
+             * Messages
+             * @description Conversation so far, oldest first; the client owns it. Only the last 10 turns are used. May be empty for `portfolio`/`news`; the last turn must be `user`.
+             */
+            messages?: components["schemas"]["ChatMessage"][];
+            /**
+             * Mode
+             * @description Which context to attach: portfolio snapshot, news-heavy, or general chat.
+             * @enum {string}
+             */
+            mode: "portfolio" | "news" | "chat";
+        };
+        /** AssistantChatResponse */
+        AssistantChatResponse: {
+            /**
+             * Context As Of
+             * @description RFC3339 time the attached context was built.
+             */
+            context_as_of: string;
+            /**
+             * Elapsed Ms
+             * @description Wall time of the whole request in milliseconds.
+             */
+            elapsed_ms: number;
+            /**
+             * Mode
+             * @description Echo of the request mode.
+             * @enum {string}
+             */
+            mode: "portfolio" | "news" | "chat";
+            /**
+             * Model
+             * @description Model that answered.
+             */
+            model: string;
+            /**
+             * Provider
+             * @description Configured provider: anthropic or openai_compatible.
+             */
+            provider: string;
+            /**
+             * Reply
+             * @description The model's answer, reasoning blocks removed.
+             */
+            reply: string;
+            /** @description Token usage for this call. */
+            usage: components["schemas"]["UsageOut"];
+        };
         /** CatalogOut */
         CatalogOut: {
             /** Bundled At */
@@ -1436,6 +1503,20 @@ export interface components {
             current_password: string;
             /** New Password */
             new_password: string;
+        };
+        /** ChatMessage */
+        ChatMessage: {
+            /**
+             * Content
+             * @description Turn text; truncated to 4000 characters server-side.
+             */
+            content: string;
+            /**
+             * Role
+             * @description Who wrote this turn.
+             * @enum {string}
+             */
+            role: "user" | "assistant";
         };
         /** DbStatus */
         DbStatus: {
@@ -2385,6 +2466,19 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** UsageOut */
+        UsageOut: {
+            /**
+             * Input Tokens
+             * @description Prompt tokens the provider reported; 0 if unreported.
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @description Completion tokens reported; 0 if unreported.
+             */
+            output_tokens: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -2752,6 +2846,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssetNewsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assistant_chat_api_v1_assistant_chat_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssistantChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantChatResponse"];
                 };
             };
             /** @description Validation Error */
