@@ -187,3 +187,254 @@ async def test_provider_failures_map_to_502_504(http_client, error, status, code
     assert r.status_code == status
     assert r.json()["error"]["code"] == code
     assert client.closed
+
+
+# --- AUD-958: server-side conversations -------------------------------------
+
+_BASE_URL = "/api/v1/assistant"
+
+
+async def _rows(db_session_factory, sql: str, **params):
+    async with db_session_factory() as s:
+        return [dict(r) for r in (await s.execute(text(sql), params)).mappings()]
+
+
+@pytest.fixture(autouse=True)
+async def _clean_assistant(db_session_factory):
+    async def _wipe():
+        async with db_session_factory() as s, s.begin():
+            await s.execute(text("DELETE FROM assistant_conversation"))
+
+    await _wipe()
+    yield
+    await _wipe()
+
+
+async def _chat(client, csrf, **body):
+    return await client.post(_URL, json=body, headers={"x-csrf-token": csrf})
+
+
+async def test_new_conversation_is_created_and_stored(
+    http_client, fake, db_session_factory
+) -> None:
+    csrf = await _setup_and_login(http_client)
+    r = await _chat(
+        http_client, csrf, mode="chat", messages=[{"role": "user", "content": "x" * 100}]
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["conversation_id"] and body["message_id"]
+    convs = await _rows(db_session_factory, "SELECT * FROM assistant_conversation")
+    assert len(convs) == 1 and convs[0]["mode"] == "chat" and convs[0]["title"] == "x" * 60
+    msgs = await _rows(db_session_factory, "SELECT * FROM assistant_message ORDER BY seq")
+    assert [(m["role"], m["status"]) for m in msgs] == [("user", "done"), ("assistant", "done")]
+    assert msgs[1]["content"] == "Summary.\n- point" and msgs[1]["model"] == "fake-model"
+    assert (msgs[1]["input_tokens"], msgs[1]["output_tokens"]) == (7, 3)
+    assert str(msgs[1]["id"]) == body["message_id"]
+
+
+async def test_quick_action_title(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    r = await _chat(http_client, csrf, mode="portfolio", messages=[])
+    cid = r.json()["conversation_id"]
+    detail = (await http_client.get(f"{_BASE_URL}/conversations/{cid}")).json()
+    assert detail["title"] == "Analyse my portfolio"
+    assert detail["messages"][0]["role"] == "user"
+
+
+async def test_continuation_sends_stored_history(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    first = await _chat(
+        http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q1"}]
+    )
+    cid = first.json()["conversation_id"]
+    r = await _chat(
+        http_client,
+        csrf,
+        mode="chat",
+        conversation_id=cid,
+        messages=[{"role": "user", "content": "q2"}],
+    )
+    assert r.status_code == 200 and r.json()["conversation_id"] == cid
+    assert fake.calls[-1]["messages"] == [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "Summary.\n- point"},
+        {"role": "user", "content": "q2"},
+    ]
+    detail = (await http_client.get(f"{_BASE_URL}/conversations/{cid}")).json()
+    assert len(detail["messages"]) == 4
+
+
+async def test_continuation_unknown_conversation_404(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    r = await _chat(
+        http_client,
+        csrf,
+        mode="chat",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        messages=[{"role": "user", "content": "q"}],
+    )
+    assert r.status_code == 404 and fake.calls == []
+
+
+async def test_user_turn_is_stored_before_llm_call(http_client, db_session_factory) -> None:
+    seen: dict = {}
+
+    class Spy(FakeClient):
+        async def chat(self, **kw):
+            seen["rows"] = await _rows(
+                db_session_factory, "SELECT role, status FROM assistant_message ORDER BY seq"
+            )
+            return await super().chat(**kw)
+
+    app.dependency_overrides[get_assistant_client] = lambda: Spy()
+    try:
+        csrf = await _setup_and_login(http_client)
+        r = await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q"}])
+        assert r.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_assistant_client, None)
+    assert seen["rows"] == [
+        {"role": "user", "status": "done"},
+        {"role": "assistant", "status": "pending"},
+    ]
+
+
+async def test_llm_failure_marks_row_error(http_client, db_session_factory) -> None:
+    client = FakeClient(error=LlmTimeout("slow"))
+    app.dependency_overrides[get_assistant_client] = lambda: client
+    try:
+        csrf = await _setup_and_login(http_client)
+        r = await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q"}])
+        assert r.status_code == 504
+    finally:
+        app.dependency_overrides.pop(get_assistant_client, None)
+    msgs = await _rows(db_session_factory, "SELECT * FROM assistant_message ORDER BY seq")
+    assert [m["status"] for m in msgs] == ["done", "error"]
+    assert msgs[1]["error_code"] == "llm_timeout"
+    # the failed turn is not replayed; the two user turns are merged so the
+    # provider never sees two user messages in a row
+    ok = FakeClient()
+    app.dependency_overrides[get_assistant_client] = lambda: ok
+    try:
+        cid = str(msgs[0]["conversation_id"])
+        r = await _chat(
+            http_client,
+            csrf,
+            mode="chat",
+            conversation_id=cid,
+            messages=[{"role": "user", "content": "again"}],
+        )
+        assert r.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_assistant_client, None)
+    assert ok.calls[0]["messages"] == [{"role": "user", "content": "q\n\nagain"}]
+
+
+async def test_stale_pending_is_swept_on_read(http_client, fake, db_session_factory) -> None:
+    csrf = await _setup_and_login(http_client)
+    cid = (
+        await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q"}])
+    ).json()["conversation_id"]
+    async with db_session_factory() as s, s.begin():
+        await s.execute(
+            text(
+                "INSERT INTO assistant_message (conversation_id, role, status, created_at) "
+                "VALUES (:c, 'assistant', 'pending', now() - interval '2 days')"
+            ),
+            {"c": cid},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO assistant_message (conversation_id, role, status) "
+                "VALUES (:c, 'assistant', 'pending')"
+            ),
+            {"c": cid},
+        )
+    detail = (await http_client.get(f"{_BASE_URL}/conversations/{cid}")).json()
+    statuses = [(m["status"], m["error_code"]) for m in detail["messages"]][2:]
+    assert statuses == [("error", "abandoned"), ("pending", None)]
+
+
+async def test_list_rename_delete(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    h = {"x-csrf-token": csrf}
+    ids = []
+    for q in ("first", "second", "third"):
+        r = await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": q}])
+        ids.append(r.json()["conversation_id"])
+    lst = (await http_client.get(f"{_BASE_URL}/conversations")).json()
+    assert [c["title"] for c in lst["items"]] == ["third", "second", "first"]
+    assert lst["items"][0]["message_count"] == 2 and lst["total"] == 3
+    page = (await http_client.get(f"{_BASE_URL}/conversations?limit=1&offset=1")).json()
+    assert [c["title"] for c in page["items"]] == ["second"] and page["total"] == 3
+
+    r = await http_client.patch(
+        f"{_BASE_URL}/conversations/{ids[0]}", json={"title": "Renamed"}, headers=h
+    )
+    assert r.status_code == 200 and r.json()["title"] == "Renamed"
+    for bad in ("", "x" * 121):
+        r = await http_client.patch(
+            f"{_BASE_URL}/conversations/{ids[0]}", json={"title": bad}, headers=h
+        )
+        assert r.status_code == 422
+    # renamed ordering: newest activity first, rename does not need to reorder tests
+    r = await http_client.delete(f"{_BASE_URL}/conversations/{ids[1]}", headers=h)
+    assert r.status_code == 204
+    assert (await http_client.get(f"{_BASE_URL}/conversations/{ids[1]}")).status_code == 404
+    assert (
+        await http_client.delete(f"{_BASE_URL}/conversations/{ids[1]}", headers=h)
+    ).status_code == 404
+    r = await http_client.delete(f"{_BASE_URL}/conversations", headers=h)
+    assert r.status_code == 204
+    assert (await http_client.get(f"{_BASE_URL}/conversations")).json()["total"] == 0
+
+
+async def test_mutations_need_csrf(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    cid = (
+        await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q"}])
+    ).json()["conversation_id"]
+    for r in (
+        await http_client.patch(f"{_BASE_URL}/conversations/{cid}", json={"title": "t"}),
+        await http_client.delete(f"{_BASE_URL}/conversations/{cid}"),
+        await http_client.delete(f"{_BASE_URL}/conversations"),
+    ):
+        assert r.status_code in (401, 403)
+    assert (await http_client.get(f"{_BASE_URL}/conversations")).json()["total"] == 1
+
+
+async def test_conversation_routes_reject_api_tokens_and_anonymous(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    cid = (
+        await _chat(http_client, csrf, mode="chat", messages=[{"role": "user", "content": "q"}])
+    ).json()["conversation_id"]
+    token = await _mint_token_via_api(http_client, csrf)
+    http_client.cookies.clear()
+    for path in ("/conversations", f"/conversations/{cid}"):
+        r = await http_client.get(_BASE_URL + path)
+        assert r.status_code == 401
+        r = await http_client.get(_BASE_URL + path, headers={"authorization": f"Bearer {token}"})
+        assert r.status_code in (401, 403)
+
+
+async def test_not_in_public_openapi(http_client) -> None:
+    paths = (await http_client.get("/openapi.json")).json()["paths"]
+    assert not [p for p in paths if "assistant" in p]
+
+
+async def test_stateless_shape_still_works(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    r = await _chat(
+        http_client,
+        csrf,
+        mode="chat",
+        messages=[
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "c"},
+        ],
+    )
+    assert r.status_code == 200
+    assert [m["content"] for m in fake.calls[0]["messages"]] == ["a", "b", "c"]
+    assert r.json()["reply"] == "Summary.\n- point"

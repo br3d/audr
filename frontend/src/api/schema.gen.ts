@@ -198,6 +198,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assistant/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_api_v1_assistant_conversations_get"];
+        put?: never;
+        post?: never;
+        /** Delete All Conversations */
+        delete: operations["delete_all_conversations_api_v1_assistant_conversations_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Conversation */
+        get: operations["get_conversation_api_v1_assistant_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Conversation */
+        delete: operations["delete_conversation_api_v1_assistant_conversations__conversation_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename Conversation */
+        patch: operations["rename_conversation_api_v1_assistant_conversations__conversation_id__patch"];
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1430,8 +1467,13 @@ export interface components {
         /** AssistantChatRequest */
         AssistantChatRequest: {
             /**
+             * Conversation Id
+             * @description Continue this stored conversation. Omit to start a new one.
+             */
+            conversation_id?: string | null;
+            /**
              * Messages
-             * @description Conversation so far, oldest first; the client owns it. Only the last 10 turns are used. May be empty for `portfolio`/`news`; the last turn must be `user`.
+             * @description Without `conversation_id`: the conversation so far, oldest first (stored as a new conversation). With `conversation_id`: only the LAST message is used — the new user turn; earlier turns come from the server. Only the last 10 turns reach the model. May be empty for `portfolio`/`news` without `conversation_id`; the last turn must be `user`.
              */
             messages?: components["schemas"]["ChatMessage"][];
             /**
@@ -1449,10 +1491,22 @@ export interface components {
              */
             context_as_of: string;
             /**
+             * Conversation Id
+             * Format: uuid
+             * @description The stored conversation this turn belongs to.
+             */
+            conversation_id: string;
+            /**
              * Elapsed Ms
              * @description Wall time of the whole request in milliseconds.
              */
             elapsed_ms: number;
+            /**
+             * Message Id
+             * Format: uuid
+             * @description The stored assistant message holding this reply.
+             */
+            message_id: string;
             /**
              * Mode
              * @description Echo of the request mode.
@@ -1517,6 +1571,79 @@ export interface components {
              * @enum {string}
              */
             role: "user" | "assistant";
+        };
+        /** ConversationDetail */
+        ConversationDetail: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Message Count
+             * @description Stored turns, including pending/error rows.
+             */
+            message_count: number;
+            /** Messages */
+            messages: components["schemas"]["StoredMessage"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "portfolio" | "news" | "chat";
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConversationList */
+        ConversationList: {
+            /** Items */
+            items: components["schemas"]["ConversationSummary"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** ConversationSummary */
+        ConversationSummary: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Message Count
+             * @description Stored turns, including pending/error rows.
+             */
+            message_count: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "portfolio" | "news" | "chat";
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** DbStatus */
         DbStatus: {
@@ -2178,6 +2305,14 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** RenameRequest */
+        RenameRequest: {
+            /**
+             * Title
+             * @description New title, 1-120 characters after trimming.
+             */
+            title: string;
+        };
         /** ScheduleConfig */
         ScheduleConfig: {
             /** Enabled */
@@ -2306,6 +2441,44 @@ export interface components {
             /** Version */
             version?: string | null;
             worker: components["schemas"]["WorkerStatus"];
+        };
+        /** StoredMessage */
+        StoredMessage: {
+            /** Content */
+            content: string;
+            /** Context As Of */
+            context_as_of?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Elapsed Ms */
+            elapsed_ms?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /**
+             * Status
+             * @description `pending` = the model is still answering; `error` carries `error_code`.
+             * @enum {string}
+             */
+            status: "pending" | "done" | "error";
         };
         /** TokenCreateInput */
         TokenCreateInput: {
@@ -2883,6 +3056,176 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssistantChatResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_api_v1_assistant_conversations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_all_conversations_api_v1_assistant_conversations_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_conversation_api_v1_assistant_conversations__conversation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_conversation_api_v1_assistant_conversations__conversation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_conversation_api_v1_assistant_conversations__conversation_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-csrf-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSummary"];
                 };
             };
             /** @description Validation Error */

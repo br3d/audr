@@ -1,4 +1,4 @@
-"""POST /api/v1/assistant/chat — on-demand analysis through the stored LLM (AUD-955).
+"""POST /api/v1/assistant/chat and /conversations* — the stored-LLM assistant (AUD-955, AUD-958).
 
 Owner-only (session + CSRF); API tokens cannot reach it and it is not in the
 curated /openapi.json. The request is synchronous and may take a minute with a
@@ -14,19 +14,22 @@ the conversation; the server trims it and stores nothing.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from audr.api.auth import _require_csrf
+from audr.api.auth import _require_csrf, _require_session
 from audr.api.llm import _context_to_markdown, build_llm_context
 from audr.auth.models import Session
 from audr.config import get_settings
@@ -88,9 +91,16 @@ class AssistantChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(
         default_factory=list,
         description=(
-            "Conversation so far, oldest first; the client owns it. Only the last 10 turns "
-            "are used. May be empty for `portfolio`/`news`; the last turn must be `user`."
+            "Without `conversation_id`: the conversation so far, oldest first (stored as a "
+            "new conversation). With `conversation_id`: only the LAST message is used — the "
+            "new user turn; earlier turns come from the server. Only the last 10 turns reach "
+            "the model. May be empty for `portfolio`/`news` without `conversation_id`; the "
+            "last turn must be `user`."
         ),
+    )
+    conversation_id: UUID | None = Field(
+        default=None,
+        description="Continue this stored conversation. Omit to start a new one.",
     )
 
 
@@ -107,6 +117,8 @@ class AssistantChatResponse(BaseModel):
     context_as_of: str = Field(description="RFC3339 time the attached context was built.")
     usage: UsageOut = Field(description="Token usage for this call.")
     elapsed_ms: int = Field(description="Wall time of the whole request in milliseconds.")
+    conversation_id: UUID = Field(description="The stored conversation this turn belongs to.")
+    message_id: UUID = Field(description="The stored assistant message holding this reply.")
 
 
 def _prepare_turns(mode: str, messages: list[ChatMessage]) -> list[dict[str, str]]:
@@ -215,6 +227,101 @@ async def get_assistant_client(db: Annotated[AsyncSession, Depends(get_db)]) -> 
     return _build_client_or_409(config)
 
 
+_TITLE_CHARS = 60
+_QUICK_TITLE = {"portfolio": "Analyse my portfolio", "news": "What matters in the news"}
+
+
+def _stale_after_s() -> float:
+    st = get_settings()
+    return st.assistant_timeout_s * (st.assistant_retries + 1) + 60
+
+
+def _merge_same_role(turns: list[ChatMessage]) -> list[ChatMessage]:
+    """Join adjacent same-role turns (a failed answer leaves two user turns in a row)."""
+    out: list[ChatMessage] = []
+    for t in turns:
+        if out and out[-1].role == t.role:
+            out[-1] = ChatMessage(role=t.role, content=out[-1].content + "\n\n" + t.content)
+        else:
+            out.append(t)
+    return out
+
+
+async def _sweep_stale(db: AsyncSession) -> None:
+    await db.execute(
+        sa.text(
+            """
+            UPDATE assistant_message
+               SET status = 'error', error_code = 'abandoned'
+             WHERE status = 'pending'
+               AND created_at < now() - make_interval(secs => :secs)
+            """
+        ),
+        {"secs": _stale_after_s()},
+    )
+    await db.commit()
+
+
+async def _finish(
+    db: AsyncSession,
+    conversation_id: UUID,
+    message_id: UUID,
+    *,
+    status: str,
+    content: str = "",
+    error_code: str | None = None,
+    model: str | None = None,
+    context_as_of: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    elapsed_ms: int | None = None,
+) -> None:
+    """Settle the pending assistant row in its own transaction."""
+    await db.rollback()
+    await db.execute(
+        sa.text(
+            """
+            UPDATE assistant_message
+               SET status = :status, content = :content, error_code = :error_code,
+                   model = :model, context_as_of = :context_as_of,
+                   input_tokens = :input_tokens, output_tokens = :output_tokens,
+                   elapsed_ms = :elapsed_ms
+             WHERE id = :id
+            """
+        ),
+        {
+            "id": message_id,
+            "status": status,
+            "content": content,
+            "error_code": error_code,
+            "model": model,
+            "context_as_of": context_as_of,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    await db.execute(
+        sa.text("UPDATE assistant_conversation SET updated_at = now() WHERE id = :c"),
+        {"c": conversation_id},
+    )
+    await db.commit()
+
+
+async def _history(db: AsyncSession, conversation_id: UUID) -> list[ChatMessage]:
+    rows = await db.execute(
+        sa.text(
+            """
+            SELECT role, content FROM assistant_message
+             WHERE conversation_id = :c AND (role = 'user' OR status = 'done')
+             ORDER BY seq
+            """
+        ),
+        {"c": conversation_id},
+    )
+    return [ChatMessage(role=r["role"], content=r["content"]) for r in rows.mappings()]
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 async def assistant_chat(
     body: AssistantChatRequest,
@@ -223,41 +330,130 @@ async def assistant_chat(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AssistantChatResponse:
     started = time.monotonic()
-    turns = _prepare_turns(body.mode, body.messages)
-
-    headlines = {"portfolio": 5, "news": 5, "chat": _CHAT_HEADLINES}[body.mode]
-    alerts = _NEWS_ALERTS if body.mode == "news" else 5
-    context = await build_llm_context(db, session, headlines_limit=headlines, alerts_limit=alerts)
-    context_md = _context_to_markdown(context)
-    if body.mode == "news":
-        context_md += "\n" + _headlines_markdown(await _recent_headlines(db, _NEWS_HEADLINES))
-
+    conversation_id = body.conversation_id
     try:
-        result: ChatResult = await client.chat(
-            system=_SYSTEM_PROMPT + context_md,
-            messages=turns,
-            max_tokens=get_settings().assistant_max_output_tokens,
+        if conversation_id is not None:
+            exists = await db.scalar(
+                sa.text("SELECT 1 FROM assistant_conversation WHERE id = :c"),
+                {"c": conversation_id},
+            )
+            if not exists:
+                raise _error(http_status.HTTP_404_NOT_FOUND, "not_found", "Conversation not found.")
+            if not body.messages:
+                raise HTTPException(
+                    status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="a continued conversation needs a new user message",
+                )
+            new_turns = body.messages[-1:]
+            all_turns = [*await _history(db, conversation_id), *new_turns]
+        else:
+            new_turns = list(body.messages)
+            all_turns = list(body.messages)
+        turns = _prepare_turns(body.mode, _merge_same_role(all_turns))
+        if conversation_id is None and not new_turns:
+            new_turns = [ChatMessage(role="user", content=turns[-1]["content"])]
+
+        # Durable BEFORE the LLM call: the user turn and a pending assistant row.
+        if conversation_id is None:
+            first_user = next((t.content for t in new_turns if t.role == "user"), "")
+            title = (
+                " ".join(first_user.split())[:_TITLE_CHARS]
+                if body.messages
+                else _QUICK_TITLE.get(body.mode, "")
+            ) or "New chat"
+            conversation_id = await db.scalar(
+                sa.text(
+                    "INSERT INTO assistant_conversation (title, mode) VALUES (:t, :m) RETURNING id"
+                ),
+                {"t": title, "m": body.mode},
+            )
+        for t in new_turns:
+            await db.execute(
+                sa.text(
+                    "INSERT INTO assistant_message (conversation_id, role, content, status) "
+                    "VALUES (:c, :r, :ct, 'done')"
+                ),
+                {"c": conversation_id, "r": t.role, "ct": t.content},
+            )
+        message_id = await db.scalar(
+            sa.text(
+                "INSERT INTO assistant_message (conversation_id, role, status) "
+                "VALUES (:c, 'assistant', 'pending') RETURNING id"
+            ),
+            {"c": conversation_id},
         )
-    except LlmTimeout as exc:
-        raise _error(
-            http_status.HTTP_504_GATEWAY_TIMEOUT,
-            "llm_timeout",
-            "The model did not answer in time. Try again, or pick a faster model.",
-        ) from exc
-    except LlmReasoningOnly as exc:
-        raise _error(http_status.HTTP_502_BAD_GATEWAY, "llm_reasoning_only", str(exc)) from exc
-    except LlmUnavailable as exc:
-        # str(exc) is built by the adapters from status codes/shape errors only;
-        # the key is never in it.
-        logger.warning("assistant chat failed: %s", type(exc).__name__)
-        raise _error(
-            http_status.HTTP_502_BAD_GATEWAY,
-            "llm_error",
-            f"The LLM provider failed: {exc}",
-        ) from exc
+        await db.execute(
+            sa.text("UPDATE assistant_conversation SET updated_at = now() WHERE id = :c"),
+            {"c": conversation_id},
+        )
+        await db.commit()
+    except BaseException:
+        await client.close()
+        raise
+
+    if conversation_id is None or message_id is None:  # unreachable: both set above
+        raise RuntimeError("conversation was not stored")
+    try:
+        headlines = {"portfolio": 5, "news": 5, "chat": _CHAT_HEADLINES}[body.mode]
+        alerts = _NEWS_ALERTS if body.mode == "news" else 5
+        context = await build_llm_context(
+            db, session, headlines_limit=headlines, alerts_limit=alerts
+        )
+        context_md = _context_to_markdown(context)
+        if body.mode == "news":
+            context_md += "\n" + _headlines_markdown(await _recent_headlines(db, _NEWS_HEADLINES))
+
+        try:
+            result: ChatResult = await client.chat(
+                system=_SYSTEM_PROMPT + context_md,
+                messages=turns,
+                max_tokens=get_settings().assistant_max_output_tokens,
+            )
+        except LlmTimeout as exc:
+            raise _error(
+                http_status.HTTP_504_GATEWAY_TIMEOUT,
+                "llm_timeout",
+                "The model did not answer in time. Try again, or pick a faster model.",
+            ) from exc
+        except LlmReasoningOnly as exc:
+            raise _error(http_status.HTTP_502_BAD_GATEWAY, "llm_reasoning_only", str(exc)) from exc
+        except LlmUnavailable as exc:
+            # str(exc) is built by the adapters from status codes/shape errors only;
+            # the key is never in it.
+            logger.warning("assistant chat failed: %s", type(exc).__name__)
+            raise _error(
+                http_status.HTTP_502_BAD_GATEWAY,
+                "llm_error",
+                f"The LLM provider failed: {exc}",
+            ) from exc
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(
+                _finish(db, conversation_id, message_id, status="error", error_code="cancelled")
+            )
+        raise
+    except BaseException as exc:
+        detail: Any = exc.detail if isinstance(exc, HTTPException) else None
+        code = detail["code"] if isinstance(detail, dict) else "internal_error"
+        with contextlib.suppress(Exception):
+            await _finish(db, conversation_id, message_id, status="error", error_code=code)
+        raise
     finally:
         await client.close()
 
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    await _finish(
+        db,
+        conversation_id,
+        message_id,
+        status="done",
+        content=result.text,
+        model=result.model,
+        context_as_of=context.as_of,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        elapsed_ms=elapsed_ms,
+    )
     provider = "anthropic" if type(client).__name__ == "AnthropicClient" else "openai_compatible"
     return AssistantChatResponse(
         reply=result.text,
@@ -266,5 +462,161 @@ async def assistant_chat(
         model=result.model,
         context_as_of=context.as_of,
         usage=UsageOut(input_tokens=result.input_tokens, output_tokens=result.output_tokens),
-        elapsed_ms=int((time.monotonic() - started) * 1000),
+        elapsed_ms=elapsed_ms,
+        conversation_id=conversation_id,
+        message_id=message_id,
     )
+
+
+# --- stored conversations (AUD-958) -----------------------------------------
+
+
+class ConversationSummary(BaseModel):
+    id: UUID
+    title: str
+    mode: Literal["portfolio", "news", "chat"]
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = Field(description="Stored turns, including pending/error rows.")
+
+
+class ConversationList(BaseModel):
+    items: list[ConversationSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class StoredMessage(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    status: Literal["pending", "done", "error"] = Field(
+        description="`pending` = the model is still answering; `error` carries `error_code`."
+    )
+    error_code: str | None = None
+    model: str | None = None
+    context_as_of: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    elapsed_ms: int | None = None
+    created_at: datetime
+
+
+class ConversationDetail(ConversationSummary):
+    messages: list[StoredMessage]
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(description="New title, 1-120 characters after trimming.")
+
+    @field_validator("title")
+    @classmethod
+    def _len(cls, v: str) -> str:
+        v = v.strip()
+        if not 1 <= len(v) <= 120:
+            raise ValueError("title must be 1-120 characters")
+        return v
+
+
+_SUMMARY_SQL = """
+    SELECT c.id, c.title, c.mode, c.created_at, c.updated_at,
+           (SELECT count(*) FROM assistant_message m WHERE m.conversation_id = c.id)
+             AS message_count
+      FROM assistant_conversation c
+"""
+
+
+async def _get_summary(db: AsyncSession, conversation_id: UUID) -> dict[str, Any]:
+    row = (
+        (await db.execute(sa.text(_SUMMARY_SQL + " WHERE c.id = :c"), {"c": conversation_id}))
+        .mappings()
+        .first()
+    )
+    if row is None:
+        raise _error(http_status.HTTP_404_NOT_FOUND, "not_found", "Conversation not found.")
+    return dict(row)
+
+
+@router.get("/conversations", response_model=ConversationList)
+async def list_conversations(
+    _session: Annotated[Session, Depends(_require_session)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ConversationList:
+    await _sweep_stale(db)
+    total = await db.scalar(sa.text("SELECT count(*) FROM assistant_conversation"))
+    rows = await db.execute(
+        sa.text(_SUMMARY_SQL + " ORDER BY c.updated_at DESC, c.id LIMIT :l OFFSET :o"),
+        {"l": limit, "o": offset},
+    )
+    return ConversationList(
+        items=[ConversationSummary(**dict(r)) for r in rows.mappings()],
+        total=total or 0,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_conversation(
+    conversation_id: UUID,
+    _session: Annotated[Session, Depends(_require_session)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConversationDetail:
+    await _sweep_stale(db)
+    summary = await _get_summary(db, conversation_id)
+    rows = await db.execute(
+        sa.text(
+            """
+            SELECT id, role, content, status, error_code, model, context_as_of,
+                   input_tokens, output_tokens, elapsed_ms, created_at
+              FROM assistant_message WHERE conversation_id = :c ORDER BY seq
+            """
+        ),
+        {"c": conversation_id},
+    )
+    return ConversationDetail(
+        **summary, messages=[StoredMessage(**dict(r)) for r in rows.mappings()]
+    )
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationSummary)
+async def rename_conversation(
+    conversation_id: UUID,
+    body: RenameRequest,
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConversationSummary:
+    res = await db.execute(
+        sa.text("UPDATE assistant_conversation SET title = :t WHERE id = :c"),
+        {"t": body.title, "c": conversation_id},
+    )
+    if res.rowcount == 0:  # type: ignore[attr-defined]
+        raise _error(http_status.HTTP_404_NOT_FOUND, "not_found", "Conversation not found.")
+    await db.commit()
+    return ConversationSummary(**await _get_summary(db, conversation_id))
+
+
+@router.delete("/conversations/{conversation_id}", status_code=http_status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: UUID,
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    res = await db.execute(
+        sa.text("DELETE FROM assistant_conversation WHERE id = :c"), {"c": conversation_id}
+    )
+    if res.rowcount == 0:  # type: ignore[attr-defined]
+        raise _error(http_status.HTTP_404_NOT_FOUND, "not_found", "Conversation not found.")
+    await db.commit()
+
+
+@router.delete("/conversations", status_code=http_status.HTTP_204_NO_CONTENT)
+async def delete_all_conversations(
+    _session: Annotated[Session, Depends(_require_csrf)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await db.execute(sa.text("DELETE FROM assistant_conversation"))
+    await db.commit()
