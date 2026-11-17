@@ -2139,8 +2139,119 @@ body {
 .assistant-panel {
   display: flex;
   flex-direction: column;
-  max-width: 640px;
+  max-width: 1000px;
   height: calc(100vh - 180px);
+}
+
+.assistant-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: var(--space-3, 12px);
+}
+
+.assistant-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.assistant-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+}
+
+.assistant-list-toggle {
+  display: none;
+  margin-left: auto;
+}
+
+.assistant-conversations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistant-conversation {
+  border-radius: var(--r-md);
+  padding: 6px 8px;
+}
+
+.assistant-conversation.is-selected {
+  background: var(--accent-bg);
+}
+
+.assistant-conversation-open {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.assistant-conversation-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.assistant-conversation-meta {
+  font-size: 0.8em;
+  color: var(--text-muted);
+}
+
+.assistant-conversation-actions,
+.assistant-rename,
+.assistant-message-foot {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.assistant-empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.assistant-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 760px) {
+  .assistant-layout {
+    grid-template-columns: 1fr;
+  }
+  .assistant-list-toggle {
+    display: inline-flex;
+  }
+  .assistant-sidebar {
+    display: none;
+    border-right: 0;
+    padding-right: 0;
+    max-height: 40vh;
+  }
+  .assistant-sidebar.is-open {
+    display: flex;
+  }
+  .assistant-message {
+    max-width: 100%;
+  }
 }
 
 .assistant-panel-title {

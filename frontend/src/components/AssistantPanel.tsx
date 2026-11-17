@@ -1,22 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { ApiError, assistantChat } from '../api/client'
-import type { AssistantChatResponse, AssistantMode } from '../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  ApiError,
+  assistantChat,
+  deleteAllAssistantConversations,
+  deleteAssistantConversation,
+  getAssistantConversation,
+  listAssistantConversations,
+  renameAssistantConversation,
+} from '../api/client'
+import type { AssistantMode, AssistantStoredMessage } from '../api/client'
+import { assistantIdFromHash, setAssistantHash } from '../routing'
 
-// AUD-956: talks to POST /api/v1/assistant/chat (AUD-955). The conversation
-// lives only in component state; the server stores nothing. The answer is
-// rendered as plain text (white-space: pre-wrap) — never as HTML.
+// AUD-956/959: the assistant tab. Conversations are stored server-side
+// (AUD-958): the list and the open transcript come from React Query, and the
+// open conversation id lives in the URL hash (#/assistant/<id>) so a reload
+// keeps it. Answers are rendered as plain text (white-space: pre-wrap) —
+// never as HTML.
 
-export interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  /** Set on assistant turns: the response metadata shown as a caption. */
-  meta?: AssistantChatResponse
-}
+const POLL_MS = 3000
+const LIST_KEY = ['assistant', 'conversations'] as const
+const detailKey = (id: string) => ['assistant', 'conversation', id] as const
 
 interface SendArgs {
   mode: AssistantMode
-  messages: ChatMessage[]
+  /** Set when continuing a stored conversation. */
+  conversationId: string | null
+  /** The new user turn; empty for a quick action. */
+  text: string
 }
 
 function useElapsedSeconds(running: boolean): number {
@@ -31,172 +42,492 @@ function useElapsedSeconds(running: boolean): number {
   return seconds
 }
 
+function useSelectedId(): string | null {
+  const [id, setId] = useState(() => assistantIdFromHash(window.location.hash))
+  useEffect(() => {
+    const onChange = () => setId(assistantIdFromHash(window.location.hash))
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  return id
+}
+
 function formatDuration(ms: number): string {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
 }
 
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toISOString().slice(0, 10)
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="btn btn-secondary assistant-copy"
+      data-testid="assistant-copy"
+      onClick={copy}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
+function StoredTurn({
+  msg,
+  onRetry,
+  busy,
+}: {
+  msg: AssistantStoredMessage
+  onRetry: () => void
+  busy: boolean
+}) {
+  if (msg.role === 'user') {
+    return (
+      <div data-testid="user-message" className="assistant-message assistant-message-user">
+        <strong>You:</strong>
+        <div className="assistant-text" style={{ whiteSpace: 'pre-wrap' }}>
+          {msg.content}
+        </div>
+      </div>
+    )
+  }
+  // Pending turns are shown by the single "Analysing…" indicator.
+  if (msg.status === 'pending') return null
+  if (msg.status === 'error') {
+    return (
+      <div className="alert alert-error" role="alert" data-testid="assistant-error">
+        <span>{msg.content || `The assistant could not answer (${msg.error_code ?? 'error'}).`}</span>{' '}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          data-testid="assistant-retry"
+          disabled={busy}
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div data-testid="assistant-message" className="assistant-message assistant-message-assistant">
+      <strong>Assistant:</strong>
+      <div className="assistant-text" style={{ whiteSpace: 'pre-wrap' }}>
+        {msg.content}
+      </div>
+      <div className="assistant-message-foot">
+        {msg.model && (
+          <small className="assistant-caption" data-testid="assistant-caption">
+            {msg.model} · data as of {msg.context_as_of ?? 'unknown'} · took{' '}
+            {msg.elapsed_ms == null ? 'unknown' : formatDuration(msg.elapsed_ms)}
+          </small>
+        )}
+        <CopyButton text={msg.content} />
+      </div>
+    </div>
+  )
+}
+
 export default function AssistantPanel() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const qc = useQueryClient()
+  const selectedId = useSelectedId()
   const [input, setInput] = useState('')
+  const [optimistic, setOptimistic] = useState<string | null>(null)
+  const [listOpen, setListOpen] = useState(false)
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
+  const [confirmAll, setConfirmAll] = useState(false)
   const lastRequest = useRef<SendArgs | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  const list = useQuery({ queryKey: LIST_KEY, queryFn: listAssistantConversations })
+  const detail = useQuery({
+    queryKey: detailKey(selectedId ?? ''),
+    queryFn: () => getAssistantConversation(selectedId!),
+    enabled: selectedId !== null,
+    // A reload mid-answer finds a pending row: keep re-fetching until it settles.
+    refetchInterval: (query) =>
+      query.state.data?.messages.some((m) => m.status === 'pending') ? POLL_MS : false,
+  })
+
   const mutation = useMutation({
-    mutationFn: ({ mode, messages: history }: SendArgs) =>
-      assistantChat({ mode, messages: history.map(({ role, content }) => ({ role, content })) }),
-    onSuccess: (res, vars) => {
-      setMessages([...vars.messages, { role: 'assistant', content: res.reply, meta: res }])
+    mutationFn: ({ mode, conversationId, text }: SendArgs) =>
+      assistantChat({
+        mode,
+        messages: text ? [{ role: 'user', content: text }] : [],
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      }),
+    onSuccess: async (res) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: LIST_KEY }),
+        qc.invalidateQueries({ queryKey: detailKey(res.conversation_id) }),
+      ])
+      setAssistantHash(res.conversation_id)
+    },
+    onSettled: () => setOptimistic(null),
+  })
+
+  const rename = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) => renameAssistantConversation(id, title),
+    onSuccess: async () => {
+      setRenaming(null)
+      await qc.invalidateQueries({ queryKey: LIST_KEY })
+      if (selectedId) await qc.invalidateQueries({ queryKey: detailKey(selectedId) })
     },
   })
 
-  const pending = mutation.isPending
-  const elapsed = useElapsedSeconds(pending)
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteAssistantConversation(id),
+    onSuccess: async (_v, id) => {
+      if (id === selectedId) setAssistantHash(null)
+      qc.removeQueries({ queryKey: detailKey(id) })
+      await qc.invalidateQueries({ queryKey: LIST_KEY })
+    },
+  })
+
+  const removeAll = useMutation({
+    mutationFn: deleteAllAssistantConversations,
+    onSuccess: async () => {
+      setConfirmAll(false)
+      setAssistantHash(null)
+      qc.removeQueries({ queryKey: ['assistant', 'conversation'] })
+      await qc.invalidateQueries({ queryKey: LIST_KEY })
+    },
+  })
+
+  const messages = selectedId ? (detail.data?.messages ?? []) : []
+  const storedPending = messages.some((m) => m.status === 'pending')
+  const sending = mutation.isPending
+  const busy = sending || storedPending
+  const elapsed = useElapsedSeconds(sending)
+  const mode: AssistantMode = detail.data?.mode ?? 'chat'
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' })
-  }, [messages, pending])
+  }, [messages.length, busy, optimistic])
 
   function send(args: SendArgs) {
-    if (pending) return
+    if (busy) return
     lastRequest.current = args
     mutation.mutate(args)
   }
 
-  function quickAction(mode: 'portfolio' | 'news') {
-    // A quick action starts a fresh analysis; earlier turns are dropped.
-    setMessages([])
-    send({ mode, messages: [] })
+  function newChat() {
+    setAssistantHash(null)
+    setInput('')
+    mutation.reset()
+    setListOpen(false)
+  }
+
+  function quickAction(m: 'portfolio' | 'news') {
+    // A quick action starts a new conversation, as before.
+    setAssistantHash(null)
+    mutation.reset()
+    send({ mode: m, conversationId: null, text: '' })
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || pending) return
-    const next: ChatMessage[] = [...messages, { role: 'user', content: text }]
-    setMessages(next)
+    if (!text || busy) return
+    setOptimistic(text)
     setInput('')
-    send({ mode: 'chat', messages: next })
+    send({ mode: selectedId ? mode : 'chat', conversationId: selectedId, text })
+  }
+
+  function retryStored() {
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    if (!selectedId || !lastUser) return
+    send({ mode, conversationId: selectedId, text: lastUser.content })
+  }
+
+  function open(id: string) {
+    mutation.reset()
+    setAssistantHash(id)
+    setListOpen(false)
   }
 
   const error = mutation.error
   const notConfigured =
     error instanceof ApiError && error.status === 409 && error.body?.error.code === 'llm_not_configured'
+  const items = list.data?.items ?? []
 
   return (
     <section aria-label="AI assistant" data-testid="assistant-panel" className="card assistant-panel">
       <header className="card-header">
         <h2 className="card-title assistant-panel-title">AI assistant</h2>
+        <button
+          type="button"
+          className="btn btn-secondary assistant-list-toggle"
+          aria-expanded={listOpen}
+          data-testid="assistant-list-toggle"
+          onClick={() => setListOpen((v) => !v)}
+        >
+          Conversations
+        </button>
       </header>
 
-      <div className="assistant-quick">
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={pending}
-          onClick={() => quickAction('portfolio')}
-          data-testid="assistant-quick-portfolio"
+      <div className="assistant-layout">
+        <aside
+          aria-label="Conversations"
+          data-testid="assistant-sidebar"
+          className={`assistant-sidebar${listOpen ? ' is-open' : ''}`}
         >
-          Analyse portfolio
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={pending}
-          onClick={() => quickAction('news')}
-          data-testid="assistant-quick-news"
-        >
-          What matters in the news
-        </button>
-      </div>
-
-      <div
-        role="log"
-        aria-live="polite"
-        aria-label="Conversation"
-        data-testid="assistant-messages"
-        className="assistant-messages"
-      >
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            data-testid={msg.role === 'user' ? 'user-message' : 'assistant-message'}
-            className={`assistant-message assistant-message-${msg.role}`}
-          >
-            <strong>{msg.role === 'user' ? 'You' : 'Assistant'}:</strong>
-            <div className="assistant-text" style={{ whiteSpace: 'pre-wrap' }}>
-              {msg.content}
-            </div>
-            {msg.meta && (
-              <small className="assistant-caption" data-testid="assistant-caption">
-                {msg.meta.model} · data as of {msg.meta.context_as_of} · took{' '}
-                {formatDuration(msg.meta.elapsed_ms)}
-              </small>
-            )}
-          </div>
-        ))}
-        {pending && (
-          <div
-            role="status"
-            data-testid="assistant-pending"
-            className="assistant-message assistant-message-assistant assistant-typing"
-          >
-            Analysing… {elapsed} s
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {notConfigured && (
-        <div className="empty-state" data-testid="assistant-not-configured">
-          <p>
-            <strong>LLM is not connected.</strong> Connect a model provider to use the assistant.
-          </p>
-          <a href="#/connections">Go to Settings → Connections</a>
-        </div>
-      )}
-
-      {error && !notConfigured && (
-        <div className="alert alert-error" role="alert" data-testid="assistant-error">
-          <span>{error.message}</span>{' '}
           <button
             type="button"
-            className="btn btn-secondary"
-            data-testid="assistant-retry"
-            onClick={() => lastRequest.current && send(lastRequest.current)}
+            className="btn btn-primary"
+            data-testid="assistant-new-chat"
+            onClick={newChat}
           >
-            Retry
+            New chat
           </button>
+          {list.isError && (
+            <div className="alert alert-error" role="alert" data-testid="assistant-list-error">
+              {list.error.message}
+            </div>
+          )}
+          {list.isSuccess && items.length === 0 && (
+            <p className="assistant-empty" data-testid="assistant-list-empty">
+              No saved conversations yet.
+            </p>
+          )}
+          <ul className="assistant-conversations" data-testid="assistant-list">
+            {items.map((c) => (
+              <li
+                key={c.id}
+                data-testid="assistant-conversation"
+                className={`assistant-conversation${c.id === selectedId ? ' is-selected' : ''}`}
+              >
+                {renaming?.id === c.id ? (
+                  <form
+                    className="assistant-rename"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      const title = renaming.title.trim()
+                      if (title) rename.mutate({ id: c.id, title })
+                    }}
+                  >
+                    <input
+                      className="input-folio"
+                      aria-label="Conversation title"
+                      data-testid="assistant-rename-input"
+                      maxLength={120}
+                      value={renaming.title}
+                      onChange={(e) => setRenaming({ id: c.id, title: e.target.value })}
+                    />
+                    <button type="submit" className="btn btn-primary" data-testid="assistant-rename-save">
+                      Save
+                    </button>
+                    <button type="button" className="btn btn-secondary" onClick={() => setRenaming(null)}>
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="assistant-conversation-open"
+                      data-testid="assistant-conversation-open"
+                      aria-current={c.id === selectedId ? 'true' : undefined}
+                      onClick={() => open(c.id)}
+                    >
+                      <span className="assistant-conversation-title">{c.title}</span>
+                      <span className="assistant-conversation-meta">
+                        <span className="pill" data-testid="assistant-mode-badge">
+                          {c.mode}
+                        </span>{' '}
+                        {formatDate(c.created_at)}
+                      </span>
+                    </button>
+                    <span className="assistant-conversation-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        aria-label={`Rename ${c.title}`}
+                        data-testid="assistant-rename"
+                        onClick={() => setRenaming({ id: c.id, title: c.title })}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        aria-label={`Delete ${c.title}`}
+                        data-testid="assistant-delete"
+                        disabled={remove.isPending}
+                        onClick={() => remove.mutate(c.id)}
+                      >
+                        Delete
+                      </button>
+                    </span>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          {rename.isError && (
+            <div className="alert alert-error" role="alert">
+              {rename.error.message}
+            </div>
+          )}
+          {items.length > 0 &&
+            (confirmAll ? (
+              <div
+                role="alertdialog"
+                aria-label="Delete all history"
+                data-testid="assistant-confirm-all"
+                className="assistant-confirm"
+              >
+                <p>Delete all saved conversations? This cannot be undone.</p>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  data-testid="assistant-confirm-all-yes"
+                  disabled={removeAll.isPending}
+                  onClick={() => removeAll.mutate()}
+                >
+                  Delete everything
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setConfirmAll(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="assistant-delete-all"
+                onClick={() => setConfirmAll(true)}
+              >
+                Delete all history
+              </button>
+            ))}
+        </aside>
+
+        <div className="assistant-main">
+          <div className="assistant-quick">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => quickAction('portfolio')}
+              data-testid="assistant-quick-portfolio"
+            >
+              Analyse portfolio
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => quickAction('news')}
+              data-testid="assistant-quick-news"
+            >
+              What matters in the news
+            </button>
+          </div>
+
+          <div
+            role="log"
+            aria-live="polite"
+            aria-label="Conversation"
+            data-testid="assistant-messages"
+            className="assistant-messages"
+          >
+            {selectedId && detail.isPending && <p className="assistant-empty">Loading…</p>}
+            {selectedId && detail.isError && (
+              <div className="alert alert-error" role="alert" data-testid="assistant-detail-error">
+                {detail.error instanceof ApiError && detail.error.status === 404
+                  ? 'This conversation no longer exists.'
+                  : detail.error.message}
+              </div>
+            )}
+            {messages.map((msg) => (
+              <StoredTurn key={msg.id} msg={msg} busy={busy} onRetry={retryStored} />
+            ))}
+            {optimistic !== null && (
+              <div data-testid="user-message" className="assistant-message assistant-message-user">
+                <strong>You:</strong>
+                <div className="assistant-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {optimistic}
+                </div>
+              </div>
+            )}
+            {busy && (
+              <div
+                role="status"
+                data-testid="assistant-pending"
+                className="assistant-message assistant-message-assistant assistant-typing"
+              >
+                {sending ? `Analysing… ${elapsed} s` : 'Analysing…'}
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {notConfigured && (
+            <div className="empty-state" data-testid="assistant-not-configured">
+              <p>
+                <strong>LLM is not connected.</strong> Connect a model provider to use the assistant.
+              </p>
+              <a href="#/connections">Go to Settings → Connections</a>
+            </div>
+          )}
+
+          {error && !notConfigured && (
+            <div className="alert alert-error" role="alert" data-testid="assistant-send-error">
+              <span>{error.message}</span>{' '}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="assistant-send-retry"
+                onClick={() => lastRequest.current && send(lastRequest.current)}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} aria-label="Send message" className="assistant-form">
+            <label htmlFor="assistant-input" className="visually-hidden">
+              Message
+            </label>
+            <input
+              id="assistant-input"
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask a question about your portfolio or the news"
+              disabled={busy}
+              autoComplete="off"
+              data-testid="assistant-input"
+              className="input-folio"
+            />
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              data-testid="assistant-send"
+              className="btn btn-primary"
+            >
+              Send
+            </button>
+          </form>
+
+          <p className="assistant-disclaimer" data-testid="assistant-disclaimer">
+            Analysis is informational and not financial advice.
+          </p>
         </div>
-      )}
-
-      <form onSubmit={handleSubmit} aria-label="Send message" className="assistant-form">
-        <label htmlFor="assistant-input" className="visually-hidden">
-          Message
-        </label>
-        <input
-          id="assistant-input"
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about your portfolio or the news"
-          disabled={pending}
-          autoComplete="off"
-          data-testid="assistant-input"
-          className="input-folio"
-        />
-        <button
-          type="submit"
-          disabled={pending || !input.trim()}
-          data-testid="assistant-send"
-          className="btn btn-primary"
-        >
-          Send
-        </button>
-      </form>
-
-      <p className="assistant-disclaimer" data-testid="assistant-disclaimer">
-        Analysis is informational and not financial advice.
-      </p>
+      </div>
     </section>
   )
 }

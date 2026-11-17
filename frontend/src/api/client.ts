@@ -903,6 +903,34 @@ export type AssistantMode = 'portfolio' | 'news' | 'chat'
 export type AssistantChatRequest = components['schemas']['AssistantChatRequest']
 export type AssistantChatResponse = components['schemas']['AssistantChatResponse']
 
+export type AssistantConversationSummary = components['schemas']['ConversationSummary']
+export type AssistantConversationList = components['schemas']['ConversationList']
+export type AssistantConversationDetail = components['schemas']['ConversationDetail']
+export type AssistantStoredMessage = components['schemas']['StoredMessage']
+
+export function listAssistantConversations(): Promise<AssistantConversationList> {
+  return get<AssistantConversationList>('/assistant/conversations?limit=100')
+}
+
+export function getAssistantConversation(id: string): Promise<AssistantConversationDetail> {
+  return get<AssistantConversationDetail>(`/assistant/conversations/${encodeURIComponent(id)}`)
+}
+
+export function renameAssistantConversation(
+  id: string,
+  title: string,
+): Promise<AssistantConversationSummary> {
+  return patch<AssistantConversationSummary>(`/assistant/conversations/${encodeURIComponent(id)}`, { title })
+}
+
+export function deleteAssistantConversation(id: string): Promise<void> {
+  return del<void>(`/assistant/conversations/${encodeURIComponent(id)}`)
+}
+
+export function deleteAllAssistantConversations(): Promise<void> {
+  return del<void>('/assistant/conversations')
+}
+
 export function assistantChat(input: AssistantChatRequest): Promise<AssistantChatResponse> {
   return post<AssistantChatResponse>('/assistant/chat', input)
 }

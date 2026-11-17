@@ -37,10 +37,26 @@ function splitHash(hash: string): { slug: string; search: string } {
 
 /** Parse `#/wallets` (or `#/wallets?foo=bar`, or the legacy `#wallets`) into a known page. */
 export function pageFromHash(hash: string): MainPage | null {
-  const { slug: raw } = splitHash(hash)
+  // `#/assistant/<id>` names an entity under the tab: the page is the first segment.
+  const raw = splitHash(hash).slug.split('/')[0]
   // AUD-956: the AUD-436 prototype slug now lands on the real assistant tab.
   const slug = raw === LEGACY_ASSISTANT_SLUG ? 'assistant' : raw
   return isMainPage(slug) ? slug : null
+}
+
+/** AUD-959: `#/assistant/<id>` → the selected conversation id, or null. */
+export function assistantIdFromHash(hash: string): string | null {
+  const [page, id] = splitHash(hash).slug.split('/')
+  return page === 'assistant' && id ? decodeURIComponent(id) : null
+}
+
+/** Select (or, with null, clear) the open conversation in the URL; replaceState, no history spam. */
+export function setAssistantHash(id: string | null): void {
+  const next = id ? `#/assistant/${encodeURIComponent(id)}` : '#/assistant'
+  if (window.location.hash !== next) {
+    window.history.replaceState(null, '', next)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
 }
 
 export function hashForPage(page: MainPage, search?: string): string {
