@@ -96,8 +96,8 @@ class Settings(BaseSettings):
     llm_news_max_articles_per_run: int = 200
     # AUD-955: the on-demand assistant. A free-form answer from a slow reasoning
     # model needs far more room than the news gate's 20s / 300-token verdicts.
-    assistant_max_output_tokens: int = 1500
-    assistant_timeout_s: float = 120.0
+    assistant_max_output_tokens: int = 4000
+    assistant_timeout_s: float = 300.0
     assistant_retries: int = 0
 
     @field_validator("database_url")

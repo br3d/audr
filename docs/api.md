@@ -270,8 +270,8 @@ curated `GET /openapi.json` above (§2).
 
 `POST /api/v1/assistant/chat` — on-demand analysis of the portfolio and news by
 the configured LLM (AUD-955). Owner session + CSRF only; API tokens are refused
-and the route is not in the curated `/openapi.json`. Synchronous: expect 5–60 s
-(`assistant_timeout_s`, default 120 s, no retries); it never runs in the worker.
+and the route is not in the curated `/openapi.json`. Synchronous: expect 5 s to several minutes (reasoning models on Gonka measured ~3 min)
+(`assistant_timeout_s`, default 300 s, no retries); it never runs in the worker.
 
 Request: `{"mode": "portfolio"|"news"|"chat", "messages": [{"role": "user"|"assistant", "content": "..."}]}`.
 The client owns the history; the server uses the last 10 turns, each capped at
@@ -287,7 +287,7 @@ Response 200: `{reply, mode, provider, model, context_as_of, usage: {input_token
 Errors (`detail` is `{code, message}`): 409 `llm_not_configured` (UI links to
 Connections); 504 `llm_timeout`; 502 `llm_reasoning_only` (the model spent its
 budget thinking — choose a non-reasoning model or raise
-`assistant_max_output_tokens`); 502 `llm_error`. The provider key is never
+`assistant_max_output_tokens`, default 4000); 502 `llm_error`. The provider key is never
 returned or logged.
 
 ### MCP server

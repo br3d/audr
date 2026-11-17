@@ -100,7 +100,7 @@ async def test_portfolio_mode_adds_default_request_and_context(http_client, fake
     assert "financial advice" in call["system"]
     assert "Top allocations" in call["system"]
     assert "Recent headlines with analysis" not in call["system"]
-    assert call["max_tokens"] == 1500
+    assert call["max_tokens"] == 4000
     assert fake.closed
 
 
