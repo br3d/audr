@@ -22,6 +22,8 @@ const OK = {
   context_as_of: '2026-11-17T10:00:00Z',
   usage: { input_tokens: 1, output_tokens: 1 },
   elapsed_ms: 4200,
+  conversation_id: '00000000-0000-0000-0000-000000000001',
+  message_id: '00000000-0000-0000-0000-000000000002',
 }
 
 function apiError(status: number, code: string, message: string) {
