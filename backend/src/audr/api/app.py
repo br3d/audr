@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from audr.api.alerts import router as alerts_router
 from audr.api.assets import router as assets_router
+from audr.api.assistant import router as assistant_router
 from audr.api.auth import router as auth_router
 from audr.api.errors import (
     http_exception_handler,
@@ -25,7 +26,6 @@ from audr.api.health import router as health_router
 from audr.api.history import router as history_router
 from audr.api.holdings import router as holdings_router
 from audr.api.integrations import router as integrations_router
-from audr.api.assistant import router as assistant_router
 from audr.api.llm import router as llm_router
 from audr.api.networks import router as networks_router
 from audr.api.news import router as news_router

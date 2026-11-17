@@ -434,7 +434,9 @@ class AnthropicClient(_HttpLlmClient):
         try:
             blocks = payload["content"]
             text = "".join(
-                str(b.get("text", "")) for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+                str(b.get("text", ""))
+                for b in blocks
+                if isinstance(b, dict) and b.get("type") == "text"
             )
         except (KeyError, TypeError) as exc:
             raise LlmResponseError(f"unexpected response shape: {exc}") from exc

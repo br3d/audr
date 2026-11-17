@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -15,7 +16,6 @@ from audr.providers.llm import (
     LlmTimeout,
     OpenAICompatibleClient,
 )
-import httpx
 
 pytestmark = pytest.mark.contract
 

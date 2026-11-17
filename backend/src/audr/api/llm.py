@@ -826,6 +826,7 @@ async def build_llm_context(
         ),
         request_id=str(uuid.uuid4()),
     )
+    return body
 
 
 @router.get("/asset/{ref}", response_model=LlmAssetResponse)

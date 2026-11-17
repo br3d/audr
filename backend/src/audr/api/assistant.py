@@ -18,7 +18,7 @@ import logging
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException
@@ -129,7 +129,7 @@ def _prepare_turns(mode: str, messages: list[ChatMessage]) -> list[dict[str, str
     return turns
 
 
-async def _recent_headlines(db: AsyncSession, limit: int) -> list[dict]:
+async def _recent_headlines(db: AsyncSession, limit: int) -> list[dict[str, Any]]:
     rows = await db.execute(
         sa.text(
             """
@@ -145,7 +145,7 @@ async def _recent_headlines(db: AsyncSession, limit: int) -> list[dict]:
     return [dict(r) for r in rows.mappings()]
 
 
-def _headlines_markdown(rows: list[dict]) -> str:
+def _headlines_markdown(rows: list[dict[str, Any]]) -> str:
     lines = [f"## Recent headlines with analysis ({len(rows)})"]
     if not rows:
         lines.append("- (none)")
@@ -168,7 +168,10 @@ def _config_to_client(config: LlmConfig) -> LlmClient:
     settings = get_settings()
     prices = None
     if config.price_input_per_mtok is not None or config.price_output_per_mtok is not None:
-        prices = (config.price_input_per_mtok or Decimal(0), config.price_output_per_mtok or Decimal(0))
+        prices = (
+            config.price_input_per_mtok or Decimal(0),
+            config.price_output_per_mtok or Decimal(0),
+        )
     return build_client(
         provider=config.provider,
         api_key=config.api_key,
@@ -206,7 +209,8 @@ async def get_assistant_client(db: Annotated[AsyncSession, Depends(get_db)]) -> 
         raise _error(
             http_status.HTTP_409_CONFLICT,
             "llm_not_configured",
-            "The stored LLM base URL no longer passes the host policy; re-save it under Connections.",
+            "The stored LLM base URL no longer passes the host policy; "
+            "re-save it under Connections.",
         ) from exc
     return _build_client_or_409(config)
 

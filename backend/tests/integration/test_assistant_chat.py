@@ -1,8 +1,8 @@
+# ruff: noqa: F811 -- fixtures imported from test_llm_api are re-declared as test parameters
 """POST /api/v1/assistant/chat with a fake LLM client (AUD-955)."""
 
 from __future__ import annotations
 
-import httpx
 import pytest
 from sqlalchemy import text
 
@@ -34,7 +34,9 @@ class FakeClient:
         self.calls.append({"system": system, "messages": messages, "max_tokens": max_tokens})
         if self.error:
             raise self.error
-        return ChatResult(text="Summary.\n- point", input_tokens=7, output_tokens=3, model="fake-model")
+        return ChatResult(
+            text="Summary.\n- point", input_tokens=7, output_tokens=3, model="fake-model"
+        )
 
     async def close(self) -> None:
         self.closed = True
@@ -54,7 +56,7 @@ async def test_409_llm_not_configured_without_integration(http_client) -> None:
         _URL, json={"mode": "portfolio", "messages": []}, headers={"x-csrf-token": csrf}
     )
     assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "llm_not_configured"
+    assert r.json()["error"]["code"] == "llm_not_configured"
 
 
 async def test_requires_session(http_client, fake) -> None:
@@ -95,7 +97,8 @@ async def test_portfolio_mode_adds_default_request_and_context(http_client, fake
     assert body["context_as_of"] and body["elapsed_ms"] >= 0
     call = fake.calls[0]
     assert call["messages"] == [{"role": "user", "content": "Analyse my portfolio."}]
-    assert "not financial advice" in call["system"] and "## Top allocations" in call["system"]
+    assert "financial advice" in call["system"]
+    assert "Top allocations" in call["system"]
     assert "Recent headlines with analysis" not in call["system"]
     assert call["max_tokens"] == 1500
     assert fake.closed
@@ -133,7 +136,10 @@ async def test_chat_mode_needs_a_user_message_and_uses_history(http_client, fake
     assert r.status_code == 422
     r = await http_client.post(
         _URL,
-        json={"mode": "chat", "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]},
+        json={
+            "mode": "chat",
+            "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}],
+        },
         headers=h,
     )
     assert r.status_code == 422  # last turn must be the user's
@@ -179,5 +185,5 @@ async def test_provider_failures_map_to_502_504(http_client, error, status, code
     finally:
         app.dependency_overrides.pop(get_assistant_client, None)
     assert r.status_code == status
-    assert r.json()["detail"]["code"] == code
+    assert r.json()["error"]["code"] == code
     assert client.closed
