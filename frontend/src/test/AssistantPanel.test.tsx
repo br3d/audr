@@ -10,6 +10,8 @@ import * as client from '../api/client'
 vi.mock('../api/client', async (orig) => ({
   ...(await orig<typeof import('../api/client')>()),
   assistantChat: vi.fn(),
+  fetchAssistantPresets: vi.fn(),
+  fetchPortfolio: vi.fn(),
   listAssistantConversations: vi.fn(),
   getAssistantConversation: vi.fn(),
   renameAssistantConversation: vi.fn(),
@@ -18,6 +20,14 @@ vi.mock('../api/client', async (orig) => ({
 }))
 
 const chat = vi.mocked(client.assistantChat)
+const presetsApi = vi.mocked(client.fetchAssistantPresets)
+const portfolioApi = vi.mocked(client.fetchPortfolio)
+const PRESETS = [
+  { id: 'daily_brief', label: 'Daily brief', description: 'Short portfolio brief', needs_asset: false },
+  { id: 'news_impact', label: 'News impact', description: 'What news matters', needs_asset: false },
+  { id: 'asset_deep_dive', label: 'Asset deep dive', description: 'One asset in depth', needs_asset: true },
+]
+const alloc = (id: string, symbol: string) => ({ asset_id: id, symbol, name: symbol + ' coin', included: true })
 const list = vi.mocked(client.listAssistantConversations)
 const getConv = vi.mocked(client.getAssistantConversation)
 const rename = vi.mocked(client.renameAssistantConversation)
@@ -82,7 +92,11 @@ describe('AssistantPanel', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    for (const m of [chat, list, getConv, rename, del, delAll]) m.mockReset()
+    for (const m of [chat, presetsApi, portfolioApi, list, getConv, rename, del, delAll]) m.mockReset()
+    presetsApi.mockResolvedValue(PRESETS)
+    portfolioApi.mockResolvedValue({
+      allocations: [alloc('a-eth', 'ETH'), alloc('a-usdc', 'USDC')],
+    } as unknown as client.PortfolioResponse)
     list.mockResolvedValue({ items: [S1, S2], total: 2, limit: 100, offset: 0 })
     getConv.mockImplementation(async (id) =>
       id === C2
@@ -196,11 +210,38 @@ describe('AssistantPanel', () => {
     window.history.replaceState(null, '', `#/assistant/${C2}`)
     chat.mockResolvedValue(OK)
     await mount()
-    await click(q('assistant-quick-portfolio'))
-    expect(chat).toHaveBeenCalledWith({ mode: 'portfolio', messages: [] })
+    await click(q('assistant-preset-daily_brief'))
+    expect(chat).toHaveBeenCalledWith({ preset: 'daily_brief', messages: [] })
     chat.mockResolvedValue({ ...OK, mode: 'news' })
-    await click(q('assistant-quick-news'))
-    expect(chat).toHaveBeenLastCalledWith({ mode: 'news', messages: [] })
+    await click(q('assistant-preset-news_impact'))
+    expect(chat).toHaveBeenLastCalledWith({ preset: 'news_impact', messages: [] })
+  })
+
+  it('renders one chip per preset from the API, with the description as tooltip', async () => {
+    await mount()
+    const chips = container.querySelectorAll('[data-testid^="assistant-preset-"]')
+    expect(chips).toHaveLength(3)
+    expect(q('assistant-preset-news_impact')!.textContent).toBe('News impact')
+    expect(q('assistant-preset-news_impact')!.getAttribute('title')).toBe('What news matters')
+  })
+
+  it('asset presets wait for a picked asset, then send preset + asset_ref', async () => {
+    chat.mockResolvedValue(OK)
+    rename.mockResolvedValue({ ...S1, title: 'x' })
+    await mount()
+    await click(q('assistant-preset-asset_deep_dive'))
+    expect(chat).not.toHaveBeenCalled()
+    expect(qa('assistant-asset-option').map((b) => b.textContent)).toEqual(['ETH', 'USDC'])
+    const search = q('assistant-asset-search') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(search, 'usd')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(qa('assistant-asset-option').map((b) => b.textContent)).toEqual(['USDC'])
+    await click(qa('assistant-asset-option')[0])
+    expect(chat).toHaveBeenCalledWith({ preset: 'asset_deep_dive', asset_ref: 'a-usdc', messages: [] })
+    expect(rename).toHaveBeenCalledWith(C1, 'Asset deep dive — USDC')
   })
 
   it('New chat clears the selection', async () => {
@@ -216,13 +257,13 @@ describe('AssistantPanel', () => {
     chat.mockReturnValue(new Promise(() => {}))
     await mount()
     vi.useFakeTimers()
-    await click(q('assistant-quick-portfolio'))
+    await click(q('assistant-preset-daily_brief'))
     expect(q('assistant-pending')!.textContent).toContain('Analysing… 0 s')
     await act(async () => {
       vi.advanceTimersByTime(3000)
     })
     expect(q('assistant-pending')!.textContent).toContain('Analysing… 3 s')
-    expect((q('assistant-quick-portfolio') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('assistant-preset-daily_brief') as HTMLButtonElement).disabled).toBe(true)
     expect((q('assistant-input') as HTMLInputElement).disabled).toBe(true)
   })
 
@@ -339,7 +380,7 @@ describe('AssistantPanel', () => {
   it('409 llm_not_configured shows the empty state with a Connections link', async () => {
     chat.mockRejectedValue(apiError(409, 'llm_not_configured', 'no llm'))
     await mount()
-    await click(q('assistant-quick-portfolio'))
+    await click(q('assistant-preset-daily_brief'))
     expect(q('assistant-not-configured')!.textContent).toContain('LLM is not connected')
     expect(q('assistant-not-configured')!.querySelector('a')!.getAttribute('href')).toBe('#/connections')
     expect(q('assistant-send-error')).toBeNull()
@@ -349,11 +390,11 @@ describe('AssistantPanel', () => {
     chat.mockRejectedValueOnce(apiError(502, 'llm_unavailable', 'provider is down'))
     chat.mockResolvedValueOnce(OK)
     await mount()
-    await click(q('assistant-quick-news'))
+    await click(q('assistant-preset-news_impact'))
     expect(q('assistant-send-error')!.textContent).toContain('provider is down')
     await click(q('assistant-send-retry'))
     expect(chat).toHaveBeenCalledTimes(2)
-    expect(chat).toHaveBeenLastCalledWith({ mode: 'news', messages: [] })
+    expect(chat).toHaveBeenLastCalledWith({ preset: 'news_impact', messages: [] })
     expect(q('assistant-send-error')).toBeNull()
   })
 })

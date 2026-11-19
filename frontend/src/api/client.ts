@@ -908,6 +908,12 @@ export type AssistantConversationList = components['schemas']['ConversationList'
 export type AssistantConversationDetail = components['schemas']['ConversationDetail']
 export type AssistantStoredMessage = components['schemas']['StoredMessage']
 
+export type AssistantPreset = components['schemas']['PresetOut']
+
+export function fetchAssistantPresets(): Promise<AssistantPreset[]> {
+  return get<AssistantPreset[]>('/assistant/presets')
+}
+
 export function listAssistantConversations(): Promise<AssistantConversationList> {
   return get<AssistantConversationList>('/assistant/conversations?limit=100')
 }

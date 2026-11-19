@@ -3,13 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ApiError,
   assistantChat,
+  fetchAssistantPresets,
+  fetchPortfolio,
   deleteAllAssistantConversations,
   deleteAssistantConversation,
   getAssistantConversation,
   listAssistantConversations,
   renameAssistantConversation,
 } from '../api/client'
-import type { AssistantMode, AssistantStoredMessage } from '../api/client'
+import type { AssistantMode, AssistantPreset, AssistantStoredMessage } from '../api/client'
 import { assistantIdFromHash, setAssistantHash } from '../routing'
 
 // AUD-956/959: the assistant tab. Conversations are stored server-side
@@ -28,6 +30,12 @@ interface SendArgs {
   conversationId: string | null
   /** The new user turn; empty for a quick action. */
   text: string
+  /** AUD-962: a preset id from GET /assistant/presets (new conversation only). */
+  preset?: string
+  /** Asset id for presets with needs_asset. */
+  assetRef?: string
+  /** Symbol to append to the sidebar title of an asset preset. */
+  assetSymbol?: string
 }
 
 function useElapsedSeconds(running: boolean): number {
@@ -161,14 +169,33 @@ export default function AssistantPanel() {
       query.state.data?.messages.some((m) => m.status === 'pending') ? POLL_MS : false,
   })
 
+  const presets = useQuery({ queryKey: ['assistant', 'presets'], queryFn: fetchAssistantPresets })
+  const presetList: AssistantPreset[] = presets.data ?? []
+  const [pendingPreset, setPendingPreset] = useState<AssistantPreset | null>(null)
+  const [assetQuery, setAssetQuery] = useState('')
+  const portfolio = useQuery({
+    queryKey: ['assistant', 'held-assets'],
+    queryFn: () => fetchPortfolio(),
+    enabled: pendingPreset?.needs_asset === true,
+  })
+
   const mutation = useMutation({
-    mutationFn: ({ mode, conversationId, text }: SendArgs) =>
+    mutationFn: ({ mode, conversationId, text, preset, assetRef }: SendArgs) =>
       assistantChat({
-        mode,
+        ...(preset ? { preset } : { mode }),
+        ...(assetRef ? { asset_ref: assetRef } : {}),
         messages: text ? [{ role: 'user', content: text }] : [],
         ...(conversationId ? { conversation_id: conversationId } : {}),
       }),
-    onSuccess: async (res) => {
+    onSuccess: async (res, vars) => {
+      if (vars.preset && vars.assetSymbol) {
+        const label = presetList.find((p) => p.id === vars.preset)?.label ?? 'Analysis'
+        try {
+          await renameAssistantConversation(res.conversation_id, `${label} — ${vars.assetSymbol}`)
+        } catch {
+          // The title is cosmetic; the generic preset label stays.
+        }
+      }
       await Promise.all([
         qc.invalidateQueries({ queryKey: LIST_KEY }),
         qc.invalidateQueries({ queryKey: detailKey(res.conversation_id) }),
@@ -230,12 +257,37 @@ export default function AssistantPanel() {
     setListOpen(false)
   }
 
-  function quickAction(m: 'portfolio' | 'news') {
-    // A quick action starts a new conversation, as before.
+  function pickPreset(p: AssistantPreset) {
+    // A preset starts a new conversation. Asset presets wait for a chosen asset.
+    if (p.needs_asset) {
+      setPendingPreset(p)
+      setAssetQuery('')
+      return
+    }
+    setPendingPreset(null)
     setAssistantHash(null)
     mutation.reset()
-    send({ mode: m, conversationId: null, text: '' })
+    send({ mode: 'chat', conversationId: null, text: '', preset: p.id })
   }
+
+  function pickAsset(p: AssistantPreset, assetId: string, symbol: string) {
+    setPendingPreset(null)
+    setAssistantHash(null)
+    mutation.reset()
+    send({ mode: 'chat', conversationId: null, text: '', preset: p.id, assetRef: assetId, assetSymbol: symbol })
+  }
+
+  const heldAssets = (() => {
+    const seen = new Set<string>()
+    const out: { id: string; symbol: string; name: string }[] = []
+    for (const a of portfolio.data?.allocations ?? []) {
+      if (seen.has(a.asset_id) || !a.included) continue
+      seen.add(a.asset_id)
+      out.push({ id: a.asset_id, symbol: a.symbol, name: a.name })
+    }
+    const needle = assetQuery.trim().toLowerCase()
+    return out.filter((a) => !needle || a.symbol.toLowerCase().includes(needle))
+  })()
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -416,26 +468,74 @@ export default function AssistantPanel() {
         </aside>
 
         <div className="assistant-main">
-          <div className="assistant-quick">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => quickAction('portfolio')}
-              data-testid="assistant-quick-portfolio"
-            >
-              Analyse portfolio
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() => quickAction('news')}
-              data-testid="assistant-quick-news"
-            >
-              What matters in the news
-            </button>
+          <div className="assistant-quick" data-testid="assistant-presets">
+            {presets.isError && (
+              <div className="alert alert-error" role="alert" data-testid="assistant-presets-error">
+                Could not load the ready-made prompts: {presets.error.message}
+              </div>
+            )}
+            {presets.isPending && <span className="assistant-empty">Loading prompts…</span>}
+            {presetList.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`btn btn-secondary${pendingPreset?.id === p.id ? ' is-active' : ''}`}
+                disabled={busy}
+                title={p.description}
+                aria-label={`${p.label}: ${p.description}`}
+                onClick={() => pickPreset(p)}
+                data-testid={`assistant-preset-${p.id}`}
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
+
+          {pendingPreset && (
+            <div className="assistant-asset-picker" data-testid="assistant-asset-picker">
+              <label htmlFor="assistant-asset-search">Choose an asset for “{pendingPreset.label}”</label>
+              <input
+                id="assistant-asset-search"
+                type="search"
+                className="input-folio"
+                placeholder="Search by symbol"
+                autoComplete="off"
+                value={assetQuery}
+                onChange={(e) => setAssetQuery(e.target.value)}
+                data-testid="assistant-asset-search"
+              />
+              {portfolio.isPending && <p className="assistant-empty">Loading assets…</p>}
+              {portfolio.isError && (
+                <div className="alert alert-error" role="alert" data-testid="assistant-asset-error">
+                  {portfolio.error.message}
+                </div>
+              )}
+              {portfolio.isSuccess && heldAssets.length === 0 && (
+                <p className="assistant-empty" data-testid="assistant-asset-empty">
+                  No held assets match.
+                </p>
+              )}
+              <ul className="assistant-asset-list">
+                {heldAssets.map((a) => (
+                  <li key={a.id}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy}
+                      title={a.name}
+                      data-testid="assistant-asset-option"
+                      onClick={() => pickAsset(pendingPreset, a.id, a.symbol)}
+                    >
+                      {a.symbol}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <button type="button" className="btn btn-secondary" onClick={() => setPendingPreset(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
 
           <div
             role="log"
