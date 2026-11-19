@@ -488,7 +488,10 @@ async def assistant_chat(
             result: ChatResult = await client.chat(
                 system=_SYSTEM_PROMPT + context_md,
                 messages=turns,
-                max_tokens=get_settings().assistant_max_output_tokens,
+                max_tokens=max(
+                    get_settings().assistant_max_output_tokens,
+                    preset.min_output_tokens or 0 if preset else 0,
+                ),
             )
         except LlmTimeout as exc:
             raise _error(

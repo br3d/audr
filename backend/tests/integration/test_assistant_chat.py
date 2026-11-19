@@ -479,6 +479,8 @@ async def test_chat_with_preset_uses_prompt_and_context(http_client, fake, prese
     assert p.instructions in call["system"] and "Top allocations" in call["system"]
     assert ("Recent headlines with analysis" in call["system"]) == (p.mode == "news")
     assert "200 words" in call["system"] or preset != "daily_brief"
+    expected = 8000 if preset in {"news_impact", "alert_triage"} else 4000
+    assert call["max_tokens"] == expected
 
 
 async def test_asset_deep_dive_puts_asset_context_in_call(

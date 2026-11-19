@@ -30,6 +30,9 @@ class Preset:
     user_prompt: str
     instructions: str
     needs_asset: bool = False
+    # Reasoning models spend the output budget thinking over a wide context; presets with a
+    # 30-headline/20-alert context ask for more room than the default.
+    min_output_tokens: int | None = None
 
     @property
     def system_suffix(self) -> str:
@@ -72,6 +75,7 @@ PRESETS: tuple[Preset, ...] = (
             "(low / medium / high) and a one-line reason. List all other headlines under "
             '"Ignored" by title only, without discussing them.'
         ),
+        min_output_tokens=8000,
     ),
     Preset(
         id="alert_triage",
@@ -84,6 +88,7 @@ PRESETS: tuple[Preset, ...] = (
             "'Act now', 'Watch' or 'Noise', each with a one-line reason. If there are no "
             "unread alerts, say so."
         ),
+        min_output_tokens=8000,
     ),
     Preset(
         id="asset_deep_dive",
