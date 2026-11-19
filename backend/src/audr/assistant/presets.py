@@ -1,0 +1,103 @@
+"""Ready-made assistant prompts (AUD-961). Plain data, versioned with the code.
+
+Each preset picks the context mode, supplies the user turn, and appends a short
+instruction block to the system prompt (layout, word limit, per-preset intent).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+PresetMode = Literal["portfolio", "news", "asset"]
+
+_SHARED_RULES = (
+    "\n\n=== TASK RULES ===\n"
+    "Layout: a 1-2 sentence summary, then bullet points, each with its reasoning.\n"
+    "Every claim must name the headline or number it comes from. A null/unknown value is "
+    'called "unknown", never 0.\n'
+    'No buy/sell instructions ("worth a look, because..." is fine).\n'
+    "Answer in the language of the user's last message.\n"
+)
+
+
+@dataclass(frozen=True)
+class Preset:
+    id: str
+    label: str
+    description: str
+    mode: PresetMode
+    user_prompt: str
+    instructions: str
+    needs_asset: bool = False
+
+    @property
+    def system_suffix(self) -> str:
+        return _SHARED_RULES + self.instructions + "\n"
+
+
+PRESETS: tuple[Preset, ...] = (
+    Preset(
+        id="daily_brief",
+        label="Daily brief",
+        description="24h change, the 3 headlines that matter most to your holdings, unread alerts.",
+        mode="portfolio",
+        user_prompt="Give me my daily brief.",
+        instructions=(
+            "Task: daily brief. Maximum 200 words. Cover: the 24h portfolio change; the 3 "
+            "headlines most relevant to the holdings (quote each); the unread alerts."
+        ),
+    ),
+    Preset(
+        id="concentration_risk",
+        label="Concentration risk",
+        description="Share of the largest asset, top 3 and stablecoins; holdings without a price.",
+        mode="portfolio",
+        user_prompt="How concentrated is my portfolio?",
+        instructions=(
+            "Task: concentration risk. Maximum 350 words. Give the share held in the largest "
+            "asset, the top 3 combined, and stablecoins. List holdings with an unknown price "
+            "(their share cannot be counted). End with plain flags (e.g. 'one asset above 50%')."
+        ),
+    ),
+    Preset(
+        id="news_impact",
+        label="News impact",
+        description="Which headlines matter for your holdings, and in which direction.",
+        mode="news",
+        user_prompt="What in the latest news matters for my holdings?",
+        instructions=(
+            "Task: news impact. Maximum 350 words. For each headline with importance >= 60: "
+            "the affected holding, direction (up / down / neutral / unclear), confidence "
+            "(low / medium / high) and a one-line reason. List all other headlines under "
+            '"Ignored" by title only, without discussing them.'
+        ),
+    ),
+    Preset(
+        id="alert_triage",
+        label="Alert triage",
+        description="Sort unread alerts into act now / watch / noise.",
+        mode="news",
+        user_prompt="Triage my unread alerts.",
+        instructions=(
+            "Task: alert triage. Maximum 350 words. Sort every unread alert into "
+            "'Act now', 'Watch' or 'Noise', each with a one-line reason. If there are no "
+            "unread alerts, say so."
+        ),
+    ),
+    Preset(
+        id="asset_deep_dive",
+        label="Asset deep dive",
+        description="One asset's trend, news and alerts, and what is unknown about it.",
+        mode="asset",
+        user_prompt="Give me a deep dive on this asset.",
+        instructions=(
+            "Task: asset deep dive on the single asset in the context. Maximum 350 words. "
+            "Cover its 30-day trend, its news, its alerts, and a final bullet list of "
+            "what is unknown (missing price, empty series, no news)."
+        ),
+        needs_asset=True,
+    ),
+)
+
+PRESETS_BY_ID: dict[str, Preset] = {p.id: p for p in PRESETS}

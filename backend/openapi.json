@@ -954,6 +954,18 @@
       },
       "AssistantChatRequest": {
         "properties": {
+          "asset_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Symbol, contract address or asset id; required by presets with needs_asset.",
+            "title": "Asset Ref"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -976,19 +988,35 @@
             "type": "array"
           },
           "mode": {
-            "description": "Which context to attach: portfolio snapshot, news-heavy, or general chat.",
-            "enum": [
-              "portfolio",
-              "news",
-              "chat"
+            "anyOf": [
+              {
+                "enum": [
+                  "portfolio",
+                  "news",
+                  "chat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Mode",
-            "type": "string"
+            "description": "Which context to attach: portfolio snapshot, news-heavy, or general chat. Required unless `preset` is given (the preset then decides).",
+            "title": "Mode"
+          },
+          "preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A preset id from GET /assistant/presets; its prompt is the user turn.",
+            "title": "Preset"
           }
         },
-        "required": [
-          "mode"
-        ],
         "title": "AssistantChatRequest",
         "type": "object"
       },
@@ -1017,7 +1045,7 @@
             "type": "string"
           },
           "mode": {
-            "description": "Echo of the request mode.",
+            "description": "Context mode used (a preset's mode; `asset` presets report `chat`).",
             "enum": [
               "portfolio",
               "news",
@@ -3006,6 +3034,35 @@
           "generated_at"
         ],
         "title": "PortfolioResponseOut",
+        "type": "object"
+      },
+      "PresetOut": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "needs_asset": {
+            "description": "True when `asset_ref` is required in /chat.",
+            "title": "Needs Asset",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "description",
+          "needs_asset"
+        ],
+        "title": "PresetOut",
         "type": "object"
       },
       "ProviderOption": {
@@ -5602,6 +5659,56 @@
           }
         },
         "summary": "Rename Conversation"
+      }
+    },
+    "/api/v1/assistant/presets": {
+      "get": {
+        "operationId": "list_presets_api_v1_assistant_presets_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PresetOut"
+                  },
+                  "title": "Response List Presets Api V1 Assistant Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Presets"
       }
     },
     "/api/v1/auth/login": {

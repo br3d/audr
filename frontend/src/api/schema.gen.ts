@@ -235,6 +235,23 @@ export interface paths {
         patch: operations["rename_conversation_api_v1_assistant_conversations__conversation_id__patch"];
         trace?: never;
     };
+    "/api/v1/assistant/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Presets */
+        get: operations["list_presets_api_v1_assistant_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1467,6 +1484,11 @@ export interface components {
         /** AssistantChatRequest */
         AssistantChatRequest: {
             /**
+             * Asset Ref
+             * @description Symbol, contract address or asset id; required by presets with needs_asset.
+             */
+            asset_ref?: string | null;
+            /**
              * Conversation Id
              * @description Continue this stored conversation. Omit to start a new one.
              */
@@ -1478,10 +1500,14 @@ export interface components {
             messages?: components["schemas"]["ChatMessage"][];
             /**
              * Mode
-             * @description Which context to attach: portfolio snapshot, news-heavy, or general chat.
-             * @enum {string}
+             * @description Which context to attach: portfolio snapshot, news-heavy, or general chat. Required unless `preset` is given (the preset then decides).
              */
-            mode: "portfolio" | "news" | "chat";
+            mode?: ("portfolio" | "news" | "chat") | null;
+            /**
+             * Preset
+             * @description A preset id from GET /assistant/presets; its prompt is the user turn.
+             */
+            preset?: string | null;
         };
         /** AssistantChatResponse */
         AssistantChatResponse: {
@@ -1509,7 +1535,7 @@ export interface components {
             message_id: string;
             /**
              * Mode
-             * @description Echo of the request mode.
+             * @description Context mode used (a preset's mode; `asset` presets report `chat`).
              * @enum {string}
              */
             mode: "portfolio" | "news" | "chat";
@@ -2219,6 +2245,20 @@ export interface components {
             unpriced_asset_count: number;
             /** Valuation Time */
             valuation_time: string | null;
+        };
+        /** PresetOut */
+        PresetOut: {
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Needs Asset
+             * @description True when `asset_ref` is required in /chat.
+             */
+            needs_asset: boolean;
         };
         /**
          * ProviderOption
@@ -3226,6 +3266,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_presets_api_v1_assistant_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sid?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetOut"][];
                 };
             };
             /** @description Validation Error */

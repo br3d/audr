@@ -836,12 +836,25 @@ async def get_llm_asset(
     auth: Annotated[ReadPrincipal, Depends(_require_read_auth)],
     db: AsyncSession = Depends(get_db),
 ) -> Response:
+    body = await build_llm_asset(db, auth, ref)
+    if body is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="asset not found")
+    return _render(body, _asset_to_markdown(body), request)
+
+
+async def build_llm_asset(
+    db: AsyncSession, auth: ReadPrincipal, ref: str
+) -> LlmAssetResponse | None:
+    """The /asset/{ref} body as a model, or None when *ref* resolves to nothing.
+
+    Shared with the assistant's asset presets (AUD-961).
+    """
     now = datetime.now(tz=UTC)
     portfolio = await get_portfolio(auth, db)
 
     asset_row = await _resolve_asset_ref(db, ref, latest_snapshot_id=portfolio.snapshot_id)
     if asset_row is None:
-        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="asset not found")
+        return None
 
     asset_id = str(asset_row["id"])
     token_address = str(asset_row["token_address"])
@@ -911,4 +924,4 @@ async def get_llm_asset(
         ),
         request_id=str(uuid.uuid4()),
     )
-    return _render(body, _asset_to_markdown(body), request)
+    return body

@@ -438,3 +438,98 @@ async def test_stateless_shape_still_works(http_client, fake) -> None:
     assert r.status_code == 200
     assert [m["content"] for m in fake.calls[0]["messages"]] == ["a", "b", "c"]
     assert r.json()["reply"] == "Summary.\n- point"
+
+
+# --- presets (AUD-961) -------------------------------------------------------
+
+_PRESET_IDS = [
+    "daily_brief",
+    "concentration_risk",
+    "news_impact",
+    "alert_triage",
+    "asset_deep_dive",
+]
+
+
+async def test_presets_registry_lists_exactly_five(http_client, fake) -> None:
+    await _setup_and_login(http_client)
+    r = await http_client.get("/api/v1/assistant/presets")
+    assert r.status_code == 200
+    items = r.json()
+    assert [i["id"] for i in items] == _PRESET_IDS
+    assert {i["id"] for i in items if i["needs_asset"]} == {"asset_deep_dive"}
+    assert all(set(i) == {"id", "label", "description", "needs_asset"} for i in items)
+
+
+async def test_presets_require_session(http_client, fake) -> None:
+    assert (await http_client.get("/api/v1/assistant/presets")).status_code == 401
+
+
+@pytest.mark.parametrize("preset", [p for p in _PRESET_IDS if p != "asset_deep_dive"])
+async def test_chat_with_preset_uses_prompt_and_context(http_client, fake, preset) -> None:
+    from audr.assistant.presets import PRESETS_BY_ID
+
+    csrf = await _setup_and_login(http_client)
+    r = await http_client.post(_URL, json={"preset": preset}, headers={"x-csrf-token": csrf})
+    assert r.status_code == 200, r.text
+    p = PRESETS_BY_ID[preset]
+    assert r.json()["mode"] == p.mode
+    call = fake.calls[0]
+    assert call["messages"] == [{"role": "user", "content": p.user_prompt}]
+    assert p.instructions in call["system"] and "Top allocations" in call["system"]
+    assert ("Recent headlines with analysis" in call["system"]) == (p.mode == "news")
+    assert "200 words" in call["system"] or preset != "daily_brief"
+
+
+async def test_asset_deep_dive_puts_asset_context_in_call(
+    http_client, db_session_factory, fake
+) -> None:
+    csrf = await _setup_and_login(http_client)
+    await _seed_asset(db_session_factory, "0x" + "c" * 40, "DEEP")
+    r = await http_client.post(
+        _URL,
+        json={"preset": "asset_deep_dive", "asset_ref": "deep"},
+        headers={"x-csrf-token": csrf},
+    )
+    assert r.status_code == 200, r.text
+    call = fake.calls[0]
+    assert "DEEP" in call["system"] and "deep dive" in call["messages"][0]["content"]
+    assert "what is unknown" in call["system"]
+
+
+async def test_preset_error_paths(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    h = {"x-csrf-token": csrf}
+    r = await http_client.post(_URL, json={"preset": "nope"}, headers=h)
+    assert r.status_code == 422
+    r = await http_client.post(_URL, json={"preset": "asset_deep_dive"}, headers=h)
+    assert r.status_code == 422
+    r = await http_client.post(_URL, json={"messages": []}, headers=h)
+    assert r.status_code == 422
+    r = await http_client.post(
+        _URL, json={"preset": "asset_deep_dive", "asset_ref": "NOPE"}, headers=h
+    )
+    assert r.status_code == 404
+    assert not fake.calls and fake.closed
+    convs = await http_client.get("/api/v1/assistant/conversations")
+    assert convs.json()["total"] == 0
+
+
+async def test_preset_conversation_title_and_followup(http_client, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    h = {"x-csrf-token": csrf}
+    r = await http_client.post(_URL, json={"preset": "alert_triage"}, headers=h)
+    cid = r.json()["conversation_id"]
+    detail = (await http_client.get(f"/api/v1/assistant/conversations/{cid}")).json()
+    assert detail["title"] == "Alert triage"
+    r = await http_client.post(
+        _URL,
+        json={
+            "preset": "alert_triage",
+            "conversation_id": cid,
+            "messages": [{"role": "user", "content": "and the second one?"}],
+        },
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert fake.calls[1]["messages"][-1]["content"] == "and the second one?"

@@ -30,7 +30,13 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from audr.api.auth import _require_csrf, _require_session
-from audr.api.llm import _context_to_markdown, build_llm_context
+from audr.api.llm import (
+    _asset_to_markdown,
+    _context_to_markdown,
+    build_llm_asset,
+    build_llm_context,
+)
+from audr.assistant.presets import PRESETS, PRESETS_BY_ID, Preset
 from audr.auth.models import Session
 from audr.config import get_settings
 from audr.db import get_db
@@ -85,8 +91,20 @@ class ChatMessage(BaseModel):
 
 
 class AssistantChatRequest(BaseModel):
-    mode: Literal["portfolio", "news", "chat"] = Field(
-        description="Which context to attach: portfolio snapshot, news-heavy, or general chat."
+    mode: Literal["portfolio", "news", "chat"] | None = Field(
+        default=None,
+        description=(
+            "Which context to attach: portfolio snapshot, news-heavy, or general chat. "
+            "Required unless `preset` is given (the preset then decides)."
+        ),
+    )
+    preset: str | None = Field(
+        default=None,
+        description="A preset id from GET /assistant/presets; its prompt is the user turn.",
+    )
+    asset_ref: str | None = Field(
+        default=None,
+        description="Symbol, contract address or asset id; required by presets with needs_asset.",
     )
     messages: list[ChatMessage] = Field(
         default_factory=list,
@@ -104,6 +122,13 @@ class AssistantChatRequest(BaseModel):
     )
 
 
+class PresetOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    needs_asset: bool = Field(description="True when `asset_ref` is required in /chat.")
+
+
 class UsageOut(BaseModel):
     input_tokens: int = Field(description="Prompt tokens the provider reported; 0 if unreported.")
     output_tokens: int = Field(description="Completion tokens reported; 0 if unreported.")
@@ -111,7 +136,9 @@ class UsageOut(BaseModel):
 
 class AssistantChatResponse(BaseModel):
     reply: str = Field(description="The model's answer, reasoning blocks removed.")
-    mode: Literal["portfolio", "news", "chat"] = Field(description="Echo of the request mode.")
+    mode: Literal["portfolio", "news", "chat"] = Field(
+        description="Context mode used (a preset's mode; `asset` presets report `chat`)."
+    )
     provider: str = Field(description="Configured provider: anthropic or openai_compatible.")
     model: str = Field(description="Model that answered.")
     context_as_of: str = Field(description="RFC3339 time the attached context was built.")
@@ -121,12 +148,16 @@ class AssistantChatResponse(BaseModel):
     message_id: UUID = Field(description="The stored assistant message holding this reply.")
 
 
-def _prepare_turns(mode: str, messages: list[ChatMessage]) -> list[dict[str, str]]:
+def _prepare_turns(
+    mode: str, messages: list[ChatMessage], preset: Preset | None = None
+) -> list[dict[str, str]]:
     turns = [{"role": m.role, "content": m.content} for m in messages[-MAX_TURNS:]]
     # Providers want the conversation to open with the user.
     while turns and turns[0]["role"] != "user":
         turns.pop(0)
     if not turns:
+        if preset is not None:
+            return [{"role": "user", "content": preset.user_prompt}]
         if mode == "chat":
             raise HTTPException(
                 status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -322,6 +353,38 @@ async def _history(db: AsyncSession, conversation_id: UUID) -> list[ChatMessage]
     return [ChatMessage(role=r["role"], content=r["content"]) for r in rows.mappings()]
 
 
+@router.get("/presets", response_model=list[PresetOut])
+async def list_presets(_session: Annotated[Session, Depends(_require_session)]) -> list[PresetOut]:
+    return [
+        PresetOut(id=p.id, label=p.label, description=p.description, needs_asset=p.needs_asset)
+        for p in PRESETS
+    ]
+
+
+def _resolve_preset(body: AssistantChatRequest) -> tuple[Preset | None, str]:
+    """Validate preset/mode before anything is stored; returns (preset, context mode)."""
+    preset: Preset | None = None
+    if body.preset is not None:
+        preset = PRESETS_BY_ID.get(body.preset)
+        if preset is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown preset: {body.preset[:40]}",
+            )
+        if preset.needs_asset and not (body.asset_ref and body.asset_ref.strip()):
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"preset {preset.id} needs asset_ref",
+            )
+        return preset, preset.mode
+    if body.mode is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="either mode or preset is required",
+        )
+    return None, body.mode
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 async def assistant_chat(
     body: AssistantChatRequest,
@@ -330,6 +393,20 @@ async def assistant_chat(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AssistantChatResponse:
     started = time.monotonic()
+    try:
+        preset, ctx_mode = _resolve_preset(body)
+        asset_md = ""
+        if preset is not None and preset.mode == "asset":
+            # Resolve before anything is stored: unknown asset -> 404, nothing persisted.
+            asset_body = await build_llm_asset(db, session, str(body.asset_ref))
+            if asset_body is None:
+                raise _error(http_status.HTTP_404_NOT_FOUND, "not_found", "Asset not found.")
+            asset_md = _asset_to_markdown(asset_body)
+    except BaseException:
+        await client.close()
+        raise
+    # "asset" presets are stored/reported as chat conversations.
+    mode: Literal["portfolio", "news", "chat"] = "chat" if ctx_mode == "asset" else ctx_mode  # type: ignore[assignment]
     conversation_id = body.conversation_id
     try:
         if conversation_id is not None:
@@ -349,7 +426,7 @@ async def assistant_chat(
         else:
             new_turns = list(body.messages)
             all_turns = list(body.messages)
-        turns = _prepare_turns(body.mode, _merge_same_role(all_turns))
+        turns = _prepare_turns(mode, _merge_same_role(all_turns), preset)
         if conversation_id is None and not new_turns:
             new_turns = [ChatMessage(role="user", content=turns[-1]["content"])]
 
@@ -359,13 +436,13 @@ async def assistant_chat(
             title = (
                 " ".join(first_user.split())[:_TITLE_CHARS]
                 if body.messages
-                else _QUICK_TITLE.get(body.mode, "")
+                else (preset.label if preset else _QUICK_TITLE.get(mode, ""))
             ) or "New chat"
             conversation_id = await db.scalar(
                 sa.text(
                     "INSERT INTO assistant_conversation (title, mode) VALUES (:t, :m) RETURNING id"
                 ),
-                {"t": title, "m": body.mode},
+                {"t": title, "m": mode},
             )
         for t in new_turns:
             await db.execute(
@@ -394,14 +471,18 @@ async def assistant_chat(
     if conversation_id is None or message_id is None:  # unreachable: both set above
         raise RuntimeError("conversation was not stored")
     try:
-        headlines = {"portfolio": 5, "news": 5, "chat": _CHAT_HEADLINES}[body.mode]
-        alerts = _NEWS_ALERTS if body.mode == "news" else 5
+        headlines = {"portfolio": 5, "news": 5, "chat": _CHAT_HEADLINES}[mode]
+        alerts = _NEWS_ALERTS if mode == "news" else 5
         context = await build_llm_context(
             db, session, headlines_limit=headlines, alerts_limit=alerts
         )
         context_md = _context_to_markdown(context)
-        if body.mode == "news":
+        if mode == "news":
             context_md += "\n" + _headlines_markdown(await _recent_headlines(db, _NEWS_HEADLINES))
+        if asset_md:
+            context_md += "\n" + asset_md
+        if preset is not None:
+            context_md += preset.system_suffix
 
         try:
             result: ChatResult = await client.chat(
@@ -457,7 +538,7 @@ async def assistant_chat(
     provider = "anthropic" if type(client).__name__ == "AnthropicClient" else "openai_compatible"
     return AssistantChatResponse(
         reply=result.text,
-        mode=body.mode,
+        mode=mode,
         provider=provider,
         model=result.model,
         context_as_of=context.as_of,
