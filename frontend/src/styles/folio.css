@@ -2452,5 +2452,19 @@ body {
   opacity: 0.7;
 }
 
-.assistant-asset-picker { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
-.assistant-asset-list { display: flex; flex-wrap: wrap; gap: 0.4rem; list-style: none; margin: 0; padding: 0; max-height: 10rem; overflow-y: auto; }
+.assistant-asset-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+.assistant-asset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 10rem;
+  overflow-y: auto;
+}

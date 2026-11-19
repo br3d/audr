@@ -274,7 +274,14 @@ export default function AssistantPanel() {
     setPendingPreset(null)
     setAssistantHash(null)
     mutation.reset()
-    send({ mode: 'chat', conversationId: null, text: '', preset: p.id, assetRef: assetId, assetSymbol: symbol })
+    send({
+      mode: 'chat',
+      conversationId: null,
+      text: '',
+      preset: p.id,
+      assetRef: assetId,
+      assetSymbol: symbol,
+    })
   }
 
   const heldAssets = (() => {

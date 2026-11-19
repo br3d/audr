@@ -27,7 +27,12 @@ const PRESETS = [
   { id: 'news_impact', label: 'News impact', description: 'What news matters', needs_asset: false },
   { id: 'asset_deep_dive', label: 'Asset deep dive', description: 'One asset in depth', needs_asset: true },
 ]
-const alloc = (id: string, symbol: string) => ({ asset_id: id, symbol, name: symbol + ' coin', included: true })
+const alloc = (id: string, symbol: string) => ({
+  asset_id: id,
+  symbol,
+  name: symbol + ' coin',
+  included: true,
+})
 const list = vi.mocked(client.listAssistantConversations)
 const getConv = vi.mocked(client.getAssistantConversation)
 const rename = vi.mocked(client.renameAssistantConversation)
