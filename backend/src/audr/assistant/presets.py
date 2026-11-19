@@ -33,6 +33,8 @@ class Preset:
     # Reasoning models spend the output budget thinking over a wide context; presets with a
     # 30-headline/20-alert context ask for more room than the default.
     min_output_tokens: int | None = None
+    # news_impact: drop the generic headline/alert blocks and attach a trimmed headline list.
+    trim_news_context: bool = False
 
     @property
     def system_suffix(self) -> str:
@@ -70,12 +72,12 @@ PRESETS: tuple[Preset, ...] = (
         mode="news",
         user_prompt="What in the latest news matters for my holdings?",
         instructions=(
-            "Task: news impact. Maximum 350 words. For each headline with importance >= 60: "
-            "the affected holding, direction (up / down / neutral / unclear), confidence "
-            "(low / medium / high) and a one-line reason. List all other headlines under "
-            '"Ignored" by title only, without discussing them.'
+            "Task: news impact. Maximum 350 words. For each full headline (importance >= 60) "
+            "give: affected holding, direction (up / down / neutral / unclear), confidence "
+            "(low / medium / high), a one-line reason. Then list the titles under "
+            '"Ignored headlines" without discussing them.'
         ),
-        min_output_tokens=8000,
+        trim_news_context=True,
     ),
     Preset(
         id="alert_triage",

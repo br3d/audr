@@ -477,9 +477,10 @@ async def test_chat_with_preset_uses_prompt_and_context(http_client, fake, prese
     call = fake.calls[0]
     assert call["messages"] == [{"role": "user", "content": p.user_prompt}]
     assert p.instructions in call["system"] and "Top allocations" in call["system"]
-    assert ("Recent headlines with analysis" in call["system"]) == (p.mode == "news")
+    wide = p.mode == "news" and not p.trim_news_context
+    assert ("Recent headlines with analysis" in call["system"]) == wide
     assert "200 words" in call["system"] or preset != "daily_brief"
-    expected = 8000 if preset in {"news_impact", "alert_triage"} else 4000
+    expected = 8000 if preset == "alert_triage" else 4000
     assert call["max_tokens"] == expected
 
 
@@ -535,3 +536,35 @@ async def test_preset_conversation_title_and_followup(http_client, fake) -> None
     )
     assert r.status_code == 200
     assert fake.calls[1]["messages"][-1]["content"] == "and the second one?"
+
+
+async def test_news_impact_context_is_trimmed(http_client, db_session_factory, fake) -> None:
+    csrf = await _setup_and_login(http_client)
+    asset_id = await _seed_asset(db_session_factory, "0x" + "d" * 40, "TRM")
+    async with db_session_factory() as s, s.begin():
+        for i in range(14):
+            await s.execute(
+                text(
+                    "INSERT INTO asset_news (id, asset_id, source, external_id, title, url,"
+                    " news_site, published_at, summary, importance)"
+                    " VALUES (gen_random_uuid(), :a, 'gdelt', :e, :t, 'https://x.test/1',"
+                    " 'x.test', now() - make_interval(mins => :i), 'SECRETSUMMARY', :imp)"
+                ),
+                {
+                    "a": asset_id,
+                    "e": f"e{i}",
+                    "t": f"Headline {i}",
+                    "i": i,
+                    "imp": 90 if i < 12 else 10,
+                },
+            )
+    r = await http_client.post(_URL, json={"preset": "news_impact"}, headers={"x-csrf-token": csrf})
+    assert r.status_code == 200, r.text
+    system = fake.calls[0]["system"]
+    assert "## Alerts" not in system and "## Headlines\n" not in system
+    full = system.split("## Headlines to assess")[1].split("## Ignored")[0]
+    assert full.count("importance 90/100") == 10
+    ignored = system.split("## Ignored headlines")[1].split("=== TASK RULES")[0]
+    assert "Headline 10" in ignored and "Headline 13" in ignored
+    assert "importance" not in ignored and "SECRETSUMMARY" not in system
+    assert fake.calls[0]["max_tokens"] == 4000

@@ -203,6 +203,44 @@ def _headlines_markdown(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+_IMPACT_FULL_MAX = 10
+_IMPACT_MIN_IMPORTANCE = 60
+
+
+def _strip_headlines_and_alerts(context_md: str) -> str:
+    """Drop the generic '## Headlines' and '## Alerts' blocks (everything up to Freshness)."""
+    start = context_md.find("## Headlines")
+    end = context_md.find("## Freshness")
+    if start == -1 or end == -1 or end < start:
+        return context_md
+    return context_md[:start] + context_md[end:]
+
+
+def _impact_headlines_markdown(rows: list[dict[str, Any]]) -> str:
+    """news_impact context: up to 10 important headlines in full, the rest title-only."""
+    important = sorted(
+        (r for r in rows if (r["importance"] or -1) >= _IMPACT_MIN_IMPORTANCE),
+        key=lambda r: (-r["importance"], -r["published_at"].timestamp()),
+    )
+    full = important[:_IMPACT_FULL_MAX]
+    full_ids = {id(r) for r in full}
+    rest = [r for r in rows if id(r) not in full_ids]
+    lines = [f"## Headlines to assess (importance >= {_IMPACT_MIN_IMPORTANCE}, {len(full)})"]
+    if not full:
+        lines.append("- (none)")
+    for r in full:
+        lines.append(
+            f"- [{r['symbol']}] {r['title']} — {r['news_site']}, "
+            f"{r['published_at'].isoformat()} (importance {r['importance']}/100)"
+        )
+    lines += ["", f"## Ignored headlines — titles only ({len(rest)})"]
+    if not rest:
+        lines.append("- (none)")
+    for r in rest:
+        lines.append(f"- [{r['symbol']}] {r['title']}")
+    return "\n".join(lines) + "\n"
+
+
 def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
@@ -477,7 +515,12 @@ async def assistant_chat(
             db, session, headlines_limit=headlines, alerts_limit=alerts
         )
         context_md = _context_to_markdown(context)
-        if mode == "news":
+        if mode == "news" and preset is not None and preset.trim_news_context:
+            context_md = _strip_headlines_and_alerts(context_md)
+            context_md += "\n" + _impact_headlines_markdown(
+                await _recent_headlines(db, _NEWS_HEADLINES)
+            )
+        elif mode == "news":
             context_md += "\n" + _headlines_markdown(await _recent_headlines(db, _NEWS_HEADLINES))
         if asset_md:
             context_md += "\n" + asset_md
