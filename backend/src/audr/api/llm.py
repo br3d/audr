@@ -21,9 +21,10 @@ alongside the default JSON.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -353,7 +354,133 @@ async def _get_delta_pct(
     return str(pct)
 
 
-async def _get_global_headlines(db: AsyncSession, limit: int) -> tuple[int, list[dict]]:
+@dataclass(frozen=True)
+class AssetMove:
+    """One held asset's move over one window. Every field null = unknown, never 0."""
+
+    pct: Decimal | None
+    usd: Decimal | None
+
+
+def compute_asset_move(
+    *, price_now: Decimal | None, quantity: Decimal | None, price_ref: Decimal | None
+) -> AssetMove:
+    """Price change %, and USD impact on the CURRENT holding (quantity x price change).
+
+    Using today's quantity keeps deposits/withdrawals out of the "move".
+    """
+    if price_now is None or price_ref is None or price_ref <= 0:
+        return AssetMove(None, None)
+    pct = ((price_now - price_ref) / price_ref * 100).quantize(Decimal("0.01"))
+    usd = None
+    if quantity is not None:
+        usd = (quantity * (price_now - price_ref)).quantize(Decimal("0.01"))
+    return AssetMove(pct, usd)
+
+
+async def _reference_prices(
+    db: AsyncSession, *, now: datetime, target_hours: float, tolerance_hours: float
+) -> dict[str, Decimal | None] | None:
+    """asset_id -> price in the published snapshot closest to the target; None = no snapshot."""
+    target = now - timedelta(hours=target_hours)
+    snap = (
+        await db.execute(
+            sa.text(
+                """
+                SELECT id FROM valuation_snapshot
+                WHERE published_at IS NOT NULL
+                  AND snapshotted_at BETWEEN :lo AND :hi
+                  AND EXISTS (SELECT 1 FROM valuation_line vl
+                              WHERE vl.snapshot_id = valuation_snapshot.id)
+                ORDER BY ABS(EXTRACT(EPOCH FROM (snapshotted_at - :target)))
+                LIMIT 1
+                """
+            ),
+            {
+                "lo": target - timedelta(hours=tolerance_hours),
+                "hi": target + timedelta(hours=tolerance_hours),
+                "target": target,
+            },
+        )
+    ).first()
+    if snap is None:
+        return None
+    rows = await db.execute(
+        sa.text(
+            "SELECT asset_id::text AS asset_id, MAX(price_usd)::text AS price_usd"
+            " FROM valuation_line WHERE snapshot_id = :s GROUP BY asset_id"
+        ),
+        {"s": snap[0]},
+    )
+    return {
+        r["asset_id"]: (Decimal(r["price_usd"]) if r["price_usd"] else None)
+        for r in rows.mappings()
+    }
+
+
+async def build_asset_movers(
+    db: AsyncSession, *, now: datetime, allocations: list[AllocationItemOut]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Per-asset 24h / 7d moves for the held assets (AUD-963) plus caveats.
+
+    Returns rows `{symbol, price_usd, value_usd, 24h: AssetMove, 7d: AssetMove}`.
+    """
+    refs = {
+        "24h": await _reference_prices(db, now=now, target_hours=24, tolerance_hours=6),
+        "7d": await _reference_prices(db, now=now, target_hours=7 * 24, tolerance_hours=24),
+    }
+    caveats: list[str] = []
+    for window, ref in refs.items():
+        if ref is None:
+            caveats.append(f"No snapshot close to {window} ago: every {window} change is unknown.")
+    rows: list[dict[str, Any]] = []
+    for a in allocations:
+        price_now = Decimal(a.price_usd) if a.price_usd is not None else None
+        qty = Decimal(a.quantity) if a.quantity is not None else None
+        row: dict[str, Any] = {
+            "symbol": a.symbol,
+            "price_usd": a.price_usd,
+            "value_usd": a.value_usd,
+        }
+        for window, ref in refs.items():
+            ref_price = None if ref is None else ref.get(a.asset_id)
+            row[window] = compute_asset_move(price_now=price_now, quantity=qty, price_ref=ref_price)
+        rows.append(row)
+    missing = sorted(r["symbol"] for r in rows if r["24h"].pct is None)
+    if missing and refs["24h"] is not None:
+        caveats.append(f"No 24h price history for: {', '.join(missing)} (unknown, not 0%).")
+    return rows, caveats
+
+
+def movers_to_markdown(rows: list[dict[str, Any]], caveats: list[str]) -> str:
+    """Rows sorted by |24h USD impact|, unknowns last, so the model need not do the maths."""
+
+    def key(r: dict[str, Any]) -> tuple[int, Decimal]:
+        usd = r["24h"].usd
+        return (0, -abs(usd)) if usd is not None else (1, Decimal(0))
+
+    def fmt(m: AssetMove) -> str:
+        if m.pct is None:
+            return "unknown"
+        usd = "unknown" if m.usd is None else f"{m.usd:+} USD"
+        return f"{m.pct:+}% ({usd})"
+
+    lines = [
+        "## Per-asset movers (price change; USD = current quantity x price change)",
+    ]
+    if not rows:
+        lines.append("- (no held assets)")
+    for r in sorted(rows, key=key):
+        lines.append(
+            f"- {r['symbol']}: 24h {fmt(r['24h'])}; 7d {fmt(r['7d'])}; "
+            f"value {_na(r['value_usd'])} USD"
+        )
+    lines += ["", "### Movers caveats"]
+    lines += [f"- {c}" for c in caveats] or ["- (none)"]
+    return "\n".join(lines) + "\n"
+
+
+async def _get_global_headlines(db: AsyncSession, limit: int) -> tuple[int, list[dict[str, Any]]]:
     total = (await db.execute(sa.text("SELECT COUNT(*) FROM asset_news"))).scalar_one()
     rows = await db.execute(
         sa.text(
@@ -370,7 +497,7 @@ async def _get_global_headlines(db: AsyncSession, limit: int) -> tuple[int, list
     return total, [dict(r) for r in rows.mappings()]
 
 
-async def _get_global_alerts(db: AsyncSession, limit: int) -> tuple[int, list[dict]]:
+async def _get_global_alerts(db: AsyncSession, limit: int) -> tuple[int, list[dict[str, Any]]]:
     unread_count = (
         await db.execute(sa.text("SELECT COUNT(*) FROM news_alert WHERE read_at IS NULL"))
     ).scalar_one()
@@ -497,7 +624,9 @@ async def _resolve_asset_ref(
     return dict(row) if row is not None else None
 
 
-async def _get_asset_series(db: AsyncSession, asset_id: str, *, now: datetime) -> list[dict]:
+async def _get_asset_series(
+    db: AsyncSession, asset_id: str, *, now: datetime
+) -> list[dict[str, Any]]:
     since = now - timedelta(days=_ASSET_SERIES_WINDOW_DAYS)
     rows = await db.execute(
         sa.text(
@@ -519,7 +648,7 @@ async def _get_asset_series(db: AsyncSession, asset_id: str, *, now: datetime) -
     return [dict(r) for r in rows.mappings()]
 
 
-def _downsample(points: list[dict], cap: int) -> list[dict]:
+def _downsample(points: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
     if len(points) <= cap:
         return points
     step = -(-len(points) // cap)  # ceil division
@@ -529,7 +658,9 @@ def _downsample(points: list[dict], cap: int) -> list[dict]:
     return thinned
 
 
-async def _get_asset_news(db: AsyncSession, asset_id: str, limit: int) -> tuple[int, list[dict]]:
+async def _get_asset_news(
+    db: AsyncSession, asset_id: str, limit: int
+) -> tuple[int, list[dict[str, Any]]]:
     total = (
         await db.execute(
             sa.text("SELECT COUNT(*) FROM asset_news WHERE asset_id = :id"), {"id": asset_id}
@@ -550,7 +681,9 @@ async def _get_asset_news(db: AsyncSession, asset_id: str, limit: int) -> tuple[
     return total, [dict(r) for r in rows.mappings()]
 
 
-async def _get_asset_alerts(db: AsyncSession, asset_id: str, limit: int) -> tuple[int, list[dict]]:
+async def _get_asset_alerts(
+    db: AsyncSession, asset_id: str, limit: int
+) -> tuple[int, list[dict[str, Any]]]:
     unread_count = (
         await db.execute(
             sa.text("SELECT COUNT(*) FROM news_alert WHERE asset_id = :id AND read_at IS NULL"),

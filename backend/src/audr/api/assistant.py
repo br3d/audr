@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -33,9 +33,12 @@ from audr.api.auth import _require_csrf, _require_session
 from audr.api.llm import (
     _asset_to_markdown,
     _context_to_markdown,
+    build_asset_movers,
     build_llm_asset,
     build_llm_context,
+    movers_to_markdown,
 )
+from audr.api.portfolio import get_portfolio
 from audr.assistant.presets import PRESETS, PRESETS_BY_ID, Preset
 from audr.auth.models import Session
 from audr.config import get_settings
@@ -510,6 +513,8 @@ async def assistant_chat(
         raise RuntimeError("conversation was not stored")
     try:
         headlines = {"portfolio": 5, "news": 5, "chat": _CHAT_HEADLINES}[mode]
+        if preset is not None and preset.movers_context:
+            headlines = _NEWS_HEADLINES
         alerts = _NEWS_ALERTS if mode == "news" else 5
         context = await build_llm_context(
             db, session, headlines_limit=headlines, alerts_limit=alerts
@@ -522,6 +527,13 @@ async def assistant_chat(
             )
         elif mode == "news":
             context_md += "\n" + _headlines_markdown(await _recent_headlines(db, _NEWS_HEADLINES))
+        if preset is not None and preset.movers_context:
+            rows, mover_caveats = await build_asset_movers(
+                db,
+                now=datetime.now(tz=UTC),
+                allocations=(await get_portfolio(session, db)).allocations,
+            )
+            context_md += "\n" + movers_to_markdown(rows, mover_caveats)
         if asset_md:
             context_md += "\n" + asset_md
         if preset is not None:

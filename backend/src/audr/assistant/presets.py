@@ -35,6 +35,8 @@ class Preset:
     min_output_tokens: int | None = None
     # news_impact: drop the generic headline/alert blocks and attach a trimmed headline list.
     trim_news_context: bool = False
+    # biggest_movers: append the per-asset 24h/7d block and widen the headline list.
+    movers_context: bool = False
 
     @property
     def system_suffix(self) -> str:
@@ -91,6 +93,21 @@ PRESETS: tuple[Preset, ...] = (
             "unread alerts, say so."
         ),
         min_output_tokens=8000,
+    ),
+    Preset(
+        id="biggest_movers",
+        label="Biggest movers",
+        description="Top gainers and losers by USD impact over 24h/7d, each with its news.",
+        mode="portfolio",
+        user_prompt="What moved the most in my portfolio?",
+        instructions=(
+            "Task: biggest movers. Maximum 300 words. Use the 'Per-asset movers' block, "
+            "already sorted by 24h USD impact. List the top 3 gainers and top 3 losers by USD "
+            "impact (not by %), each with its 24h and 7d % and USD change. Tie each to a matching "
+            "headline from the context (quote it) or write 'no news found'. Assets whose change "
+            "is unknown are listed separately as unknown."
+        ),
+        movers_context=True,
     ),
     Preset(
         id="asset_deep_dive",

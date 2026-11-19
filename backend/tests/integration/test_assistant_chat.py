@@ -447,11 +447,12 @@ _PRESET_IDS = [
     "concentration_risk",
     "news_impact",
     "alert_triage",
+    "biggest_movers",
     "asset_deep_dive",
 ]
 
 
-async def test_presets_registry_lists_exactly_five(http_client, fake) -> None:
+async def test_presets_registry_lists_exactly_six(http_client, fake) -> None:
     await _setup_and_login(http_client)
     r = await http_client.get("/api/v1/assistant/presets")
     assert r.status_code == 200
@@ -568,3 +569,66 @@ async def test_news_impact_context_is_trimmed(http_client, db_session_factory, f
     assert "Headline 10" in ignored and "Headline 13" in ignored
     assert "importance" not in ignored and "SECRETSUMMARY" not in system
     assert fake.calls[0]["max_tokens"] == 4000
+
+
+# --- biggest_movers (AUD-963) -----------------------------------------------
+
+
+async def test_biggest_movers_context_sorted_by_usd_with_unknown(
+    http_client, db_session_factory, fake
+) -> None:
+    from decimal import Decimal
+
+    from tests.integration.test_llm_api import _seed_snapshot, _seed_wallet
+
+    csrf = await _setup_and_login(http_client)
+    w = await _seed_wallet(db_session_factory)
+    small = await _seed_asset(db_session_factory, "0x" + "a" * 40, "SMALL")  # +50% on 1 unit
+    big = await _seed_asset(db_session_factory, "0x" + "b" * 40, "BIG")  # +10% on 10 units
+    fresh = await _seed_asset(db_session_factory, "0x" + "d" * 40, "FRESH")  # no history
+    one = "1000000000000000000"
+    ten = "10000000000000000000"
+
+    def h(asset, raw, price, value):
+        return {
+            "wallet_id": w,
+            "asset_id": asset,
+            "raw_amount": raw,
+            "price_usd": price,
+            "value_usd": value,
+        }
+
+    await _seed_snapshot(
+        db_session_factory,
+        holdings=[h(small, one, "2", "2"), h(big, ten, "110", "1100"), h(fresh, one, "5", "5")],
+    )
+    old = await _seed_snapshot(
+        db_session_factory,
+        snapshotted_at_sql="now() - interval '24 hours'",
+        holdings=[h(small, one, "1", "1"), h(big, ten, "100", "1000")],
+    )
+    async with db_session_factory() as session, session.begin():
+        # backdate publication too, or this would outrank the real latest snapshot
+        await session.execute(
+            text("UPDATE valuation_snapshot SET published_at = snapshotted_at WHERE id = :i"),
+            {"i": old},
+        )
+    r = await http_client.post(
+        _URL, json={"preset": "biggest_movers"}, headers={"x-csrf-token": csrf}
+    )
+    assert r.status_code == 200, r.text
+    system = fake.calls[0]["system"]
+    assert "Per-asset movers" in system and "300 words" in system
+    assert "no news found" in system
+    big_i, small_i, fresh_i = (
+        system.index("- BIG: 24h"),
+        system.index("- SMALL: 24h"),
+        system.index("- FRESH: 24h"),
+    )
+    assert big_i < small_i < fresh_i  # by USD impact, not %; unknown last
+    assert "- BIG: 24h +10.00% (+100.00 USD)" in system
+    assert "- SMALL: 24h +100.00% (+1.00 USD)" in system
+    assert "- FRESH: 24h unknown" in system
+    assert "No 24h price history for: FRESH" in system
+    assert "7d unknown" in system and "No snapshot close to 7d ago" in system
+    assert Decimal("1")  # keep import used
