@@ -126,3 +126,47 @@ async def test_anthropic_chat_missing_usage_is_zero() -> None:
 async def test_anthropic_chat_empty_is_error() -> None:
     with pytest.raises(LlmResponseError):
         await _ant_chat({"content": []})
+
+
+async def test_openai_chat_switches_thinking_off() -> None:
+    """AUD-966: DeepSeek/Qwen on vLLM think by default and burn the budget."""
+    _, route = await _oai_chat(_oai(content="ok"))
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["chat_template_kwargs"] == {"thinking": False, "enable_thinking": False}
+
+
+@pytest.mark.parametrize("status", [400, 422])
+async def test_openai_chat_retries_without_template_kwargs_when_rejected(status: int) -> None:
+    client = OpenAICompatibleClient(base_url="https://llm.example.test/v1", model="m", api_key="k")
+    with respx.mock() as mock:
+        route = mock.post(_OAI).mock(
+            side_effect=[
+                Response(status, json={"error": "unknown field"}),
+                Response(200, json=_oai(content="ok")),
+            ]
+        )
+        try:
+            result = await client.chat(system="SYS", messages=_TURNS, max_tokens=5)
+            assert result.text == "ok"
+            assert "chat_template_kwargs" in json.loads(route.calls[0].request.content)
+            assert "chat_template_kwargs" not in json.loads(route.calls[1].request.content)
+            # Remembered: the next call goes straight to the plain body.
+            mock.post(_OAI).mock(return_value=Response(200, json=_oai(content="again")))
+            await client.chat(system="SYS", messages=_TURNS, max_tokens=5)
+            assert "chat_template_kwargs" not in json.loads(mock.calls[-1].request.content)
+        finally:
+            await client.close()
+
+
+async def test_openai_chat_other_errors_are_not_retried() -> None:
+    client = OpenAICompatibleClient(
+        base_url="https://llm.example.test/v1", model="m", api_key="k", retries=0
+    )
+    with respx.mock() as mock:
+        route = mock.post(_OAI).mock(return_value=Response(500))
+        try:
+            with pytest.raises(LlmResponseError):
+                await client.chat(system="SYS", messages=_TURNS, max_tokens=5)
+            assert route.call_count == 1
+        finally:
+            await client.close()

@@ -100,6 +100,10 @@ class LlmReasoningOnly(LlmResponseError):
     """A reasoning model spent the whole token budget thinking and answered nothing."""
 
 
+class LlmBadRequest(LlmResponseError):
+    """HTTP 400/422: the server rejected the request body (e.g. an unknown field)."""
+
+
 @dataclass(frozen=True)
 class ChatResult:
     """A free-form completion (AUD-955). Missing usage is reported as 0, not failed."""
@@ -112,6 +116,9 @@ class ChatResult:
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think>.*\Z", re.DOTALL | re.IGNORECASE)
+
+# Chat-template switches that turn reasoning off on vLLM/SGLang-served models (AUD-966).
+_THINKING_OFF = {"thinking": False, "enable_thinking": False}
 
 REASONING_ONLY_MESSAGE = (
     "the model returned only reasoning — choose a non-reasoning model or raise the limit"
@@ -327,6 +334,8 @@ class _HttpLlmClient:
                 raise NoApiKey(
                     f"{self._label} rejected the configured key: HTTP {response.status_code}"
                 )
+            if response.status_code in (400, 422):
+                raise LlmBadRequest(f"HTTP {response.status_code}")
             if not response.is_success:
                 raise LlmResponseError(f"HTTP {response.status_code}")
 
@@ -499,6 +508,7 @@ class OpenAICompatibleClient(_HttpLlmClient):
         )
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key or None
+        self._send_thinking_off = True
 
     def _url(self) -> str:
         return f"{self._base_url}/chat/completions"
@@ -559,14 +569,26 @@ class OpenAICompatibleClient(_HttpLlmClient):
         `<think>` tags or in `message.reasoning[_content]`. The former is
         stripped; an answer that is *only* reasoning is an explicit error, not
         an empty reply.
+
+        AUD-966: thinking is switched off via vLLM/SGLang `chat_template_kwargs`
+        (`thinking` for DeepSeek, `enable_thinking` for Qwen/GLM). DeepSeek-V4 on
+        Gonka otherwise spends the whole budget (and minutes) reasoning over the
+        portfolio context. Lenient servers ignore the field; a server that rejects
+        it with 400/422 is retried once without it, and the client stops sending it.
         """
-        payload = await self._post(
-            {
-                "model": self._model,
-                "max_tokens": max_tokens,
-                "messages": [{"role": "system", "content": system}, *messages],
-            }
-        )
+        body: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "system", "content": system}, *messages],
+        }
+        if self._send_thinking_off:
+            try:
+                payload = await self._post({**body, "chat_template_kwargs": _THINKING_OFF})
+            except LlmBadRequest:
+                self._send_thinking_off = False
+                payload = await self._post(body)
+        else:
+            payload = await self._post(body)
         try:
             message = payload["choices"][0]["message"]
             content = message.get("content")
