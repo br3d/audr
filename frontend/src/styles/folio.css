@@ -2136,11 +2136,22 @@ body {
 /* ----------------------------------------------------------------
    Assistant panel
    ---------------------------------------------------------------- */
+/* AUD-967: the panel fills .page-content (a definite-height flex item of the
+   100dvh shell) in both axes instead of a fixed 1000px cap and a guessed
+   `100vh - 180px` height, so it tracks the browser window. min-height keeps it
+   usable on very short windows (.page-content scrolls then). */
+.assistant-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .assistant-panel {
   display: flex;
   flex-direction: column;
-  max-width: 1000px;
-  height: calc(100vh - 180px);
+  flex: 1;
+  min-height: 420px;
+  min-width: 0;
 }
 
 .assistant-layout {
