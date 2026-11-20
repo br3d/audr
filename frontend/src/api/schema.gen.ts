@@ -2259,6 +2259,16 @@ export interface components {
              * @description True when `asset_ref` is required in /chat.
              */
             needs_asset: boolean;
+            /**
+             * Prompt Text
+             * @description Rules + preset instructions sent to the model (data context not included).
+             */
+            prompt_text: string;
+            /**
+             * User Prompt
+             * @description The user turn a preset sends (stored as the conversation's first message).
+             */
+            user_prompt: string;
         };
         /**
          * ProviderOption

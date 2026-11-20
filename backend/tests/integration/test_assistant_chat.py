@@ -459,7 +459,16 @@ async def test_presets_registry_lists_exactly_six(http_client, fake) -> None:
     items = r.json()
     assert [i["id"] for i in items] == _PRESET_IDS
     assert {i["id"] for i in items if i["needs_asset"]} == {"asset_deep_dive"}
-    assert all(set(i) == {"id", "label", "description", "needs_asset"} for i in items)
+    assert all(
+        set(i) == {"id", "label", "description", "needs_asset", "user_prompt", "prompt_text"}
+        for i in items
+    )
+    from audr.assistant.presets import PRESETS_BY_ID
+
+    for i in items:
+        assert i["prompt_text"].strip()
+        assert PRESETS_BY_ID[i["id"]].instructions in i["prompt_text"]
+        assert "=== CONTEXT ===" not in i["prompt_text"]
 
 
 async def test_presets_require_session(http_client, fake) -> None:

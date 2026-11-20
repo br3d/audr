@@ -96,11 +96,15 @@ function StoredTurn({
   msg,
   onRetry,
   busy,
+  promptText,
 }: {
   msg: AssistantStoredMessage
   onRetry: () => void
   busy: boolean
+  /** AUD-969: instruction text of the preset that produced this reply, if any. */
+  promptText?: string
 }) {
+  const [showPrompt, setShowPrompt] = useState(false)
   if (msg.role === 'user') {
     return (
       <div data-testid="user-message" className="assistant-message assistant-message-user">
@@ -143,7 +147,32 @@ function StoredTurn({
           </small>
         )}
         <CopyButton text={msg.content} />
+        {promptText && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            data-testid="assistant-show-prompt"
+            aria-expanded={showPrompt}
+            onClick={() => setShowPrompt((v) => !v)}
+          >
+            {showPrompt ? 'Hide prompt' : 'Show prompt'}
+          </button>
+        )}
       </div>
+      {promptText && showPrompt && (
+        <div data-testid="assistant-prompt">
+          <pre
+            className="assistant-prompt-text"
+            data-testid="assistant-prompt-text"
+            style={{ whiteSpace: 'pre-wrap' }}
+          >
+            {promptText}
+          </pre>
+          <small className="assistant-caption" data-testid="assistant-prompt-note">
+            + your portfolio/news data (not shown)
+          </small>
+        </div>
+      )}
     </div>
   )
 }
@@ -559,8 +588,18 @@ export default function AssistantPanel() {
                   : detail.error.message}
               </div>
             )}
-            {messages.map((msg) => (
-              <StoredTurn key={msg.id} msg={msg} busy={busy} onRetry={retryStored} />
+            {messages.map((msg, i) => (
+              <StoredTurn
+                key={msg.id}
+                msg={msg}
+                busy={busy}
+                onRetry={retryStored}
+                promptText={
+                  i === 1 && msg.role === 'assistant' && messages[0].role === 'user'
+                    ? presetList.find((p) => p.user_prompt === messages[0].content)?.prompt_text
+                    : undefined
+                }
+              />
             ))}
             {optimistic !== null && (
               <div data-testid="user-message" className="assistant-message assistant-message-user">

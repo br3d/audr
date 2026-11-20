@@ -2479,3 +2479,13 @@ body {
   max-height: 10rem;
   overflow-y: auto;
 }
+
+.assistant-prompt-text {
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.6rem 0.75rem;
+  max-height: 20rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+}

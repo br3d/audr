@@ -23,9 +23,30 @@ const chat = vi.mocked(client.assistantChat)
 const presetsApi = vi.mocked(client.fetchAssistantPresets)
 const portfolioApi = vi.mocked(client.fetchPortfolio)
 const PRESETS = [
-  { id: 'daily_brief', label: 'Daily brief', description: 'Short portfolio brief', needs_asset: false },
-  { id: 'news_impact', label: 'News impact', description: 'What news matters', needs_asset: false },
-  { id: 'asset_deep_dive', label: 'Asset deep dive', description: 'One asset in depth', needs_asset: true },
+  {
+    id: 'daily_brief',
+    label: 'Daily brief',
+    description: 'Short portfolio brief',
+    needs_asset: false,
+    user_prompt: 'Give me my daily brief.',
+    prompt_text: 'Rules:\n- be brief\n\nTask: daily brief. Maximum 200 words.',
+  },
+  {
+    id: 'news_impact',
+    label: 'News impact',
+    description: 'What news matters',
+    needs_asset: false,
+    user_prompt: 'What matters?',
+    prompt_text: 'Task: news.',
+  },
+  {
+    id: 'asset_deep_dive',
+    label: 'Asset deep dive',
+    description: 'One asset in depth',
+    needs_asset: true,
+    user_prompt: 'Deep dive.',
+    prompt_text: 'Task: deep dive.',
+  },
 ]
 const alloc = (id: string, symbol: string) => ({
   asset_id: id,
@@ -175,6 +196,27 @@ describe('AssistantPanel', () => {
     expect(q('assistant-caption')!.textContent).toContain('deepseek-v4')
     expect(q('assistant-caption')!.textContent).toContain('2026-11-17T10:00:00Z')
     expect(q('assistant-caption')!.textContent).toContain('4.2 s')
+  })
+
+  it('a preset reply has a collapsed Show prompt toggle; free-form replies have none', async () => {
+    getConv.mockImplementation(async (id) =>
+      id === C2
+        ? detailOf(S2, [stored({ id: 'u2', role: 'user', content: 'Give me my daily brief.' }), ANSWER])
+        : detailOf(S1, [USER, ANSWER]),
+    )
+    await mount()
+    // C1 (free-form first turn) -> no toggle
+    await click(qa('assistant-conversation-open')[0])
+    expect(q('assistant-show-prompt')).toBeNull()
+    await click(qa('assistant-conversation-open')[1])
+    const toggle = q('assistant-show-prompt')!
+    expect(toggle.textContent).toContain('Show prompt')
+    expect(q('assistant-prompt-text')).toBeNull()
+    await click(toggle)
+    expect(q('assistant-prompt-text')!.textContent).toContain('Task: daily brief. Maximum 200 words.')
+    expect(q('assistant-prompt-note')!.textContent).toContain('your portfolio/news data (not shown)')
+    await click(toggle)
+    expect(q('assistant-prompt-text')).toBeNull()
   })
 
   it('a reload with #/assistant/<id> opens that conversation', async () => {

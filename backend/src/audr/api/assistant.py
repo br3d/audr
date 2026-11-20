@@ -70,6 +70,8 @@ _DEFAULT_REQUEST = {
     "news": "What in the latest news matters for my holdings?",
 }
 
+_CONTEXT_MARKER = "=== CONTEXT ==="
+
 _SYSTEM_PROMPT = (
     "You are a read-only analyst for a single owner's self-hosted crypto portfolio. "
     "You cannot move funds or change anything, and nothing you say is financial advice.\n\n"
@@ -79,8 +81,13 @@ _SYSTEM_PROMPT = (
     "(see Freshness and Caveats), say so plainly — unknown is not zero.\n"
     "- Start with a short summary, then list points, each with its reasoning.\n"
     "- Answer in the language of the user's last message.\n\n"
-    "=== CONTEXT ===\n"
+    f"{_CONTEXT_MARKER}\n"
 )
+
+
+def preset_prompt_text(preset: Preset) -> str:
+    """Instruction text the model receives for a preset (data context excluded)."""
+    return _SYSTEM_PROMPT.split(_CONTEXT_MARKER)[0].rstrip() + "\n\n" + preset.system_suffix
 
 
 class ChatMessage(BaseModel):
@@ -130,6 +137,12 @@ class PresetOut(BaseModel):
     label: str
     description: str
     needs_asset: bool = Field(description="True when `asset_ref` is required in /chat.")
+    user_prompt: str = Field(
+        description="The user turn a preset sends (stored as the conversation's first message)."
+    )
+    prompt_text: str = Field(
+        description="Rules + preset instructions sent to the model (data context not included)."
+    )
 
 
 class UsageOut(BaseModel):
@@ -397,7 +410,14 @@ async def _history(db: AsyncSession, conversation_id: UUID) -> list[ChatMessage]
 @router.get("/presets", response_model=list[PresetOut])
 async def list_presets(_session: Annotated[Session, Depends(_require_session)]) -> list[PresetOut]:
     return [
-        PresetOut(id=p.id, label=p.label, description=p.description, needs_asset=p.needs_asset)
+        PresetOut(
+            id=p.id,
+            label=p.label,
+            description=p.description,
+            needs_asset=p.needs_asset,
+            user_prompt=p.user_prompt,
+            prompt_text=preset_prompt_text(p),
+        )
         for p in PRESETS
     ]
 

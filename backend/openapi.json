@@ -3054,13 +3054,25 @@
             "description": "True when `asset_ref` is required in /chat.",
             "title": "Needs Asset",
             "type": "boolean"
+          },
+          "prompt_text": {
+            "description": "Rules + preset instructions sent to the model (data context not included).",
+            "title": "Prompt Text",
+            "type": "string"
+          },
+          "user_prompt": {
+            "description": "The user turn a preset sends (stored as the conversation's first message).",
+            "title": "User Prompt",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "label",
           "description",
-          "needs_asset"
+          "needs_asset",
+          "user_prompt",
+          "prompt_text"
         ],
         "title": "PresetOut",
         "type": "object"
