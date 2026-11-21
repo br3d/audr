@@ -2342,6 +2342,15 @@ body {
   gap: 2px;
 }
 
+/* Long, data-driven chip sets (News asset filter: one chip per held asset)
+   wrap onto extra rows instead of running past the viewport edge. */
+.range-switcher--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  border-radius: var(--r-lg);
+}
+
 .range-switcher-btn {
   border: none;
   background: transparent;

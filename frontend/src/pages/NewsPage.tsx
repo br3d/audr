@@ -40,7 +40,11 @@ export default function NewsPage() {
       {data && (
         <>
           {held.length > 0 && (
-            <div className="range-switcher mb-16" role="group" aria-label="Filter by asset">
+            <div
+              className="range-switcher range-switcher--wrap mb-16"
+              role="group"
+              aria-label="Filter by asset"
+            >
               <button
                 type="button"
                 className="range-switcher-btn"
